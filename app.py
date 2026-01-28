@@ -286,7 +286,7 @@ def update_language(language):
             clip_sample_n_frames: gr.Slider(label="Clip Sample Frames", info="Video frames, 81=2s@25fps, 161=4s@25fps, must be 4n+1"),
             image_path: gr.Image(label="Upload Image"),
             audio_path: gr.Audio(label="Upload Audio"),
-            prompt: gr.Textbox(label="Prompt"),
+            prompt: gr.Textbox(label="Prompt", value="A person speaking naturally with subtle idle motion, minimal head movement, simple blinking, static background"),
             negative_prompt: gr.Textbox(label="Negative Prompt", value="Vivid colors, overexposed, static, blurry details, subtitles, stylized, artwork, painting, picture, still, overall gray, worst quality, low quality, JPEG compression artifacts, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn face, deformed, disfigured, malformed limbs, fused fingers, static frame, cluttered background, three legs, many people in background, walking backwards"),
             generate_button: gr.Button("🎬 Start Generation"),
             width: gr.Slider(label="Width"),
@@ -321,7 +321,7 @@ def update_language(language):
             clip_sample_n_frames: gr.Slider(label="클립 샘플 프레임 수", info="비디오 프레임 수, 81=2초@25fps, 161=4초@25fps, 4n+1 형식이어야 함"),
             image_path: gr.Image(label="이미지 업로드"),
             audio_path: gr.Audio(label="오디오 업로드"),
-            prompt: gr.Textbox(label="프롬프트"),
+            prompt: gr.Textbox(label="프롬프트", value="자연스럽게 말하는 사람, 미세한 대기 동작, 최소한의 머리 움직임, 단순한 눈 깜빡임, 정적인 배경"),
             negative_prompt: gr.Textbox(label="네거티브 프롬프트", value="화려한 색조, 과다 노출, 정적, 세부 사항 흐림, 자막, 스타일, 작품, 그림, 화면, 정지, 전체적으로 회색, 최악의 품질, 낮은 품질, JPEG 압축 아티팩트, 추함, 불완전, 추가 손가락, 잘못 그린 손, 잘못 그린 얼굴, 기형, 손상, 변형된 사지, 융합된 손가락, 정지 화면, 어수선한 배경, 세 다리, 배경에 많은 사람, 뒤로 걷기"),
             generate_button: gr.Button("🎬 생성 시작"),
             width: gr.Slider(label="너비"),
@@ -356,7 +356,7 @@ def update_language(language):
             clip_sample_n_frames: gr.Slider(label="Clip采样帧数", info="视频帧数，81=2秒@25fps，161=4秒@25fps，必须为4n+1"),
             image_path: gr.Image(label="上传图片"),
             audio_path: gr.Audio(label="上传音频"),
-            prompt: gr.Textbox(label="提示词"),
+            prompt: gr.Textbox(label="提示词", value="一个人自然说话，微妙的待机动作，头部动作轻微，简单眨眼，静态背景"),
             negative_prompt: gr.Textbox(label="负面提示词", value="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"),
             generate_button: gr.Button("🎬 开始生成"),
             width: gr.Slider(label="宽度"),
@@ -423,7 +423,7 @@ with gr.Blocks(theme=gr.themes.Base()) as demo:
                 with gr.Row():
                     image_path = gr.Image(label="上传图片", type="filepath", height=280)
                     audio_path = gr.Audio(label="上传音频", type="filepath")
-                prompt = gr.Textbox(label="提示词", value="")
+                prompt = gr.Textbox(label="提示词", value="一个人自然说话，微妙的待机动作，头部动作轻微，简单眨眼，静态背景")
                 negative_prompt = gr.Textbox(label="负面提示词", value="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走")
                 generate_button = gr.Button("🎬 开始生成", variant='primary')
                 with gr.Accordion("Parameter Settings / 参数设置", open=True):

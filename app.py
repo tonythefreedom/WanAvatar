@@ -434,11 +434,11 @@ with gr.Blocks(theme=gr.themes.Base()) as demo:
                         exchange_button = gr.Button("🔄 交换宽高")
                         adjust_button = gr.Button("根据图片调整宽高")
                     with gr.Row():
-                        guidance_scale = gr.Slider(label="guidance scale", minimum=1.0, maximum=10.0, step=0.1, value=6.0)
-                        num_inference_steps = gr.Slider(label="采样步数（推荐50步）", minimum=1, maximum=100, step=1, value=10)
+                        guidance_scale = gr.Slider(label="guidance scale", minimum=1.0, maximum=10.0, step=0.1, value=5.5)
+                        num_inference_steps = gr.Slider(label="采样步数（推荐50步）", minimum=1, maximum=100, step=1, value=50)
                     with gr.Row():
-                        text_guide_scale = gr.Slider(label="text guidance scale", minimum=1.0, maximum=10.0, step=0.1, value=3.0)
-                        audio_guide_scale = gr.Slider(label="audio guidance scale", minimum=1.0, maximum=10.0, step=0.1, value=5.0)
+                        text_guide_scale = gr.Slider(label="text guidance scale", minimum=1.0, maximum=10.0, step=0.1, value=2.0)
+                        audio_guide_scale = gr.Slider(label="audio guidance scale", minimum=1.0, maximum=10.0, step=0.1, value=6.5)
                     with gr.Row():
                         motion_frame = gr.Slider(label="motion frame", minimum=1, maximum=50, step=1, value=25)
                         fps = gr.Slider(label="帧率", minimum=1, maximum=60, step=1, value=25)

@@ -196,7 +196,7 @@ This approach:
 
 LoRA 파인튜닝은 기본 모델의 가중치를 동결하고, 저차원 행렬을 통해 적은 파라미터만 학습합니다:
 - **학습 파라미터**: ~0.1% of full model
-- **학습 시간**: 약 6-8시간 (A100 80GB 기준, 20 epochs)
+- **학습 시간**: 약 3-4시간 (A100 80GB 기준, 10 epochs)
 - **VRAM 요구량**: ~45-55GB (DeepSpeed ZeRO Stage 2 + gradient checkpointing)
 - **RAM 요구량**: ~100GB (모델 로딩 + CPU optimizer offload)
 
@@ -294,7 +294,7 @@ python lip_mask_extractor.py --video_dir talking_face_data/video_001
 | 파라미터 | 권장값 | 설명 |
 |---------|--------|------|
 | `learning_rate` | 1e-4 | LoRA 학습률 |
-| `num_train_epochs` | 20-50 | 에폭 수 (20 권장, 품질/시간 균형) |
+| `num_train_epochs` | 10-50 | 에폭 수 (10 권장, 품질/시간 균형) |
 | `train_batch_size` | 1 | 배치 크기 (VRAM 제한) |
 | `gradient_accumulation_steps` | 8 | Gradient 누적 (effective batch = 8) |
 | `video_sample_n_frames` | 81 | 클립당 프레임 수 (81=약2초@25fps) |
@@ -344,7 +344,7 @@ accelerate launch \
   --video_repeat=1 \
   --gradient_accumulation_steps=8 \
   --dataloader_num_workers=0 \
-  --num_train_epochs=20 \
+  --num_train_epochs=10 \
   --checkpointing_steps=100 \
   --validation_steps=10000 \
   --learning_rate=1e-04 \

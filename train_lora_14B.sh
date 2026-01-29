@@ -39,7 +39,7 @@ accelerate launch \
   --video_repeat=1 \
   --gradient_accumulation_steps=8 \
   --dataloader_num_workers=0 \
-  --num_train_epochs=20 \
+  --num_train_epochs=10 \
   --checkpointing_steps=100 \
   --validation_steps=10000 \
   --learning_rate=1e-04 \

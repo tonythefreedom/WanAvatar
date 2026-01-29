@@ -70,13 +70,31 @@ checkpoints/
 
 ## Usage
 
-### Web Interface
+### Gradio Web Interface
 
 ```bash
+# Local access
 python app.py
+
+# With public tunneling (accessible from anywhere)
+python app.py --share
 ```
 
-The application will start at `http://0.0.0.0:7891`
+The application will start at `http://0.0.0.0:7891`. With `--share`, a public Gradio URL will be generated.
+
+### FastAPI Server + React Frontend
+
+```bash
+# Start the server
+./start.sh
+
+# Or manually
+python server.py
+```
+
+Access points:
+- Frontend: `http://localhost:8000`
+- API Docs: `http://localhost:8000/docs`
 
 ### GPU Memory Modes
 
@@ -99,9 +117,21 @@ The UI supports three languages with automatic translation of prompts:
 
 ```
 WanAvatar/
-├── app.py                    # Gradio web application
+├── app.py                    # Gradio web application (fullscreen layout)
+├── server.py                 # FastAPI server for REST API
+├── start.sh                  # Server startup script
 ├── generate.py               # CLI generation script
 ├── inference.py              # Inference utilities
+├── preprocess_training_data.py  # Data preprocessing for LoRA training
+├── train_lora.sh             # LoRA training script (1.3B model)
+├── train_lora_14B.sh         # LoRA training script (14B model)
+├── frontend/                 # React frontend application
+│   ├── src/
+│   │   ├── App.jsx           # Main React component
+│   │   ├── api.js            # API client
+│   │   └── ...
+│   ├── package.json
+│   └── vite.config.js
 ├── wan/
 │   ├── speech2video.py       # Main S2V pipeline with custom safetensors loading
 │   ├── modules/
@@ -111,13 +141,26 @@ WanAvatar/
 │   │   │   └── ...
 │   │   └── vae2_1.py         # VAE encoder/decoder
 │   ├── configs/              # Model configurations
-│   ├── utils/                # Utilities (solvers, optimizations)
+│   ├── dataset/              # Dataset loaders for training
+│   ├── utils/                # Utilities (solvers, optimizations, lora)
 │   └── distributed/          # Distributed training utilities
 ├── examples/                 # Example images for testing
+├── accelerate_config/        # Accelerate configuration files
+├── deepspeed_config/         # DeepSpeed configuration files
 ├── requirements.txt          # Base dependencies
 ├── requirements_wan22.txt    # Wan2.2 specific dependencies
 └── requirements_s2v.txt      # S2V specific dependencies
 ```
+
+## API Endpoints (FastAPI Server)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/generate` | POST | Generate video from image + audio |
+| `/api/extract-audio` | POST | Extract audio from video |
+| `/api/separate-vocals` | POST | Separate vocals from audio |
+| `/api/health` | GET | Health check |
+| `/docs` | GET | Interactive API documentation |
 
 ## Key Modifications
 

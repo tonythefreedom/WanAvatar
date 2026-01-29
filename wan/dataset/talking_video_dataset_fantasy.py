@@ -303,8 +303,7 @@ class LargeScaleTalkingFantasyVideos(Dataset):
         elif "dancing" in self.video_files[idx]:
             text_prompt = "The protagonist is simultaneously dancing and singing"
         else:
-            text_prompt = ""
-            print(1 / 0)
+            text_prompt = "The protagonist is talking"
 
         sample = dict(
             pixel_values=tgt_pil_image_list,

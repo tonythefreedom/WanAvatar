@@ -48,6 +48,22 @@ outputs/
 *.mp3
 *.log
 
+# Gradio cache
+.gradio/
+
+# User data
+uploads/
+ft_data/
+validation/
+output_lora/
+output_lora_14B/
+
+# Large binary files
+*.task
+
+# Node modules
+node_modules/
+
 # Misc
 .DS_Store
 Thumbs.db

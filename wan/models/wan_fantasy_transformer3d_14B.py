@@ -566,7 +566,7 @@ class WanI2VTalkingCrossAttention(WanSelfAttention):
         )
         x = x.to(dtype)
 
-        latents_num_frames = 21
+        latents_num_frames = 21  # For 81 video frames: (81-1)//4 + 1 = 21
         if len(vocal_context.shape) == 4:
             vocal_q = q.view(b * latents_num_frames, -1, n, d)
             vocal_ip_key = self.k_vocal(vocal_context).view(b * latents_num_frames, -1, n, d)
@@ -863,7 +863,7 @@ class WanTransformer3DFantasy14BModel(ModelMixin, ConfigMixin, FromOriginalModel
         self.sp_world_size = 1
         self.sp_world_rank = 0
 
-        self.vocal_projector = FantasyTalkingVocalCondition14BModel(audio_in_dim=768, audio_proj_dim=dim, dit_dim=dim)
+        self.vocal_projector = FantasyTalkingVocalCondition14BModel(audio_in_dim=1024, audio_proj_dim=dim, dit_dim=dim)
 
     def enable_teacache(
             self,
@@ -955,7 +955,7 @@ class WanTransformer3DFantasy14BModel(ModelMixin, ConfigMixin, FromOriginalModel
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
         if self.model_type == 'i2v':
-            assert clip_fea is not None and y is not None
+            assert clip_fea is not None and y is not None  # inpainting mode requires both
         # params
         device = self.patch_embedding.weight.device
         dtype = x.dtype

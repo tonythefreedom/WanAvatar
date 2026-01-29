@@ -546,8 +546,11 @@ class CLIPModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         for key in state_dict:
             tmp_state_dict["model." + key] = state_dict[key]
         state_dict = tmp_state_dict
-        m, u = model.load_state_dict(state_dict)
-        
+        m, u = model.load_state_dict(state_dict, strict=False)
+
         print(f"### missing keys: {len(m)}; \n### unexpected keys: {len(u)};")
-        print(m, u)
+        # Only warn about visual keys missing, textual is optional
+        visual_missing = [k for k in m if 'visual' in k]
+        if visual_missing:
+            print(f"WARNING: Missing visual keys: {visual_missing}")
         return model

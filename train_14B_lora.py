@@ -899,6 +899,32 @@ def main():
         transformer_additional_kwargs=OmegaConf.to_container(config['transformer_additional_kwargs']),
     ).to(weight_dtype)
 
+    # Expand patch_embedding from 16 channels to 36 channels for inpainting
+    # 16 (noisy latent) + 4 (mask) + 16 (masked latent) = 36 channels
+    old_patch_emb = transformer3d.patch_embedding
+    in_dim_old = old_patch_emb.in_channels  # 16
+    in_dim_new = 36  # 16 + 20 for inpainting
+    print(f"DEBUG: old_patch_emb.in_channels = {in_dim_old}, target = {in_dim_new}")
+    if in_dim_old != in_dim_new:
+        print(f"Expanding patch_embedding from {in_dim_old} to {in_dim_new} channels")
+        new_patch_emb = nn.Conv3d(
+            in_dim_new,
+            old_patch_emb.out_channels,
+            kernel_size=old_patch_emb.kernel_size,
+            stride=old_patch_emb.stride,
+            padding=old_patch_emb.padding,
+            bias=old_patch_emb.bias is not None
+        ).to(weight_dtype)
+        # Copy original weights to first 16 channels
+        with torch.no_grad():
+            new_patch_emb.weight[:, :in_dim_old, :, :, :] = old_patch_emb.weight
+            new_patch_emb.weight[:, in_dim_old:, :, :, :] = 0  # Initialize new channels to zero
+            if old_patch_emb.bias is not None:
+                new_patch_emb.bias.copy_(old_patch_emb.bias)
+        transformer3d.patch_embedding = new_patch_emb
+        transformer3d.in_dim = in_dim_new
+        print(f"patch_embedding expanded successfully")
+
     clip_image_encoder = CLIPModel.from_pretrained(os.path.join(args.pretrained_model_name_or_path, config['image_encoder_kwargs'].get('image_encoder_subpath', 'image_encoder')), )
     clip_image_encoder = clip_image_encoder.eval()
 
@@ -990,7 +1016,6 @@ def main():
             weight_decay=args.adam_weight_decay,
             eps=args.adam_epsilon,
         )
-        print(1 / 0)
 
     sample_n_frames_bucket_interval = vae.config.temporal_compression_ratio
 
@@ -1079,7 +1104,6 @@ def main():
             num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
             num_training_steps=args.max_train_steps * accelerator.num_processes,
         )
-        print(1 / 0)
 
     combined_model, optimizer, train_rec_dataloader, train_square_dataloader, train_vec_dataloader, lr_scheduler = accelerator.prepare(combined_model, optimizer, train_rec_dataloader, train_square_dataloader, train_vec_dataloader, lr_scheduler)
 
@@ -1196,8 +1220,7 @@ def main():
                     iter3 = iter(train_vec_dataloader)
                     batch = next(iter3)
             else:
-                batch = None
-                print(1 / 0)
+                raise RuntimeError("No batch available from any dataloader")
 
             models_to_accumulate = [combined_model]
             with accelerator.accumulate(models_to_accumulate):
@@ -1384,7 +1407,7 @@ def main():
                         context=prompt_embeds,
                         t=timesteps,
                         seq_len=seq_len,
-                        y=inpaint_latents,
+                        y=inpaint_latents,  # Restored: mask + masked_latents for inpainting
                         clip_fea=clip_context,
                         vocal_embeddings=vocal_embeddings,
                         is_clip_level_modeling=is_clip_level_modeling,

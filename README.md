@@ -196,9 +196,9 @@ This approach:
 
 LoRA 파인튜닝은 기본 모델의 가중치를 동결하고, 저차원 행렬을 통해 적은 파라미터만 학습합니다:
 - **학습 파라미터**: ~0.1% of full model
-- **학습 시간**: 2-4시간 (A100 80GB 기준, 50 epochs)
-- **VRAM 요구량**: ~40GB (gradient checkpointing 사용 시)
-- **RAM 요구량**: ~90GB (모델 로딩 시)
+- **학습 시간**: 약 6-8시간 (A100 80GB 기준, 20 epochs)
+- **VRAM 요구량**: ~45-55GB (DeepSpeed ZeRO Stage 2 + gradient checkpointing)
+- **RAM 요구량**: ~100GB (모델 로딩 + CPU optimizer offload)
 
 ### 0. 추가 모델 다운로드
 
@@ -294,10 +294,11 @@ python lip_mask_extractor.py --video_dir talking_face_data/video_001
 | 파라미터 | 권장값 | 설명 |
 |---------|--------|------|
 | `learning_rate` | 1e-4 | LoRA 학습률 |
-| `num_train_epochs` | 50-100 | 에폭 수 |
+| `num_train_epochs` | 20-50 | 에폭 수 (20 권장, 품질/시간 균형) |
 | `train_batch_size` | 1 | 배치 크기 (VRAM 제한) |
-| `video_sample_n_frames` | 81 | 클립당 프레임 수 (81=2초@25fps) |
-| `lora_rank` | 64 | LoRA rank (높을수록 표현력↑, 메모리↑) |
+| `gradient_accumulation_steps` | 16 | Gradient 누적 (effective batch = 16) |
+| `video_sample_n_frames` | 81 | 클립당 프레임 수 (81=약2초@25fps) |
+| `lora_rank` | 128 | LoRA rank (높을수록 표현력↑, 메모리↑) |
 | `max_grad_norm` | 0.05 | Gradient clipping |
 | `motion_sub_loss` | True | 모션 손실 활성화 (립싱크 개선) |
 
@@ -309,9 +310,13 @@ python lip_mask_extractor.py --video_dir talking_face_data/video_001
 #!/bin/bash
 # LoRA Training Script for WanAvatar 14B Model
 
+cd /path/to/WanAvatar
+
 export TOKENIZERS_PARALLELISM=false
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="/path/to/WanAvatar:/path/to/Wan2.2:$PYTHONPATH"
 export MODEL_NAME="/path/to/Wan2.2-S2V-14B"
-export WAV2VEC_PATH="/path/to/wav2vec2-large-xlsr-53-english"
+export WAV2VEC_PATH="/path/to/Wan2.2-S2V-14B/wav2vec2-large-xlsr-53-english"
 
 # Training data paths
 export TRAIN_DATA="ft_data/processed/video_path.txt"
@@ -324,6 +329,8 @@ mkdir -p $OUTPUT_DIR
 accelerate launch \
   --mixed_precision=bf16 \
   --num_processes=1 \
+  --use_deepspeed \
+  --deepspeed_config_file="deepspeed_config/zero2_config.json" \
   train_14B_lora.py \
   --config_path="deepspeed_config/wan2.1/wan_civitai.yaml" \
   --pretrained_model_name_or_path=$MODEL_NAME \
@@ -335,9 +342,9 @@ accelerate launch \
   --video_sample_n_frames=81 \
   --train_batch_size=1 \
   --video_repeat=1 \
-  --gradient_accumulation_steps=2 \
+  --gradient_accumulation_steps=16 \
   --dataloader_num_workers=0 \
-  --num_train_epochs=50 \
+  --num_train_epochs=20 \
   --checkpointing_steps=100 \
   --validation_steps=10000 \
   --learning_rate=1e-04 \
@@ -358,11 +365,46 @@ accelerate launch \
 **주요 파라미터 설명:**
 | 파라미터 | 설명 |
 |---------|------|
+| `--use_deepspeed` | DeepSpeed 메모리 최적화 활성화 |
+| `--deepspeed_config_file` | DeepSpeed ZeRO Stage 2 설정 파일 |
 | `--train_data_rec_dir` | 가로 비디오 학습 데이터 경로 |
 | `--train_data_vec_dir` | 세로 비디오 학습 데이터 경로 |
+| `--gradient_accumulation_steps` | Gradient 누적 횟수 (메모리 절약) |
 | `--video_repeat` | 비디오 반복 횟수 (데이터 증강) |
 | `--vae_mini_batch` | VAE 미니배치 크기 (메모리 절약) |
 | `--report_to` | 학습 로그 기록 방식 (tensorboard) |
+
+#### 2.3 DeepSpeed 설정 (`deepspeed_config/zero2_config.json`)
+
+80GB VRAM에서 학습하기 위해 DeepSpeed ZeRO Stage 2 + CPU Optimizer Offload를 사용합니다:
+
+```json
+{
+    "bf16": {"enabled": true},
+    "zero_optimization": {
+        "stage": 2,
+        "offload_optimizer": {
+            "device": "cpu",
+            "pin_memory": true
+        },
+        "allgather_partitions": true,
+        "allgather_bucket_size": 2e8,
+        "overlap_comm": true,
+        "reduce_scatter": true,
+        "reduce_bucket_size": 2e8,
+        "contiguous_gradients": true
+    },
+    "gradient_accumulation_steps": 16,
+    "gradient_clipping": 0.05,
+    "train_batch_size": "auto",
+    "train_micro_batch_size_per_gpu": 1
+}
+```
+
+**메모리 최적화 팁:**
+- `offload_optimizer`: Optimizer 상태를 CPU로 오프로드하여 VRAM 절약
+- `gradient_checkpointing`: 중간 활성화값 재계산으로 메모리 절약
+- `gradient_accumulation_steps`: 높을수록 메모리 효율적 (16 권장)
 
 ### 3. 학습 실행
 

@@ -51,7 +51,7 @@ def flash_attention(
     """
     half_dtypes = (torch.float16, torch.bfloat16)
     assert dtype in half_dtypes
-    assert q.device.type == 'cuda' and q.size(-1) <= 256
+    assert q.device.type == 'cuda' and q.size(-1) <= 256, f"q.size(-1)={q.size(-1)} > 256 or not on cuda"
 
     # params
     b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype
@@ -251,7 +251,7 @@ class VocalCrossAttention(nn.Module):
         """
         b, n, d = x.size(0), self.num_heads, self.head_dim
 
-        latents_num_frames = 21
+        latents_num_frames = 21  # For 81 video frames: (81-1)//4 + 1 = 21
         q = self.norm_q(self.q(x.to(dtype))).view(b * latents_num_frames, -1, n, d)
         k = self.norm_k(self.k(context.to(dtype))).view(b * latents_num_frames, -1, n, d)
         v = self.v(context.to(dtype)).view(b * latents_num_frames, -1, n, d)
@@ -413,7 +413,7 @@ class FantasyTalkingVocalCondition14BModel(nn.Module):
                 vocal_dim=audio_proj_dim,
                 dit_dim=dit_dim,
                 ffn_dim=audio_proj_dim * 2,
-                num_heads=8,
+                num_heads=20,  # Changed from 8 to 20 to satisfy flash_attention head_dim <= 256 constraint
                 window_size=(-1, -1),
                 qk_norm=True,
                 cross_attn_norm=True,

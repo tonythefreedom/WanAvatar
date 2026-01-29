@@ -181,9 +181,9 @@ def generate_video(
             value_range=(-1, 1)
         )
 
-        # Merge audio
-        output_path = os.path.join(OUTPUT_DIR, f"{timestamp}_with_audio.mp4")
-        merge_video_audio(video_path=video_path, audio_path=audio_path, output_path=output_path)
+        # Merge audio (overwrites video_path with audio)
+        merge_video_audio(video_path, audio_path)
+        output_path = video_path  # Now contains audio
 
         # Cleanup
         del video

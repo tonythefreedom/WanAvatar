@@ -37,7 +37,7 @@ accelerate launch \
   --video_sample_n_frames=81 \
   --train_batch_size=1 \
   --video_repeat=1 \
-  --gradient_accumulation_steps=16 \
+  --gradient_accumulation_steps=8 \
   --dataloader_num_workers=0 \
   --num_train_epochs=20 \
   --checkpointing_steps=100 \

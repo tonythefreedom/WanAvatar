@@ -296,7 +296,7 @@ python lip_mask_extractor.py --video_dir talking_face_data/video_001
 | `learning_rate` | 1e-4 | LoRA 학습률 |
 | `num_train_epochs` | 20-50 | 에폭 수 (20 권장, 품질/시간 균형) |
 | `train_batch_size` | 1 | 배치 크기 (VRAM 제한) |
-| `gradient_accumulation_steps` | 16 | Gradient 누적 (effective batch = 16) |
+| `gradient_accumulation_steps` | 8 | Gradient 누적 (effective batch = 8) |
 | `video_sample_n_frames` | 81 | 클립당 프레임 수 (81=약2초@25fps) |
 | `lora_rank` | 128 | LoRA rank (높을수록 표현력↑, 메모리↑) |
 | `max_grad_norm` | 0.05 | Gradient clipping |
@@ -342,7 +342,7 @@ accelerate launch \
   --video_sample_n_frames=81 \
   --train_batch_size=1 \
   --video_repeat=1 \
-  --gradient_accumulation_steps=16 \
+  --gradient_accumulation_steps=8 \
   --dataloader_num_workers=0 \
   --num_train_epochs=20 \
   --checkpointing_steps=100 \
@@ -394,7 +394,7 @@ accelerate launch \
         "reduce_bucket_size": 2e8,
         "contiguous_gradients": true
     },
-    "gradient_accumulation_steps": 16,
+    "gradient_accumulation_steps": 8,
     "gradient_clipping": 0.05,
     "train_batch_size": "auto",
     "train_micro_batch_size_per_gpu": 1

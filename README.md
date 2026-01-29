@@ -275,40 +275,68 @@ python lip_mask_extractor.py --video_dir talking_face_data/video_001
 | `max_grad_norm` | 0.05 | Gradient clipping |
 | `motion_sub_loss` | True | 모션 손실 활성화 (립싱크 개선) |
 
-#### 2.2 학습 스크립트 수정
+#### 2.2 학습 스크립트 (`train_lora_14B.sh`)
 
-`train_14B_lora.sh` 파일을 환경에 맞게 수정:
+`train_lora_14B.sh` 파일을 환경에 맞게 수정:
 
 ```bash
-export TOKENIZERS_PARALLELISM=false
-export MODEL_NAME="checkpoints/Wan2.2-S2V-14B"
+#!/bin/bash
+# LoRA Training Script for WanAvatar 14B Model
 
-accelerate launch train_14B_lora.py \
+export TOKENIZERS_PARALLELISM=false
+export MODEL_NAME="/path/to/Wan2.2-S2V-14B"
+export WAV2VEC_PATH="/path/to/wav2vec2-large-xlsr-53-english"
+
+# Training data paths
+export TRAIN_DATA="ft_data/processed/video_path.txt"
+export VALIDATION_REF="validation/reference.png"
+export VALIDATION_AUDIO="validation/audio.wav"
+export OUTPUT_DIR="output_lora_14B"
+
+mkdir -p $OUTPUT_DIR
+
+accelerate launch \
+  --mixed_precision=bf16 \
+  --num_processes=1 \
+  train_14B_lora.py \
   --config_path="deepspeed_config/wan2.1/wan_civitai.yaml" \
   --pretrained_model_name_or_path=$MODEL_NAME \
-  --pretrained_wav2vec_path="checkpoints/wav2vec2-base-960h" \
-  --validation_reference_path="validation/reference.png" \
-  --validation_driven_audio_path="validation/audio.wav" \
-  --train_data_rec_dir="talking_face_data/video_path.txt" \
+  --pretrained_wav2vec_path=$WAV2VEC_PATH \
+  --validation_reference_path=$VALIDATION_REF \
+  --validation_driven_audio_path=$VALIDATION_AUDIO \
+  --train_data_rec_dir=$TRAIN_DATA \
+  --train_data_vec_dir=$TRAIN_DATA \
   --video_sample_n_frames=81 \
   --train_batch_size=1 \
-  --gradient_accumulation_steps=1 \
-  --dataloader_num_workers=4 \
+  --video_repeat=1 \
+  --gradient_accumulation_steps=2 \
+  --dataloader_num_workers=0 \
   --num_train_epochs=50 \
-  --checkpointing_steps=500 \
-  --validation_steps=500 \
+  --checkpointing_steps=100 \
+  --validation_steps=10000 \
   --learning_rate=1e-04 \
   --seed=42 \
-  --output_dir="output_lora" \
+  --output_dir=$OUTPUT_DIR \
   --gradient_checkpointing \
   --mixed_precision="bf16" \
   --adam_weight_decay=3e-2 \
   --adam_epsilon=1e-10 \
+  --vae_mini_batch=1 \
   --max_grad_norm=0.05 \
   --motion_sub_loss \
   --low_vram \
-  --train_mode="i2v"
+  --train_mode="i2v" \
+  --report_to="tensorboard"
 ```
+
+**주요 파라미터 설명:**
+| 파라미터 | 설명 |
+|---------|------|
+| `--train_data_rec_dir` | 가로 비디오 학습 데이터 경로 |
+| `--train_data_vec_dir` | 세로 비디오 학습 데이터 경로 |
+| `--video_repeat` | 비디오 반복 횟수 (데이터 증강) |
+| `--vae_mini_batch` | VAE 미니배치 크기 (메모리 절약) |
+| `--report_to` | 학습 로그 기록 방식 (tensorboard) |
 
 ### 3. 학습 실행
 

@@ -44,7 +44,7 @@ from pathlib import Path
 import imageio
 import torchvision
 
-from musicfm.model.musicfm_25hz import MusicFM25Hz
+# from musicfm.model.musicfm_25hz import MusicFM25Hz  # Not used in current training
 from wan.dataset.talking_video_dataset_fantasy import LargeScaleTalkingFantasyVideos
 from wan.models.wan_fantasy_transformer3d_14B import WanTransformer3DFantasy14BModel
 from wan.models.wan_text_encoder import WanT5EncoderModel

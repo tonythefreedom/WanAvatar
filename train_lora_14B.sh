@@ -2,6 +2,7 @@
 # LoRA Training Script for WanAvatar 14B Model (Wan2.2-S2V-14B)
 
 export TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="/home/work/musicfm:/home/work/Wan2.2:$PYTHONPATH"
 export MODEL_NAME="/home/work/Wan2.2/Wan2.2-S2V-14B"
 export WAV2VEC_PATH="/home/work/Wan2.2/Wan2.2-S2V-14B/wav2vec2-large-xlsr-53-english"
 

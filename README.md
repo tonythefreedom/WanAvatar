@@ -198,6 +198,32 @@ LoRA 파인튜닝은 기본 모델의 가중치를 동결하고, 저차원 행�
 - **학습 파라미터**: ~0.1% of full model
 - **학습 시간**: 2-4시간 (A100 80GB 기준, 50 epochs)
 - **VRAM 요구량**: ~40GB (gradient checkpointing 사용 시)
+- **RAM 요구량**: ~90GB (모델 로딩 시)
+
+### 0. 추가 모델 다운로드
+
+학습에는 CLIP 이미지 인코더 모델이 필요합니다. OpenCLIP에서 자동 다운로드:
+
+```python
+import open_clip
+import torch
+
+# CLIP 모델 다운로드 및 저장
+model, _, _ = open_clip.create_model_and_transforms(
+    'xlm-roberta-large-ViT-H-14',
+    pretrained='frozen_laion5b_s13b_b90k'
+)
+visual_state_dict = model.visual.state_dict()
+torch.save(
+    visual_state_dict,
+    '/path/to/Wan2.2-S2V-14B/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
+)
+```
+
+필요한 패키지:
+```bash
+pip install open-clip-torch
+```
 
 ### 1. 데이터 준비
 

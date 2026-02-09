@@ -107,6 +107,8 @@ def generate_video(
     infer_frames,
     seed,
     offload_model,
+    use_teacache,
+    teacache_thresh,
     progress=gr.Progress()
 ):
     """Generate talking head video from image and audio."""
@@ -161,6 +163,8 @@ def generate_video(
             seed=seed,
             offload_model=offload_model,
             init_first_frame=False,
+            use_teacache=use_teacache,
+            teacache_thresh=teacache_thresh,
         )
 
         progress(0.8, desc="Saving video...")
@@ -270,6 +274,8 @@ TRANSLATIONS = {
         "frames_label": "Frames per Clip",
         "seed_label": "Seed (-1=random)",
         "offload_label": "Enable Model Offload (saves VRAM)",
+        "teacache_label": "TeaCache (faster inference)",
+        "teacache_thresh_label": "TeaCache Threshold",
         "generate_btn": "Generate Video",
         "video_output": "Generated Video",
         "seed_output": "Used Seed",
@@ -300,6 +306,8 @@ TRANSLATIONS = {
         "frames_label": "클립당 프레임",
         "seed_label": "시드 (-1=랜덤)",
         "offload_label": "모델 오프로드 활성화 (VRAM 절약)",
+        "teacache_label": "TeaCache (빠른 추론)",
+        "teacache_thresh_label": "TeaCache 임계값",
         "generate_btn": "비디오 생성",
         "video_output": "생성된 비디오",
         "seed_output": "사용된 시드",
@@ -330,6 +338,8 @@ TRANSLATIONS = {
         "frames_label": "每片段帧数",
         "seed_label": "种子（-1=随机）",
         "offload_label": "启用模型卸载（节省显存）",
+        "teacache_label": "TeaCache（加速推理）",
+        "teacache_thresh_label": "TeaCache 阈值",
         "generate_btn": "生成视频",
         "video_output": "生成的视频",
         "seed_output": "使用的种子",
@@ -552,10 +562,10 @@ def create_interface():
                             with gr.Row():
                                 inference_steps = gr.Slider(
                                     label="Inference Steps",
-                                    minimum=20,
-                                    maximum=100,
-                                    step=5,
-                                    value=40,
+                                    minimum=5,
+                                    maximum=50,
+                                    step=1,
+                                    value=15,
                                 )
                                 guidance_scale = gr.Slider(
                                     label="Guidance Scale",
@@ -573,7 +583,20 @@ def create_interface():
                                 )
                                 offload = gr.Checkbox(
                                     label="Model Offload (saves VRAM)",
+                                    value=False,
+                                )
+
+                            with gr.Row():
+                                use_teacache = gr.Checkbox(
+                                    label="TeaCache (faster inference)",
                                     value=True,
+                                )
+                                teacache_thresh = gr.Slider(
+                                    label="TeaCache Threshold",
+                                    minimum=0.05,
+                                    maximum=1.0,
+                                    step=0.05,
+                                    value=0.3,
                                 )
 
                         generate_btn = gr.Button(
@@ -608,7 +631,7 @@ def create_interface():
                     inputs=[
                         image_input, audio_input, prompt, neg_prompt,
                         resolution, num_clips, inference_steps, guidance_scale,
-                        infer_frames, seed, offload
+                        infer_frames, seed, offload, use_teacache, teacache_thresh
                     ],
                     outputs=[video_output, seed_output, status_output],
                 )
@@ -691,6 +714,8 @@ def create_interface():
                 infer_frames: gr.Slider(label=t("frames_label")),
                 seed: gr.Number(label=t("seed_label")),
                 offload: gr.Checkbox(label=t("offload_label")),
+                use_teacache: gr.Checkbox(label=t("teacache_label")),
+                teacache_thresh: gr.Slider(label=t("teacache_thresh_label")),
                 generate_btn: gr.Button(t("generate_btn")),
                 video_output: gr.Video(label=t("video_output")),
                 seed_output: gr.Textbox(label=t("seed_output")),
@@ -711,7 +736,8 @@ def create_interface():
             outputs=[
                 image_input, audio_input, prompt, neg_prompt,
                 resolution, num_clips, inference_steps, guidance_scale,
-                infer_frames, seed, offload, generate_btn,
+                infer_frames, seed, offload, use_teacache, teacache_thresh,
+                generate_btn,
                 video_output, seed_output, status_output,
                 video_for_extract, extract_btn, extracted_audio, extract_status,
                 audio_for_separate, separate_btn, separated_vocals, separate_status,

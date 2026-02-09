@@ -781,6 +781,8 @@ class WanModel_S2V(ModelMixin, ConfigMixin):
                 sinusoidal_embedding_1d(self.freq_dim, t).float())
             e0 = self.time_projection(e).unflatten(1, (6, self.dim))
             assert e.dtype == torch.float32 and e0.dtype == torch.float32
+        # Save raw e0 before zero_timestep processing (used by TeaCache)
+        raw_e0_for_cache = e0[:1] if self.zero_timestep else e0  # exclude zero timestep entry
 
         if self.zero_timestep:
             e = e[:-1]
@@ -844,24 +846,17 @@ class WanModel_S2V(ModelMixin, ConfigMixin):
             context=context,
             context_lens=context_lens)
 
-        # TeaCache: compute modulated input from first block for comparison
+        # TeaCache: decide whether to skip transformer blocks
         tea_cache = extra_kwargs.get('tea_cache', None)
         should_calc = True
         if tea_cache is not None:
-            # Compute the first block's modulated input (includes both x and timestep)
-            blk0 = self.blocks[0]
-            with amp.autocast(dtype=torch.float32):
-                blk_e = e0[0]
-                blk_mod = blk0.modulation.unsqueeze(2)
-                blk_e_chunks = (blk_mod + blk_e).chunk(6, dim=1)
-            shift = blk_e_chunks[0].squeeze(1)  # [B, 2, dim]
-            scale = blk_e_chunks[1].squeeze(1)  # [B, 2, dim]
-            norm_x = blk0.norm1(x).float()
-            # Compute modulated input: norm_x * (1 + scale) + shift
-            # Use mean over sequence length to keep comparison signal compact
-            modulated_inp = (norm_x.mean(dim=1, keepdim=True) *
-                            (1 + scale[:, 0:1]) + shift[:, 0:1])
-            if tea_cache.previous_modulated_input is not None:
+            # Use raw e0 (time_projection output, float32, before zero_timestep processing)
+            modulated_inp = raw_e0_for_cache
+
+            if tea_cache.cnt < tea_cache.num_skip_start_steps:
+                # Warmup: always compute
+                should_calc = True
+            elif tea_cache.previous_modulated_input is not None:
                 from wan.models.cache_utils import TeaCache
                 rel_dist = TeaCache.compute_rel_l1_distance(
                     tea_cache.previous_modulated_input, modulated_inp)
@@ -871,12 +866,17 @@ class WanModel_S2V(ModelMixin, ConfigMixin):
                     should_calc = False
                 else:
                     tea_cache.accumulated_rel_l1_distance = 0
-                logging.info(f"TeaCache: rel_dist={rel_dist:.6f}, rescaled={rescaled:.4f}, "
-                             f"accum={tea_cache.accumulated_rel_l1_distance:.4f}, calc={should_calc}")
+                logging.info(f"TeaCache step {tea_cache.cnt}: rel_dist={rel_dist:.6f}, "
+                             f"rescaled={rescaled:.4f}, accum={tea_cache.accumulated_rel_l1_distance:.4f}, "
+                             f"calc={should_calc}")
+
             tea_cache.previous_modulated_input = modulated_inp.clone()
             tea_cache.should_calc = should_calc
+            tea_cache.cnt += 1
 
         if should_calc:
+            ori_x = x.clone()
+
             for idx, block in enumerate(self.blocks):
                 x = block(x, **kwargs)
                 x = self.after_transformer_block(idx, x)
@@ -884,16 +884,17 @@ class WanModel_S2V(ModelMixin, ConfigMixin):
             # Context Parallel
             if self.use_context_parallel:
                 x = gather_forward(x.contiguous(), dim=1)
-            # unpatchify
-            x = x[:, :self.original_seq_len]
-            # head
-            x = self.head(x, e)
 
             if tea_cache is not None:
-                tea_cache.previous_residual = x.clone() if isinstance(x, torch.Tensor) else [u.clone() for u in x]
+                # Cache the delta (what transformer blocks added)
+                tea_cache.previous_residual = (x - ori_x).clone()
         else:
-            x = tea_cache.previous_residual
+            # Add cached delta to current input
+            x = x + tea_cache.previous_residual
 
+        # unpatchify and head always run
+        x = x[:, :self.original_seq_len]
+        x = self.head(x, e)
         x = self.unpatchify(x, original_grid_sizes)
         return [u.float() for u in x]
 

@@ -34,6 +34,8 @@ const translations = {
     framesLabel: 'Frames per Clip',
     seedLabel: 'Seed (-1=random)',
     offloadLabel: 'Model Offload (saves VRAM)',
+    teacacheLabel: 'TeaCache (faster inference)',
+    teacacheThreshLabel: 'TeaCache Threshold',
     generateBtn: 'Generate Video',
     generating: 'Generating...',
     videoOutput: 'Generated Video',
@@ -70,6 +72,8 @@ const translations = {
     framesLabel: '클립당 프레임',
     seedLabel: '시드 (-1=랜덤)',
     offloadLabel: '모델 오프로드 (VRAM 절약)',
+    teacacheLabel: 'TeaCache (빠른 추론)',
+    teacacheThreshLabel: 'TeaCache 임계값',
     generateBtn: '비디오 생성',
     generating: '생성 중...',
     videoOutput: '생성된 비디오',
@@ -106,6 +110,8 @@ const translations = {
     framesLabel: '每片段帧数',
     seedLabel: '种子（-1=随机）',
     offloadLabel: '模型卸载（节省显存）',
+    teacacheLabel: 'TeaCache（加速推理）',
+    teacacheThreshLabel: 'TeaCache 阈值',
     generateBtn: '生成视频',
     generating: '生成中...',
     videoOutput: '生成的视频',
@@ -140,11 +146,13 @@ function App() {
   const [negPrompt, setNegPrompt] = useState(translations.en.negPromptDefault);
   const [resolution, setResolution] = useState('720*1280');
   const [numClips, setNumClips] = useState(0);
-  const [steps, setSteps] = useState(40);
+  const [steps, setSteps] = useState(15);
   const [guidance, setGuidance] = useState(4.5);
   const [frames, setFrames] = useState(80);
   const [seed, setSeed] = useState(-1);
-  const [offload, setOffload] = useState(true);
+  const [offload, setOffload] = useState(false);
+  const [useTeacache, setUseTeacache] = useState(true);
+  const [teacacheThresh, setTeacacheThresh] = useState(0.3);
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
@@ -272,6 +280,8 @@ function App() {
         infer_frames: frames,
         seed,
         offload_model: offload,
+        use_teacache: useTeacache,
+        teacache_thresh: teacacheThresh,
       });
 
       // Poll for status
@@ -533,9 +543,9 @@ function App() {
                     <label>{t('stepsLabel')}: {steps}</label>
                     <input
                       type="range"
-                      min={20}
-                      max={100}
-                      step={5}
+                      min={5}
+                      max={50}
+                      step={1}
                       value={steps}
                       onChange={(e) => setSteps(parseInt(e.target.value))}
                     />
@@ -585,6 +595,31 @@ function App() {
                     {t('offloadLabel')}
                   </label>
                 </div>
+
+                <div className="form-group checkbox">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={useTeacache}
+                      onChange={(e) => setUseTeacache(e.target.checked)}
+                    />
+                    {t('teacacheLabel')}
+                  </label>
+                </div>
+
+                {useTeacache && (
+                  <div className="form-group">
+                    <label>{t('teacacheThreshLabel')}: {teacacheThresh}</label>
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={1.0}
+                      step={0.05}
+                      value={teacacheThresh}
+                      onChange={(e) => setTeacacheThresh(parseFloat(e.target.value))}
+                    />
+                  </div>
+                )}
 
                 <button
                   className="btn primary"

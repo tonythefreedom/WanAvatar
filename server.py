@@ -108,7 +108,7 @@ class GenerateRequest(BaseModel):
     seed: int = -1
     offload_model: bool = False
     use_teacache: bool = True
-    teacache_thresh: float = 0.1
+    teacache_thresh: float = 0.3
 
 
 class TaskStatus(BaseModel):
@@ -224,15 +224,26 @@ def generate_video_task(task_id: str, params: dict):
         save_videos_grid(video[None], video_path, rescale=True, fps=16)
 
         # Merge audio with ffmpeg
-        output_path = str(OUTPUT_DIR / f"{timestamp}_with_audio.mp4")
+        output_with_audio = str(OUTPUT_DIR / f"{timestamp}_with_audio.mp4")
         import subprocess
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-i", params["audio_path"],
-            "-c:v", "copy", "-c:a", "aac",
-            "-shortest", output_path
-        ], capture_output=True)
+        try:
+            result = subprocess.run([
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-i", params["audio_path"],
+                "-c:v", "copy", "-c:a", "aac",
+                "-shortest", output_with_audio
+            ], capture_output=True, timeout=120)
+
+            if result.returncode == 0 and os.path.exists(output_with_audio) and os.path.getsize(output_with_audio) > 0:
+                final_path = f"/outputs/{timestamp}_with_audio.mp4"
+                logging.info(f"Audio merged successfully: {output_with_audio}")
+            else:
+                logging.warning(f"ffmpeg audio merge failed (returncode={result.returncode}): {result.stderr.decode()}")
+                final_path = f"/outputs/{timestamp}.mp4"
+        except Exception as merge_err:
+            logging.warning(f"ffmpeg audio merge error: {merge_err}")
+            final_path = f"/outputs/{timestamp}.mp4"
 
         # Cleanup
         del video
@@ -243,7 +254,7 @@ def generate_video_task(task_id: str, params: dict):
             "status": "completed",
             "progress": 1.0,
             "message": "Generation completed!",
-            "output_path": f"/outputs/{timestamp}_with_audio.mp4",
+            "output_path": final_path,
             "seed": seed,
         }
 
@@ -291,6 +302,8 @@ async def get_config():
         "default_steps": 15,
         "default_guidance": 4.5,
         "default_frames": 80,
+        "default_use_teacache": True,
+        "default_teacache_thresh": 0.3,
     }
 
 

@@ -692,7 +692,7 @@ class WanS2V:
                             coefficients=coefficients,
                             num_steps=len(timesteps),
                             rel_l1_thresh=teacache_thresh,
-                            num_skip_start_steps=0,
+                            num_skip_start_steps=2,
                             offload=False,
                         )
 
@@ -702,19 +702,17 @@ class WanS2V:
 
                     timestep = torch.stack(timestep).to(self.device)
 
-                    # Run model with TeaCache (comparison happens inside forward)
+                    # TeaCache: run cond forward with cache check inside model
                     noise_pred_cond = self.noise_model(
                         latent_model_input, t=timestep,
                         tea_cache=tea_cache, **arg_c)
 
-                    # Check if TeaCache skipped (output came from cache)
-                    skip_step = (tea_cache is not None and
-                                tea_cache.previous_residual is not None and
-                                not tea_cache.should_calc)
+                    # Check if TeaCache decided to use cached delta
+                    tc_skipped = (tea_cache is not None and not tea_cache.should_calc)
 
                     if guide_scale > 1:
-                        if skip_step:
-                            # Reuse previous CFG noise prediction
+                        if tc_skipped and tea_cache.previous_residual_cond is not None:
+                            # Reuse previous full CFG noise prediction
                             noise_pred = [tea_cache.previous_residual_cond.clone()]
                         else:
                             noise_pred_uncond = self.noise_model(

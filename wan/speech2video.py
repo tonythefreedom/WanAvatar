@@ -25,6 +25,7 @@ from .distributed.fsdp import shard_model
 from .distributed.sequence_parallel import sp_attn_forward, sp_dit_forward
 from .distributed.util import get_world_size
 from .modules.s2v.audio_encoder import AudioEncoder
+from .modules.model import sinusoidal_embedding_1d
 from .modules.s2v.model_s2v import WanModel_S2V, sp_attn_forward_s2v
 from .modules.t5 import T5EncoderModel
 from .modules.vae2_1 import Wan2_1_VAE
@@ -45,7 +46,7 @@ def load_safetensors(path, device="cpu"):
     return tensors
 
 
-def load_sharded_safetensors(checkpoint_dir):
+def load_sharded_safetensors(checkpoint_dir, device="cpu"):
     """Load sharded safetensors files from a directory."""
     import glob
     import json
@@ -64,7 +65,7 @@ def load_sharded_safetensors(checkpoint_dir):
         for shard_file in sorted(shard_files):
             shard_path = os.path.join(checkpoint_dir, shard_file)
             logging.info(f"Loading shard: {shard_file}")
-            shard_tensors = load_safetensors(shard_path)
+            shard_tensors = load_safetensors(shard_path, device=device)
             tensors.update(shard_tensors)
 
         return tensors
@@ -74,7 +75,7 @@ def load_sharded_safetensors(checkpoint_dir):
         tensors = {}
         for shard_path in shard_files:
             logging.info(f"Loading shard: {os.path.basename(shard_path)}")
-            shard_tensors = load_safetensors(shard_path)
+            shard_tensors = load_safetensors(shard_path, device=device)
             tensors.update(shard_tensors)
         return tensors
 
@@ -91,6 +92,7 @@ class WanS2V:
         dit_fsdp=False,
         use_sp=False,
         t5_cpu=False,
+        t5_device_id=None,
         init_on_cpu=True,
         convert_model_dtype=False,
     ):
@@ -114,6 +116,8 @@ class WanS2V:
                 Enable distribution strategy of sequence parallel.
             t5_cpu (`bool`, *optional*, defaults to False):
                 Whether to place T5 model on CPU. Only works without t5_fsdp.
+            t5_device_id (`int`, *optional*, defaults to None):
+                GPU device id for T5 model. If None, uses device_id.
             init_on_cpu (`bool`, *optional*, defaults to True):
                 Enable initializing Transformer Model on CPU. Only works without FSDP or USP.
             convert_model_dtype (`bool`, *optional*, defaults to False):
@@ -133,10 +137,17 @@ class WanS2V:
             self.init_on_cpu = False
 
         shard_fn = partial(shard_model, device_id=device_id)
+        if t5_cpu:
+            t5_device = torch.device('cpu')
+        elif t5_device_id is not None:
+            t5_device = torch.device(f'cuda:{t5_device_id}')
+        else:
+            t5_device = self.device
+        self.t5_device = t5_device
         self.text_encoder = T5EncoderModel(
             text_len=config.text_len,
             dtype=config.t5_dtype,
-            device=torch.device('cpu'),
+            device=t5_device,
             checkpoint_path=os.path.join(checkpoint_dir, config.t5_checkpoint),
             tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
             shard_fn=shard_fn if t5_fsdp else None,
@@ -158,26 +169,16 @@ class WanS2V:
                 model_config.pop(key, None)
 
             logging.info("Initializing model...")
-            # Create model on CPU first due to 14B model size
+            # Load weights on CPU first, then move to target GPU
             self.noise_model = WanModel_S2V(**model_config)
-
-            logging.info("Loading model weights...")
-            state_dict = load_sharded_safetensors(checkpoint_dir)
-
-            # Load weights to CPU
+            logging.info("Loading model weights on CPU...")
+            state_dict = load_sharded_safetensors(checkpoint_dir, device="cpu")
             self.noise_model.load_state_dict(state_dict, strict=False)
             del state_dict
             gc.collect()
-
-            # Convert dtype
-            logging.info("Converting model dtype...")
-            self.noise_model = self.noise_model.to(dtype=self.param_dtype)
-
-            # Model stays on CPU with offload_model=True
-            # It will be moved to GPU during generate() when needed
-            if not self.init_on_cpu:
-                logging.info("Moving model to CUDA...")
-                self.noise_model = self.noise_model.to(self.device)
+            logging.info("Converting model dtype and moving to GPU...")
+            self.noise_model = self.noise_model.to(dtype=self.param_dtype, device=self.device)
+            torch.cuda.empty_cache()
         else:
             self.noise_model = WanModel_S2V.from_pretrained(
                 checkpoint_dir, torch_dtype=self.param_dtype)
@@ -471,6 +472,8 @@ class WanS2V:
         seed=-1,
         offload_model=True,
         init_first_frame=False,
+        use_teacache=False,
+        teacache_thresh=0.3,
     ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -581,11 +584,15 @@ class WanS2V:
 
         # preprocess
         if not self.t5_cpu:
-            self.text_encoder.model.to(self.device)
-            context = self.text_encoder([input_prompt], self.device)
-            context_null = self.text_encoder([n_prompt], self.device)
+            self.text_encoder.model.to(self.t5_device)
+            context = self.text_encoder([input_prompt], self.t5_device)
+            context_null = self.text_encoder([n_prompt], self.t5_device)
             if offload_model:
                 self.text_encoder.model.cpu()
+            # Move T5 outputs to DiT device if on different GPUs
+            if self.t5_device != self.device:
+                context = [t.to(self.device) for t in context]
+                context_null = [t.to(self.device) for t in context_null]
         else:
             context = self.text_encoder([input_prompt], torch.device('cpu'))
             context_null = self.text_encoder([n_prompt], torch.device('cpu'))
@@ -675,22 +682,49 @@ class WanS2V:
                     self.noise_model.to(self.device)
                     torch.cuda.empty_cache()
 
+                # Initialize TeaCache for this segment
+                tea_cache = None
+                if use_teacache:
+                    from .models.cache_utils import TeaCache, get_teacache_coefficients
+                    coefficients = get_teacache_coefficients("wan2.2-s2v-14b")
+                    if coefficients is not None:
+                        tea_cache = TeaCache(
+                            coefficients=coefficients,
+                            num_steps=len(timesteps),
+                            rel_l1_thresh=teacache_thresh,
+                            num_skip_start_steps=0,
+                            offload=False,
+                        )
+
                 for i, t in enumerate(tqdm(timesteps)):
                     latent_model_input = latents[0:1]
                     timestep = [t]
 
                     timestep = torch.stack(timestep).to(self.device)
 
+                    # Run model with TeaCache (comparison happens inside forward)
                     noise_pred_cond = self.noise_model(
-                        latent_model_input, t=timestep, **arg_c)
+                        latent_model_input, t=timestep,
+                        tea_cache=tea_cache, **arg_c)
+
+                    # Check if TeaCache skipped (output came from cache)
+                    skip_step = (tea_cache is not None and
+                                tea_cache.previous_residual is not None and
+                                not tea_cache.should_calc)
 
                     if guide_scale > 1:
-                        noise_pred_uncond = self.noise_model(
-                            latent_model_input, t=timestep, **arg_null)
-                        noise_pred = [
-                            u + guide_scale * (c - u)
-                            for c, u in zip(noise_pred_cond, noise_pred_uncond)
-                        ]
+                        if skip_step:
+                            # Reuse previous CFG noise prediction
+                            noise_pred = [tea_cache.previous_residual_cond.clone()]
+                        else:
+                            noise_pred_uncond = self.noise_model(
+                                latent_model_input, t=timestep, **arg_null)
+                            noise_pred = [
+                                u + guide_scale * (c - u)
+                                for c, u in zip(noise_pred_cond, noise_pred_uncond)
+                            ]
+                            if tea_cache is not None:
+                                tea_cache.previous_residual_cond = noise_pred[0].clone()
                     else:
                         noise_pred = noise_pred_cond
 

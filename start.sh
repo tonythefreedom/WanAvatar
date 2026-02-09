@@ -1,7 +1,8 @@
 #!/bin/bash
 # WanAvatar Server Start Script
 
-cd /home/work/WanAvatar
+cd /home/ubuntu/WanAvatar
+source venv/bin/activate
 
 # Create necessary directories
 mkdir -p outputs uploads

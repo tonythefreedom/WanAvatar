@@ -12,9 +12,6 @@ import random
 import logging
 import shutil
 
-# Add Wan2.2 to path
-sys.path.insert(0, '/home/work/Wan2.2')
-
 import torch
 import numpy as np
 import gradio as gr
@@ -51,7 +48,7 @@ parser.add_argument("--offload", action="store_true", default=True, help="Enable
 args = parser.parse_args()
 
 # Model paths
-CHECKPOINT_DIR = "/home/work/Wan2.2/Wan2.2-S2V-14B"
+CHECKPOINT_DIR = "/mnt/models/Wan2.2-S2V-14B"
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

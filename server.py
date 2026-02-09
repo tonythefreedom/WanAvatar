@@ -15,9 +15,6 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-# Add Wan2.2 to path
-sys.path.insert(0, '/home/work/Wan2.2')
-
 import torch
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
@@ -52,7 +49,7 @@ UPLOAD_DIR = Path("uploads")
 OUTPUT_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-CHECKPOINT_DIR = "/home/work/Wan2.2/Wan2.2-S2V-14B"
+CHECKPOINT_DIR = "/mnt/models/Wan2.2-S2V-14B"
 
 # Device setup
 if torch.cuda.is_available():
@@ -105,11 +102,13 @@ class GenerateRequest(BaseModel):
     negative_prompt: str = "blurry, low quality, distorted face"
     resolution: str = "720*1280"
     num_clips: int = 0
-    inference_steps: int = 40
+    inference_steps: int = 15
     guidance_scale: float = 4.5
     infer_frames: int = 80
     seed: int = -1
-    offload_model: bool = True
+    offload_model: bool = False
+    use_teacache: bool = True
+    teacache_thresh: float = 0.1
 
 
 class TaskStatus(BaseModel):
@@ -132,6 +131,7 @@ def load_pipeline():
     logging.info("Loading Wan2.2-S2V-14B model...")
     cfg = WAN_CONFIGS['s2v-14B']
 
+    num_gpus = torch.cuda.device_count()
     pipeline = wan.WanS2V(
         config=cfg,
         checkpoint_dir=CHECKPOINT_DIR,
@@ -141,6 +141,7 @@ def load_pipeline():
         dit_fsdp=False,
         use_sp=False,
         t5_cpu=False,
+        t5_device_id=1 if num_gpus > 1 else 0,
         init_on_cpu=False,
     )
 
@@ -208,27 +209,30 @@ def generate_video_task(task_id: str, params: dict):
             seed=seed,
             offload_model=params["offload_model"],
             init_first_frame=False,
+            use_teacache=params.get("use_teacache", True),
+            teacache_thresh=params.get("teacache_thresh", 0.3),
         )
 
         generation_status[task_id]["progress"] = 0.8
         generation_status[task_id]["message"] = "Saving video..."
 
         # Save video
-        from wan.utils.utils import save_video, merge_video_audio
+        from wan.utils.utils import save_videos_grid
 
         video_path = str(OUTPUT_DIR / f"{timestamp}.mp4")
-        save_video(
-            tensor=video[None],
-            save_file=video_path,
-            fps=16,
-            nrow=1,
-            normalize=True,
-            value_range=(-1, 1)
-        )
+        # video shape: [C, T, H, W] -> add batch dim [1, C, T, H, W]
+        save_videos_grid(video[None], video_path, rescale=True, fps=16)
 
-        # Merge audio
+        # Merge audio with ffmpeg
         output_path = str(OUTPUT_DIR / f"{timestamp}_with_audio.mp4")
-        merge_video_audio(video_path=video_path, audio_path=params["audio_path"], output_path=output_path)
+        import subprocess
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", params["audio_path"],
+            "-c:v", "copy", "-c:a", "aac",
+            "-shortest", output_path
+        ], capture_output=True)
 
         # Cleanup
         del video
@@ -284,7 +288,7 @@ async def get_config():
     return {
         "resolutions": list(SIZE_CONFIGS.keys()),
         "default_resolution": "720*1280",
-        "default_steps": 40,
+        "default_steps": 15,
         "default_guidance": 4.5,
         "default_frames": 80,
     }

@@ -1,21 +1,22 @@
 #!/bin/bash
 # LoRA Training Script for WanAvatar 14B Model (Wan2.2-S2V-14B)
 
-cd /home/work/WanAvatar
+cd /home/ubuntu/WanAvatar
+source venv/bin/activate
 
 export TOKENIZERS_PARALLELISM=false
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONHASHSEED=0
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export PYTHONPATH="/home/work/WanAvatar:/home/work/musicfm:/home/work/Wan2.2:$PYTHONPATH"
-export MODEL_NAME="/home/work/Wan2.2/Wan2.2-S2V-14B"
-export WAV2VEC_PATH="/home/work/Wan2.2/Wan2.2-S2V-14B/wav2vec2-large-xlsr-53-english"
+export PYTHONPATH="/home/ubuntu/WanAvatar:$PYTHONPATH"
+export MODEL_NAME="/mnt/models/Wan2.2-S2V-14B"
+export WAV2VEC_PATH="/mnt/models/Wan2.2-S2V-14B/wav2vec2-large-xlsr-53-english"
 
 # Training data paths
-export TRAIN_DATA="/home/work/WanAvatar/ft_data/processed/video_path.txt"
-export VALIDATION_REF="/home/work/WanAvatar/validation/reference.png"
-export VALIDATION_AUDIO="/home/work/WanAvatar/validation/audio.wav"
-export OUTPUT_DIR="/home/work/WanAvatar/output_lora_14B"
+export TRAIN_DATA="/home/ubuntu/WanAvatar/ft_data/processed/video_path.txt"
+export VALIDATION_REF="/home/ubuntu/WanAvatar/validation/reference.png"
+export VALIDATION_AUDIO="/home/ubuntu/WanAvatar/validation/audio.wav"
+export OUTPUT_DIR="/home/ubuntu/WanAvatar/output_lora_14B"
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
@@ -26,14 +27,13 @@ accelerate launch \
   --use_deepspeed \
   --deepspeed_config_file="deepspeed_config/zero2_config.json" \
   train_14B_lora.py \
-  --config_path="deepspeed_config/wan2.1/wan_civitai.yaml" \
+  --config_path="deepspeed_config/wan2.2/wan_s2v_14b.yaml" \
   --pretrained_model_name_or_path=$MODEL_NAME \
   --pretrained_wav2vec_path=$WAV2VEC_PATH \
   --validation_reference_path=$VALIDATION_REF \
   --validation_driven_audio_path=$VALIDATION_AUDIO \
-  --train_data_rec_dir="/home/work/WanAvatar/ft_data/processed/video_path.txt" \
-  --train_data_square_dir="/home/work/WanAvatar/ft_data/processed/video_path.txt" \
-  --train_data_vec_dir="/home/work/WanAvatar/ft_data/processed/video_path.txt" \
+  --train_data_rec_dir=$TRAIN_DATA \
+  --train_data_vec_dir=$TRAIN_DATA \
   --video_sample_n_frames=81 \
   --train_batch_size=1 \
   --video_repeat=1 \

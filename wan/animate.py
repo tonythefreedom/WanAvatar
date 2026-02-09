@@ -22,7 +22,7 @@ from .distributed.util import get_world_size
 from .modules.animate import WanAnimateModel
 from .modules.animate import CLIPModel
 from .modules.t5 import T5EncoderModel
-from .modules.vae2_1 import Wan2_1_VAE
+from .modules.vae2_2 import Wan2_1_VAE
 from .modules.animate.animate_utils import TensorList, get_loraconfig
 from .utils.fm_solvers import (
     FlowDPMSolverMultistepScheduler,

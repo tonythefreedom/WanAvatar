@@ -35,6 +35,7 @@ from .utils.fm_solvers import (
     retrieve_timesteps,
 )
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+from .utils.lora_utils import create_network
 
 
 def load_safetensors(path, device="cpu"):
@@ -86,6 +87,8 @@ class WanS2V:
         self,
         config,
         checkpoint_dir,
+        lora_checkpoint_dir=None,
+        lora_strength=1.0,
         device_id=0,
         rank=0,
         t5_fsdp=False,
@@ -183,6 +186,9 @@ class WanS2V:
             self.noise_model = WanModel_S2V.from_pretrained(
                 checkpoint_dir, torch_dtype=self.param_dtype)
 
+        if lora_checkpoint_dir:
+            self._apply_lora(lora_checkpoint_dir, lora_strength=lora_strength)
+
         self.noise_model = self._configure_model(
             model=self.noise_model,
             use_sp=use_sp,
@@ -247,6 +253,56 @@ class WanS2V:
                 model.to(self.device)
 
         return model
+
+    def _apply_lora(self, lora_checkpoint_dir, lora_strength=1.0):
+        """Apply LoRA weights from a training checkpoint to the inference model.
+
+        Args:
+            lora_checkpoint_dir: Path to directory containing lora_weights.safetensors
+            lora_strength: LoRA multiplier (0.0 = no effect, 1.0 = full strength)
+        """
+        lora_path = os.path.join(lora_checkpoint_dir, "lora_weights.safetensors")
+        if not os.path.exists(lora_path):
+            logging.warning(f"LoRA weights not found at {lora_path}, skipping")
+            return
+
+        logging.info(f"Loading LoRA weights from {lora_path} (strength={lora_strength})")
+
+        # Auto-detect rank from checkpoint
+        from safetensors import safe_open
+        rank = 128
+        alpha = 64.0
+        with safe_open(lora_path, framework="pt") as f:
+            for key in f.keys():
+                if "lora_down.weight" in key:
+                    rank = f.get_tensor(key).shape[0]
+                    break
+            for key in f.keys():
+                if ".alpha" in key:
+                    alpha = f.get_tensor(key).item()
+                    break
+        logging.info(f"LoRA config: rank={rank}, alpha={alpha}, effective_scale={lora_strength * alpha / rank:.3f}")
+
+        # Create LoRA network targeting the inference model class
+        lora_network = create_network(
+            lora_strength,
+            rank,
+            alpha,
+            self.noise_model,
+            neuron_dropout=None,
+            TRANSFORMER_TARGET_REPLACE_MODULE="WanModel_S2V",
+        )
+        lora_network.apply_to(self.noise_model, True)
+
+        # Load weights (strict=False: matching keys loaded, others silently ignored)
+        info = lora_network.load_weights(lora_path)
+        logging.info(f"LoRA weights loaded: {info}")
+
+        # Move LoRA parameters to match model dtype/device
+        lora_network.to(dtype=self.param_dtype, device=self.device)
+        lora_network.eval()
+        lora_network.requires_grad_(False)
+        self.lora_network = lora_network
 
     def get_size_less_than_area(self,
                                 height,
@@ -474,6 +530,7 @@ class WanS2V:
         init_first_frame=False,
         use_teacache=False,
         teacache_thresh=0.3,
+        progress_callback=None,
     ):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -606,6 +663,9 @@ class WanS2V:
                 torch.no_grad(),
         ):
             for r in range(num_repeat):
+                if progress_callback:
+                    clip_progress = r / num_repeat
+                    progress_callback(0.1 + clip_progress * 0.7, f"Generating clip {r+1}/{num_repeat}...")
                 seed_g = torch.Generator(device=self.device)
                 seed_g.manual_seed(seed + r)
 
@@ -697,6 +757,10 @@ class WanS2V:
                         )
 
                 for i, t in enumerate(tqdm(timesteps)):
+                    if progress_callback:
+                        step_progress = i / len(timesteps)
+                        overall = 0.1 + (r + step_progress) / num_repeat * 0.7
+                        progress_callback(overall, f"Clip {r+1}/{num_repeat}, step {i+1}/{len(timesteps)}")
                     latent_model_input = latents[0:1]
                     timestep = [t]
 
@@ -734,6 +798,9 @@ class WanS2V:
                         generator=seed_g)[0]
                     latents[0] = temp_x0.squeeze(0)
 
+                if progress_callback:
+                    overall = 0.1 + (r + 1) / num_repeat * 0.7
+                    progress_callback(overall, f"Decoding clip {r+1}/{num_repeat}...")
                 if offload_model:
                     self.noise_model.cpu()
                     torch.cuda.synchronize()

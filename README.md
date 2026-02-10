@@ -6,10 +6,13 @@ Wan2.2-S2V-14B 기반 립싱크 비디오 생성 프로젝트. 음성 오디오�
 
 - **Wan2.2-S2V-14B 모델**: 14B 파라미터 Speech-to-Video 모델
 - **듀얼 GPU 추론**: T5 인코더 (GPU 1, ~15GB) + DiT 트랜스포머 (GPU 0, ~39GB) 분리 로딩
+- **Sequence Parallel (SP)**: 2+ GPU에서 torchrun 기반 DeepSpeed Ulysses SP로 DiT 어텐션 병렬화
 - **자동 분할 생성**: 긴 오디오를 자동으로 ~5초 세그먼트로 분할, Auto-Regressive 방식으로 연결
-- **속도 최적화**: UniPC 솔버 (15 steps) + infer_frames 80 + TeaCache (실험적)
-- **FastAPI 서버**: REST API 기반 비디오 생성 서버
-- **Gradio 웹 인터페이스**: 간단한 웹 UI
+- **속도 최적화**: UniPC 솔버 (25 steps) + infer_frames 80 + TeaCache (0.15 threshold)
+- **LoRA 추론**: 파인튜닝된 LoRA 체크포인트 자동 로드 (strength=0.5)
+- **FastAPI 서버**: REST API 기반 비디오 생성 서버 + React 프론트엔드
+- **갤러리 & 파일 피커**: 생성된 비디오 갤러리, 이전 업로드 파일 재사용
+- **다국어 UI**: 한국어, 영어, 중국어 지원
 - **LoRA 파인튜닝**: 특정 인물에 대한 립싱크 품질 향상
 
 ## 시스템 요구사항
@@ -96,13 +99,17 @@ huggingface-cli download Wan-AI/Wan2.2-S2V-14B --local-dir /mnt/models/Wan2.2-S2
 ### FastAPI 서버 (권장)
 
 ```bash
-source venv/bin/activate
-python server.py
+bash start.sh
 ```
 
 - 서버: `http://localhost:8000`
 - API 문서: `http://localhost:8000/docs`
 - 프론트엔드: `http://localhost:8000` (빌드된 React 앱)
+
+`start.sh`는 GPU 수를 자동 감지하여:
+- **2+ GPU**: `torchrun --nproc_per_node=N server.py` (Sequence Parallel 활성화)
+- **1 GPU**: `python server.py` (싱글 프로세스)
+- **SP 비활성화**: `DISABLE_SP=1 bash start.sh`
 
 ### Gradio 웹 인터페이스
 
@@ -151,28 +158,44 @@ curl -s http://localhost:8000/api/status/$TASK_ID | python3 -m json.tool
 | `/api/status/{task_id}` | GET | 생성 진행 상황 확인 |
 | `/api/upload/image` | POST | 참조 이미지 업로드 |
 | `/api/upload/audio` | POST | 오디오 파일 업로드 |
+| `/api/uploads/images` | GET | 업로드된 이미지 목록 |
+| `/api/uploads/audio` | GET | 업로드된 오디오 목록 |
+| `/api/videos` | GET | 생성된 비디오 목록 |
+| `/api/videos/{filename}` | DELETE | 비디오 삭제 |
 | `/api/extract-audio` | POST | 비디오에서 오디오 추출 |
 | `/api/separate-vocals` | POST | 보컬 분리 |
-| `/api/health` | GET | 서버 상태 확인 |
+| `/api/health` | GET | 서버 상태 확인 (SP 상태 포함) |
 
 ### 생성 파라미터
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
 | `resolution` | `720*1280` | 출력 해상도 (`480*832` 권장 - 빠름) |
-| `inference_steps` | `15` | 디노이징 스텝 수 (높을수록 품질↑, 속도↓) |
+| `inference_steps` | `25` | 디노이징 스텝 수 (높을수록 품질↑, 속도↓) |
 | `infer_frames` | `80` | 세그먼트당 프레임 수 (~5초@16fps) |
-| `guidance_scale` | `4.5` | CFG 스케일 |
+| `guidance_scale` | `5.5` | CFG 스케일 |
 | `seed` | `-1` | 랜덤 시드 (-1: 무작위) |
-| `use_teacache` | `true` | TeaCache 캐싱 활성화 (실험적) |
-| `teacache_thresh` | `0.1` | TeaCache 임계값 |
+| `use_teacache` | `false` | TeaCache 캐싱 활성화 (품질 저하 가능) |
+| `teacache_thresh` | `0.15` | TeaCache 임계값 (낮을수록 캐싱 적극적) |
 | `offload_model` | `false` | 모델 CPU 오프로드 |
 
 ## 아키텍처
 
-### 듀얼 GPU 추론
+### GPU 추론 모드
 
-2개 이상의 GPU가 감지되면 자동으로 듀얼 GPU 모드로 실행됩니다:
+#### 모드 1: Sequence Parallel (SP) — `torchrun` (기본, 2+ GPU)
+
+```
+GPU 0: 전체 모델 (DiT + T5 + VAE + Audio) — Rank 0 (API 서버)
+GPU 1: 전체 모델 (DiT + T5 + VAE + Audio) — Rank 1 (워커)
+```
+
+- **DeepSpeed Ulysses** 기반: 시퀀스를 GPU 수로 분할, all-to-all로 어텐션 헤드 교환
+- Rank 0이 FastAPI 서버 + 생성 조율, Rank 1은 워커 루프에서 대기
+- 생성 파라미터는 `dist.broadcast`로 동기화
+- `start.sh`가 자동 감지하여 `torchrun --nproc_per_node=N` 실행
+
+#### 모드 2: 듀얼 GPU (T5 분리) — `DISABLE_SP=1`
 
 ```
 GPU 0 (~39GB): DiT 14B 트랜스포머 + VAE + Audio Encoder
@@ -181,6 +204,10 @@ GPU 1 (~15GB): T5 텍스트 인코더 (umt5-xxl)
 
 - 모델은 CPU에서 먼저 로드 후 각 GPU로 이동 (OOM 방지)
 - T5 인코더의 출력은 GPU 간 자동 전송
+
+#### 모드 3: 싱글 GPU
+
+- 1 GPU만 있으면 자동으로 싱글 프로세스 모드
 
 ### Auto-Regressive 세그먼트 생성
 
@@ -201,9 +228,10 @@ GPU 1 (~15GB): T5 텍스트 인코더 (umt5-xxl)
 
 | 최적화 | 효과 | 비고 |
 |--------|------|------|
-| UniPC 솔버 | 40 → 15 steps | 품질 유지하면서 2.7x 속도 향상 |
+| UniPC 솔버 | 40 → 25 steps | 품질 유지하면서 1.6x 속도 향상 |
 | infer_frames 80 | 세그먼트 수 감소 | 40 → 80 프레임으로 세그먼트 절반 |
-| TeaCache | 유사 스텝 캐싱 | 실험적 - 조정 중 |
+| Sequence Parallel | GPU 간 시퀀스 분할 | 2+ GPU에서 DiT 어텐션 병렬화 |
+| TeaCache | 유사 스텝 캐싱 | thresh=0.15, 기본 OFF (품질 우선) |
 
 ### 비디오 저장
 
@@ -557,9 +585,47 @@ output_lora_14B/checkpoint-50/
 └── projector_weights.pt        # Vocal/Audio Projector (4.8GB)
 ```
 
-> **적용 방법**: 서버/추론 파이프라인에서 LoRA 가중치를 로드하는 기능은 향후 업데이트 예정입니다.
+서버 시작 시 자동으로 LoRA 체크포인트를 감지하고 로드합니다:
+
+- **경로**: `LORA_CHECKPOINT_DIR` (server.py 상단에 설정)
+- **강도**: `LORA_STRENGTH = 0.5` (0.0=미적용, 1.0=전체 적용)
+- **effective_scale**: `strength × alpha / rank = 0.5 × 64 / 128 = 0.25`
+- `/api/health` 응답에서 `lora_enabled`, `lora_checkpoint` 필드로 확인 가능
 
 ## Changelog
+
+### 2026-02-10: Sequence Parallel, LoRA 추론, React 프론트엔드 대폭 개선
+
+**Sequence Parallel (SP) 지원 (`server.py`, `start.sh`, `model_s2v.py`):**
+
+- `torchrun --nproc_per_node=N` 기반 DeepSpeed Ulysses SP 구현
+- Rank 0: FastAPI 서버 + 생성 조율, Rank 1+: 워커 루프 (broadcast 대기)
+- `broadcast_generate_params()`: pickle 직렬화 → NCCL broadcast로 파라미터 동기화
+- NCCL timeout 7일 설정 (워커 idle 상태에서 timeout 방지)
+- `start.sh`: GPU 수 자동 감지, `DISABLE_SP` 환경변수 지원
+- **TeaCache + SP 호환성 수정** (`model_s2v.py`): gather_forward 순서 변경으로 shape mismatch 해결
+
+**LoRA 추론 통합 (`speech2video.py`, `server.py`):**
+
+- `WanS2V._apply_lora()`: 체크포인트에서 rank/alpha 자동 감지 후 LoRA 네트워크 생성
+- `LORA_STRENGTH = 0.5` (effective_scale = 0.25)
+- 체크포인트 경로 자동 감지 (없으면 기본 모델로 동작)
+- 진행률 콜백 (`progress_callback`) 추가로 프론트엔드 진행 표시 개선
+
+**품질 설정 최적화:**
+
+- `inference_steps`: 15 → 25 (품질 향상)
+- `guidance_scale`: 4.5 → 5.5
+- `use_teacache`: true → false (기본 OFF, 품질 우선)
+- `teacache_thresh`: 0.3 → 0.15
+- 중국어 네거티브 프롬프트 최적화
+
+**React 프론트엔드 (`App.jsx`, `App.css`, `api.js`):**
+
+- 비디오 갤러리 탭: 생성된 비디오 목록, 재생, 삭제
+- 파일 피커: 이전 업로드한 이미지/오디오 선택 재사용
+- GPU 사용 중 표시 (gpu_busy lock)
+- 다국어 (한/영/중) 번역 키 추가
 
 ### 2026-02-10: LoRA 미세조정 완료 및 체크포인트 저장 수정
 

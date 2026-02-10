@@ -12,10 +12,14 @@ import logging
 import datetime
 import random
 import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+import pickle
 import torch
+import torch.distributed as dist
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +54,8 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 CHECKPOINT_DIR = "/mnt/models/Wan2.2-S2V-14B"
+LORA_CHECKPOINT_DIR = "/home/ubuntu/WanAvatar/output_lora_14B/checkpoint-50"
+LORA_STRENGTH = 0.5  # LoRA multiplier (0.0=off, 1.0=full)
 
 # Device setup
 if torch.cuda.is_available():
@@ -62,6 +68,31 @@ else:
 # Global pipeline
 pipeline = None
 generation_status = {}
+gpu_lock = threading.Lock()
+executor = ThreadPoolExecutor(max_workers=1)
+
+# Distributed / Sequence Parallel setup
+USE_SP = False
+LOCAL_RANK = 0
+WORLD_SIZE = 1
+
+
+def setup_distributed():
+    """Initialize distributed process group for Sequence Parallel."""
+    global USE_SP, LOCAL_RANK, WORLD_SIZE
+    if os.environ.get('LOCAL_RANK') is not None:
+        LOCAL_RANK = int(os.environ['LOCAL_RANK'])
+        WORLD_SIZE = int(os.environ.get('WORLD_SIZE', 1))
+        torch.cuda.set_device(LOCAL_RANK)
+        dist.init_process_group(
+            backend='nccl',
+            timeout=datetime.timedelta(days=7),  # Worker waits indefinitely for commands
+        )
+        if WORLD_SIZE > 1:
+            USE_SP = True
+        logging.info(f"Distributed mode: rank={LOCAL_RANK}/{WORLD_SIZE}, SP={USE_SP}")
+    else:
+        logging.info("Single-process mode (no SP)")
 
 
 # ============================================================================
@@ -99,16 +130,16 @@ class GenerateRequest(BaseModel):
     image_path: str
     audio_path: str
     prompt: str = "A person speaking naturally with subtle expressions"
-    negative_prompt: str = "blurry, low quality, distorted face"
+    negative_prompt: str = "ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, malformed limbs, fused fingers, three legs, extra limbs"
     resolution: str = "720*1280"
     num_clips: int = 0
-    inference_steps: int = 15
-    guidance_scale: float = 4.5
+    inference_steps: int = 25
+    guidance_scale: float = 5.5
     infer_frames: int = 80
     seed: int = -1
     offload_model: bool = False
-    use_teacache: bool = True
-    teacache_thresh: float = 0.3
+    use_teacache: bool = False
+    teacache_thresh: float = 0.15
 
 
 class TaskStatus(BaseModel):
@@ -128,39 +159,114 @@ def load_pipeline():
     if pipeline is not None:
         return pipeline
 
-    logging.info("Loading Wan2.2-S2V-14B model...")
+    logging.info(f"Loading Wan2.2-S2V-14B model (rank={LOCAL_RANK}, SP={USE_SP})...")
     cfg = WAN_CONFIGS['s2v-14B']
 
-    num_gpus = torch.cuda.device_count()
-    pipeline = wan.WanS2V(
-        config=cfg,
-        checkpoint_dir=CHECKPOINT_DIR,
-        device_id=0,
-        rank=0,
-        t5_fsdp=False,
-        dit_fsdp=False,
-        use_sp=False,
-        t5_cpu=False,
-        t5_device_id=1 if num_gpus > 1 else 0,
-        init_on_cpu=False,
-    )
+    lora_dir = LORA_CHECKPOINT_DIR if os.path.exists(LORA_CHECKPOINT_DIR) else None
 
-    logging.info("Model loaded successfully!")
+    if USE_SP:
+        # SP mode: each rank loads full model on its own GPU
+        pipeline = wan.WanS2V(
+            config=cfg,
+            checkpoint_dir=CHECKPOINT_DIR,
+            lora_checkpoint_dir=lora_dir,
+            lora_strength=LORA_STRENGTH,
+            device_id=LOCAL_RANK,
+            rank=LOCAL_RANK,
+            t5_fsdp=False,
+            dit_fsdp=False,
+            use_sp=True,
+            t5_cpu=False,
+            t5_device_id=LOCAL_RANK,
+            init_on_cpu=False,
+        )
+        dist.barrier()
+    else:
+        # Single-process mode: DiT on GPU 0, T5 on GPU 1 (if available)
+        num_gpus = torch.cuda.device_count()
+        pipeline = wan.WanS2V(
+            config=cfg,
+            checkpoint_dir=CHECKPOINT_DIR,
+            lora_checkpoint_dir=lora_dir,
+            lora_strength=LORA_STRENGTH,
+            device_id=0,
+            rank=0,
+            t5_fsdp=False,
+            dit_fsdp=False,
+            use_sp=False,
+            t5_cpu=False,
+            t5_device_id=1 if num_gpus > 1 else 0,
+            init_on_cpu=False,
+        )
+
+    logging.info(f"Model loaded successfully on rank {LOCAL_RANK}!")
     return pipeline
+
+
+def broadcast_generate_params(params):
+    """Broadcast generation params from rank 0 to all ranks."""
+    device = f'cuda:{LOCAL_RANK}'
+    if LOCAL_RANK == 0:
+        data = pickle.dumps(params)
+        size = torch.tensor([len(data)], dtype=torch.long, device=device)
+        dist.broadcast(size, src=0)
+        data_tensor = torch.tensor(list(data), dtype=torch.uint8, device=device)
+        dist.broadcast(data_tensor, src=0)
+        return params
+    else:
+        size = torch.tensor([0], dtype=torch.long, device=device)
+        dist.broadcast(size, src=0)
+        data_tensor = torch.empty(size.item(), dtype=torch.uint8, device=device)
+        dist.broadcast(data_tensor, src=0)
+        return pickle.loads(data_tensor.cpu().numpy().tobytes())
+
+
+def worker_loop():
+    """Worker loop for non-master ranks in SP mode."""
+    global pipeline
+    logging.info(f"Rank {LOCAL_RANK}: Entering worker loop...")
+
+    while True:
+        # Wait for command from rank 0
+        cmd = torch.tensor([0], dtype=torch.long, device=f'cuda:{LOCAL_RANK}')
+        dist.broadcast(cmd, src=0)
+
+        if cmd.item() == 1:  # Generate
+            params = broadcast_generate_params(None)
+            logging.info(f"Rank {LOCAL_RANK}: Starting generation...")
+            try:
+                pipeline.generate(**params)
+                logging.info(f"Rank {LOCAL_RANK}: Generation done.")
+            except Exception as e:
+                logging.error(f"Rank {LOCAL_RANK}: Generation error: {e}")
+                import traceback
+                traceback.print_exc()
+        elif cmd.item() == -1:  # Shutdown
+            logging.info(f"Rank {LOCAL_RANK}: Shutting down.")
+            break
 
 
 # ============================================================================
 # Background Tasks
 # ============================================================================
 def generate_video_task(task_id: str, params: dict):
-    """Background task for video generation (synchronous)."""
+    """Background task for video generation (runs in thread pool)."""
     global pipeline, generation_status
+
+    if not gpu_lock.acquire(blocking=False):
+        generation_status[task_id] = {
+            "status": "queued",
+            "progress": 0,
+            "message": "Waiting for GPU (another generation in progress)...",
+            "output_path": None,
+        }
+        gpu_lock.acquire()  # block until GPU is free
 
     try:
         logging.info(f"Starting generation task: {task_id}")
         generation_status[task_id] = {
             "status": "processing",
-            "progress": 0.1,
+            "progress": 0.05,
             "message": "Loading model...",
             "output_path": None,
         }
@@ -169,8 +275,8 @@ def generate_video_task(task_id: str, params: dict):
         pipeline = load_pipeline()
 
         logging.info("Pipeline loaded successfully")
-        generation_status[task_id]["progress"] = 0.2
-        generation_status[task_id]["message"] = "Generating video..."
+        generation_status[task_id]["progress"] = 0.1
+        generation_status[task_id]["message"] = "Preparing generation..."
 
         # Parse parameters
         seed = params["seed"]
@@ -188,8 +294,13 @@ def generate_video_task(task_id: str, params: dict):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         logging.info(f"Starting generation with resolution {params['resolution']}, max_area={max_area}")
 
-        # Generate
-        video = pipeline.generate(
+        # Progress callback for real-time updates
+        def progress_callback(progress, message):
+            generation_status[task_id]["progress"] = round(progress, 3)
+            generation_status[task_id]["message"] = message
+
+        # Build generation kwargs
+        gen_kwargs = dict(
             input_prompt=params["prompt"],
             ref_image_path=params["image_path"],
             audio_path=params["audio_path"],
@@ -209,11 +320,20 @@ def generate_video_task(task_id: str, params: dict):
             seed=seed,
             offload_model=params["offload_model"],
             init_first_frame=False,
-            use_teacache=params.get("use_teacache", True),
-            teacache_thresh=params.get("teacache_thresh", 0.3),
+            use_teacache=params.get("use_teacache", False),
+            teacache_thresh=params.get("teacache_thresh", 0.15),
         )
 
-        generation_status[task_id]["progress"] = 0.8
+        # Signal SP workers to start generation
+        if USE_SP:
+            cmd = torch.tensor([1], dtype=torch.long, device=f'cuda:{LOCAL_RANK}')
+            dist.broadcast(cmd, src=0)
+            broadcast_generate_params(gen_kwargs)
+
+        # Generate (rank 0 gets progress callback, workers don't)
+        video = pipeline.generate(**gen_kwargs, progress_callback=progress_callback)
+
+        generation_status[task_id]["progress"] = 0.85
         generation_status[task_id]["message"] = "Saving video..."
 
         # Save video
@@ -222,6 +342,9 @@ def generate_video_task(task_id: str, params: dict):
         video_path = str(OUTPUT_DIR / f"{timestamp}.mp4")
         # video shape: [C, T, H, W] -> add batch dim [1, C, T, H, W]
         save_videos_grid(video[None], video_path, rescale=True, fps=16)
+
+        generation_status[task_id]["progress"] = 0.9
+        generation_status[task_id]["message"] = "Merging audio..."
 
         # Merge audio with ffmpeg
         output_with_audio = str(OUTPUT_DIR / f"{timestamp}_with_audio.mp4")
@@ -268,6 +391,8 @@ def generate_video_task(task_id: str, params: dict):
             "message": str(e),
             "output_path": None,
         }
+    finally:
+        gpu_lock.release()
 
 
 # ============================================================================
@@ -289,6 +414,11 @@ async def health_check():
         "device": DEVICE,
         "dtype": str(DTYPE),
         "model_loaded": pipeline is not None,
+        "lora_enabled": os.path.exists(LORA_CHECKPOINT_DIR),
+        "lora_checkpoint": LORA_CHECKPOINT_DIR if os.path.exists(LORA_CHECKPOINT_DIR) else None,
+        "gpu_busy": gpu_lock.locked(),
+        "sequence_parallel": USE_SP,
+        "world_size": WORLD_SIZE,
         "has_moviepy": HAS_MOVIEPY,
         "has_audio_separator": HAS_AUDIO_SEPARATOR,
     }
@@ -299,11 +429,11 @@ async def get_config():
     return {
         "resolutions": list(SIZE_CONFIGS.keys()),
         "default_resolution": "720*1280",
-        "default_steps": 15,
-        "default_guidance": 4.5,
+        "default_steps": 25,
+        "default_guidance": 5.5,
         "default_frames": 80,
-        "default_use_teacache": True,
-        "default_teacache_thresh": 0.3,
+        "default_use_teacache": False,
+        "default_teacache_thresh": 0.15,
     }
 
 
@@ -377,8 +507,8 @@ async def upload_video(file: UploadFile = File(...)):
 
 
 @app.post("/api/generate")
-async def generate_video(request: GenerateRequest, background_tasks: BackgroundTasks):
-    """Start video generation task."""
+async def generate_video(request: GenerateRequest):
+    """Start video generation task (async, runs in thread pool)."""
     task_id = str(uuid.uuid4())
 
     generation_status[task_id] = {
@@ -388,11 +518,7 @@ async def generate_video(request: GenerateRequest, background_tasks: BackgroundT
         "output_path": None,
     }
 
-    background_tasks.add_task(
-        generate_video_task,
-        task_id,
-        request.dict()
-    )
+    executor.submit(generate_video_task, task_id, request.dict())
 
     return {"task_id": task_id}
 
@@ -460,6 +586,80 @@ async def separate_vocals(audio_path: str = Form(...)):
         raise HTTPException(500, str(e))
 
 
+@app.get("/api/uploads/images")
+async def list_uploaded_images():
+    """List all uploaded images."""
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+    images = []
+    for f in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if f.suffix.lower() in IMAGE_EXTS:
+            stat = f.stat()
+            try:
+                with Image.open(f) as img:
+                    width, height = img.size
+            except Exception:
+                width, height = 0, 0
+            images.append({
+                "filename": f.name,
+                "url": f"/uploads/{f.name}",
+                "path": str(f),
+                "width": width,
+                "height": height,
+                "size": stat.st_size,
+                "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+    return {"images": images, "total": len(images)}
+
+
+@app.get("/api/uploads/audio")
+async def list_uploaded_audio():
+    """List all uploaded audio files."""
+    AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".flac"}
+    audio_files = []
+    for f in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if f.suffix.lower() in AUDIO_EXTS:
+            stat = f.stat()
+            audio_files.append({
+                "filename": f.name,
+                "url": f"/uploads/{f.name}",
+                "path": str(f),
+                "size": stat.st_size,
+                "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+    return {"audio": audio_files, "total": len(audio_files)}
+
+
+@app.get("/api/videos")
+async def list_videos():
+    """List all generated videos with metadata."""
+    videos = []
+    for f in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if f.suffix == ".mp4":
+            stat = f.stat()
+            videos.append({
+                "filename": f.name,
+                "url": f"/outputs/{f.name}",
+                "size": stat.st_size,
+                "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+    return {"videos": videos, "total": len(videos)}
+
+
+@app.delete("/api/videos/{filename}")
+async def delete_video(filename: str):
+    """Delete a generated video."""
+    filepath = OUTPUT_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(404, "Video not found")
+    if not filepath.suffix == ".mp4":
+        raise HTTPException(400, "Invalid file type")
+    # Security: ensure path is within OUTPUT_DIR
+    if not filepath.resolve().parent == OUTPUT_DIR.resolve():
+        raise HTTPException(403, "Access denied")
+    filepath.unlink()
+    return {"message": f"Deleted {filename}"}
+
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -471,13 +671,27 @@ if __name__ == "__main__":
         format="[%(asctime)s] %(levelname)s: %(message)s",
     )
 
+    # Initialize distributed if launched with torchrun
+    setup_distributed()
+
     logging.info("Starting WanAvatar API Server...")
     logging.info(f"Checkpoint directory: {CHECKPOINT_DIR}")
     logging.info(f"Device: {DEVICE}, Dtype: {DTYPE}")
+    logging.info(f"Sequence Parallel: {USE_SP}, World Size: {WORLD_SIZE}")
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info",
-    )
+    # Eager-load pipeline so all ranks load together
+    logging.info("Loading pipeline at startup...")
+    load_pipeline()
+    logging.info("Pipeline ready!")
+
+    if USE_SP and LOCAL_RANK != 0:
+        # Non-master ranks enter worker loop
+        worker_loop()
+    else:
+        # Master rank (or single-process) serves the API
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=8000,
+            log_level="info",
+        )

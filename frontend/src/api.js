@@ -60,4 +60,24 @@ export const separateVocals = async (audioPath) => {
   return response.data;
 };
 
+export const listUploadedImages = async () => {
+  const response = await api.get('/uploads/images');
+  return response.data;
+};
+
+export const listUploadedAudio = async () => {
+  const response = await api.get('/uploads/audio');
+  return response.data;
+};
+
+export const listVideos = async () => {
+  const response = await api.get('/videos');
+  return response.data;
+};
+
+export const deleteVideo = async (filename) => {
+  const response = await api.delete(`/videos/${filename}`);
+  return response.data;
+};
+
 export default api;

@@ -881,16 +881,19 @@ class WanModel_S2V(ModelMixin, ConfigMixin):
                 x = block(x, **kwargs)
                 x = self.after_transformer_block(idx, x)
 
+            if tea_cache is not None:
+                # Cache the delta before gather (in chunked space for SP compatibility)
+                tea_cache.previous_residual = (x - ori_x).clone()
+
             # Context Parallel
             if self.use_context_parallel:
                 x = gather_forward(x.contiguous(), dim=1)
-
-            if tea_cache is not None:
-                # Cache the delta (what transformer blocks added)
-                tea_cache.previous_residual = (x - ori_x).clone()
         else:
-            # Add cached delta to current input
+            # Add cached delta to current input (both in chunked space if SP active)
             x = x + tea_cache.previous_residual
+            # Context Parallel (also needed for skip path)
+            if self.use_context_parallel:
+                x = gather_forward(x.contiguous(), dim=1)
 
         # unpatchify and head always run
         x = x[:, :self.original_seq_len]

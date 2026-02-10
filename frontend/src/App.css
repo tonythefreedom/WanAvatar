@@ -352,6 +352,38 @@ body {
   box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4);
 }
 
+.btn.secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  width: auto;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+.btn.secondary:hover:not(:disabled) {
+  background: var(--background);
+  border-color: var(--primary);
+}
+
+.btn.danger {
+  background: var(--error);
+  color: white;
+  width: auto;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+.btn.small {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8rem;
+  width: auto;
+}
+
 .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -470,6 +502,157 @@ audio {
   margin-top: auto;
   color: var(--text-light);
   font-size: 0.9rem;
+}
+
+/* Gallery */
+.gallery-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.gallery-header h3 {
+  margin: 0;
+}
+
+.gallery-empty {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-light);
+}
+
+.gallery-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.gallery-item {
+  background: var(--background);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  transition: box-shadow 0.2s ease;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.gallery-item:hover {
+  box-shadow: var(--shadow);
+}
+
+.gallery-item video {
+  max-width: 100%;
+  height: auto;
+  background: #000;
+  display: block;
+}
+
+.gallery-item-info {
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.gallery-item-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gallery-item-meta {
+  font-size: 0.75rem;
+  color: var(--text-light);
+}
+
+.gallery-item-info .btn {
+  margin-top: 0.5rem;
+  align-self: flex-end;
+}
+
+/* File Pickers */
+.file-pickers {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.file-pickers .btn {
+  flex: 1;
+}
+
+.picker-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 280px;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+  background: var(--background);
+}
+
+.picker-empty {
+  text-align: center;
+  padding: 1.5rem;
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-item:last-child {
+  border-bottom: none;
+}
+
+.picker-item:hover {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.picker-item.selected {
+  background: rgba(99, 102, 241, 0.12);
+  border-left: 3px solid var(--primary);
+}
+
+.picker-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.picker-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.picker-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker-meta {
+  font-size: 0.7rem;
+  color: var(--text-light);
 }
 
 /* Dark Mode Support */

@@ -8,6 +8,10 @@ import {
   extractAudio,
   separateVocals,
   getConfig,
+  listVideos,
+  deleteVideo,
+  listUploadedImages,
+  listUploadedAudio,
 } from './api';
 import './App.css';
 
@@ -24,7 +28,7 @@ const translations = {
     promptLabel: 'Prompt',
     promptDefault: 'A person speaking naturally with subtle expressions, minimal head movement, simple blinking, neutral background',
     negPromptLabel: 'Negative Prompt',
-    negPromptDefault: 'blurry, low quality, distorted face, unnatural movements, artifacts, text, watermark',
+    negPromptDefault: 'ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, malformed limbs, fused fingers, three legs, extra limbs',
     resolutionLabel: 'Resolution',
     autoResolution: 'Auto (match image size)',
     imageSize: 'Image Size',
@@ -50,6 +54,16 @@ const translations = {
     dropImage: 'Drop image here or click to upload',
     dropAudio: 'Drop audio here or click to upload',
     dropVideo: 'Drop video here or click to upload',
+    tabGallery: 'Gallery',
+    galleryTitle: 'Generated Videos',
+    galleryEmpty: 'No videos generated yet',
+    galleryDelete: 'Delete',
+    galleryDeleteConfirm: 'Delete this video?',
+    gallerySize: 'Size',
+    galleryDate: 'Created',
+    galleryRefresh: 'Refresh',
+    selectFromUploads: 'Select from uploads',
+    noUploads: 'No uploaded files',
   },
   ko: {
     title: 'WanAvatar',
@@ -62,7 +76,7 @@ const translations = {
     promptLabel: '프롬프트',
     promptDefault: '자연스럽게 말하는 사람, 미세한 표정, 최소한의 머리 움직임, 단순한 눈 깜빡임, 중립적 배경',
     negPromptLabel: '네거티브 프롬프트',
-    negPromptDefault: '흐림, 저화질, 왜곡된 얼굴, 부자연스러운 움직임, 아티팩트, 텍스트, 워터마크',
+    negPromptDefault: 'ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, malformed limbs, fused fingers, three legs, extra limbs',
     resolutionLabel: '해상도',
     autoResolution: '자동 (이미지 크기에 맞춤)',
     imageSize: '이미지 크기',
@@ -88,6 +102,16 @@ const translations = {
     dropImage: '이미지를 드롭하거나 클릭하여 업로드',
     dropAudio: '오디오를 드롭하거나 클릭하여 업로드',
     dropVideo: '비디오를 드롭하거나 클릭하여 업로드',
+    tabGallery: '갤러리',
+    galleryTitle: '생성된 비디오',
+    galleryEmpty: '아직 생성된 비디오가 없습니다',
+    galleryDelete: '삭제',
+    galleryDeleteConfirm: '이 비디오를 삭제하시겠습니까?',
+    gallerySize: '크기',
+    galleryDate: '생성일',
+    galleryRefresh: '새로고침',
+    selectFromUploads: '업로드 파일에서 선택',
+    noUploads: '업로드된 파일 없음',
   },
   zh: {
     title: 'WanAvatar',
@@ -100,7 +124,7 @@ const translations = {
     promptLabel: '提示词',
     promptDefault: '一个人自然说话，细微表情，头部动作轻微，简单眨眼，中性背景',
     negPromptLabel: '负面提示词',
-    negPromptDefault: '模糊，低质量，扭曲的脸，不自然的动作，伪影，文字，水印',
+    negPromptDefault: '色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体灰暗，出现多余的人物',
     resolutionLabel: '分辨率',
     autoResolution: '自动（匹配图片尺寸）',
     imageSize: '图片尺寸',
@@ -126,6 +150,16 @@ const translations = {
     dropImage: '将图片拖放到此处或点击上传',
     dropAudio: '将音频拖放到此处或点击上传',
     dropVideo: '将视频拖放到此处或点击上传',
+    tabGallery: '画廊',
+    galleryTitle: '已生成的视频',
+    galleryEmpty: '尚未生成任何视频',
+    galleryDelete: '删除',
+    galleryDeleteConfirm: '确定删除此视频？',
+    gallerySize: '大小',
+    galleryDate: '创建时间',
+    galleryRefresh: '刷新',
+    selectFromUploads: '从已上传文件中选择',
+    noUploads: '没有已上传的文件',
   },
 };
 
@@ -146,13 +180,13 @@ function App() {
   const [negPrompt, setNegPrompt] = useState(translations.en.negPromptDefault);
   const [resolution, setResolution] = useState('720*1280');
   const [numClips, setNumClips] = useState(0);
-  const [steps, setSteps] = useState(15);
-  const [guidance, setGuidance] = useState(4.5);
+  const [steps, setSteps] = useState(25);
+  const [guidance, setGuidance] = useState(5.5);
   const [frames, setFrames] = useState(80);
   const [seed, setSeed] = useState(-1);
   const [offload, setOffload] = useState(false);
-  const [useTeacache, setUseTeacache] = useState(true);
-  const [teacacheThresh, setTeacacheThresh] = useState(0.3);
+  const [useTeacache, setUseTeacache] = useState(false);
+  const [teacacheThresh, setTeacacheThresh] = useState(0.15);
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
@@ -172,6 +206,16 @@ function App() {
   const [separatedVocals, setSeparatedVocals] = useState(null);
   const [separateStatus, setSeparateStatus] = useState('');
   const [isSeparating, setIsSeparating] = useState(false);
+
+  // File picker state
+  const [uploadedImages, setUploadedImages] = useState([]);
+  const [uploadedAudioList, setUploadedAudioList] = useState([]);
+  const [showImagePicker, setShowImagePicker] = useState(false);
+  const [showAudioPicker, setShowAudioPicker] = useState(false);
+
+  // Gallery tab state
+  const [videos, setVideos] = useState([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
 
   const t = useCallback((key) => translations[lang][key] || key, [lang]);
 
@@ -335,6 +379,80 @@ function App() {
     }
   };
 
+  // Gallery handlers
+  const fetchVideos = useCallback(async () => {
+    setGalleryLoading(true);
+    try {
+      const data = await listVideos();
+      setVideos(data.videos || []);
+    } catch (err) {
+      console.error('Failed to fetch videos:', err);
+    } finally {
+      setGalleryLoading(false);
+    }
+  }, []);
+
+  const handleDeleteVideo = async (filename) => {
+    if (!window.confirm(t('galleryDeleteConfirm'))) return;
+    try {
+      await deleteVideo(filename);
+      setVideos(prev => prev.filter(v => v.filename !== filename));
+    } catch (err) {
+      console.error('Failed to delete video:', err);
+    }
+  };
+
+  // Load gallery when tab is selected
+  useEffect(() => {
+    if (activeTab === 'gallery') {
+      fetchVideos();
+    }
+  }, [activeTab, fetchVideos]);
+
+  // File picker handlers
+  const toggleImagePicker = async () => {
+    if (!showImagePicker) {
+      try {
+        const data = await listUploadedImages();
+        setUploadedImages(data.images || []);
+      } catch (err) {
+        console.error('Failed to fetch uploaded images:', err);
+      }
+    }
+    setShowImagePicker(!showImagePicker);
+  };
+
+  const toggleAudioPicker = async () => {
+    if (!showAudioPicker) {
+      try {
+        const data = await listUploadedAudio();
+        setUploadedAudioList(data.audio || []);
+      } catch (err) {
+        console.error('Failed to fetch uploaded audio:', err);
+      }
+    }
+    setShowAudioPicker(!showAudioPicker);
+  };
+
+  const selectUploadedImage = (img) => {
+    setImagePath(img.path);
+    setImagePreview(img.url);
+    setImageFile({ name: img.filename });
+    if (img.width && img.height) {
+      setImageDimensions({ width: img.width, height: img.height });
+      if (autoResolution) {
+        setResolution(`${img.height}*${img.width}`);
+      }
+    }
+    setShowImagePicker(false);
+  };
+
+  const selectUploadedAudio = (audio) => {
+    setAudioPath(audio.path);
+    setAudioFile({ name: audio.filename });
+    setShowAudioPicker(false);
+  };
+
   // Separate vocals handler
   const handleSeparate = async () => {
     if (!separateAudioPath) {
@@ -407,6 +525,12 @@ function App() {
         >
           {t('tabSeparate')}
         </button>
+        <button
+          className={activeTab === 'gallery' ? 'active' : ''}
+          onClick={() => setActiveTab('gallery')}
+        >
+          {t('tabGallery')}
+        </button>
       </nav>
 
       {/* Generate Tab */}
@@ -457,6 +581,59 @@ function App() {
                     </label>
                   </div>
                 </div>
+
+                {/* File Pickers */}
+                <div className="file-pickers">
+                  <button className="btn secondary small" onClick={toggleImagePicker}>
+                    {t('selectFromUploads')} ({t('imageLabel')})
+                  </button>
+                  <button className="btn secondary small" onClick={toggleAudioPicker}>
+                    {t('selectFromUploads')} ({t('audioLabel')})
+                  </button>
+                </div>
+
+                {showImagePicker && (
+                  <div className="picker-list">
+                    {uploadedImages.length === 0 ? (
+                      <p className="picker-empty">{t('noUploads')}</p>
+                    ) : (
+                      uploadedImages.map((img) => (
+                        <div
+                          key={img.filename}
+                          className={`picker-item${imagePath === img.path ? ' selected' : ''}`}
+                          onClick={() => selectUploadedImage(img)}
+                        >
+                          <img src={img.url} alt={img.filename} className="picker-thumb" />
+                          <div className="picker-info">
+                            <span className="picker-name">{img.filename}</span>
+                            <span className="picker-meta">{img.width}x{img.height} / {(img.size / 1024 / 1024).toFixed(1)}MB</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {showAudioPicker && (
+                  <div className="picker-list">
+                    {uploadedAudioList.length === 0 ? (
+                      <p className="picker-empty">{t('noUploads')}</p>
+                    ) : (
+                      uploadedAudioList.map((audio) => (
+                        <div
+                          key={audio.filename}
+                          className={`picker-item${audioPath === audio.path ? ' selected' : ''}`}
+                          onClick={() => selectUploadedAudio(audio)}
+                        >
+                          <div className="picker-info">
+                            <span className="picker-name">{audio.filename}</span>
+                            <span className="picker-meta">{(audio.size / 1024 / 1024).toFixed(1)}MB</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Settings */}
@@ -777,6 +954,51 @@ function App() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Gallery Tab */}
+      {activeTab === 'gallery' && (
+        <div className="tab-content gallery-tab">
+          <div className="card">
+            <div className="gallery-header">
+              <h3>{t('galleryTitle')} ({videos.length})</h3>
+              <button className="btn secondary" onClick={fetchVideos} disabled={galleryLoading}>
+                {galleryLoading ? '...' : t('galleryRefresh')}
+              </button>
+            </div>
+
+            {videos.length === 0 ? (
+              <div className="gallery-empty">
+                <p>{t('galleryEmpty')}</p>
+              </div>
+            ) : (
+              <div className="gallery-grid">
+                {videos.map((video) => (
+                  <div key={video.filename} className="gallery-item">
+                    <video controls src={video.url} preload="metadata" />
+                    <div className="gallery-item-info">
+                      <span className="gallery-item-name" title={video.filename}>
+                        {video.filename}
+                      </span>
+                      <span className="gallery-item-meta">
+                        {t('gallerySize')}: {(video.size / 1024 / 1024).toFixed(1)} MB
+                      </span>
+                      <span className="gallery-item-meta">
+                        {t('galleryDate')}: {new Date(video.created_at).toLocaleString()}
+                      </span>
+                      <button
+                        className="btn danger small"
+                        onClick={() => handleDeleteVideo(video.filename)}
+                      >
+                        {t('galleryDelete')}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

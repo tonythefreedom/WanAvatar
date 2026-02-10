@@ -813,11 +813,17 @@ def main():
     config = OmegaConf.load(args.config_path)
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
 
+    # Extend NCCL timeout to 2 hours for large checkpoint saves
+    from accelerate.utils import InitProcessGroupKwargs
+    from datetime import timedelta
+    init_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=7200))
+
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
+        kwargs_handlers=[init_kwargs],
     )
     deepspeed_plugin = accelerator.state.deepspeed_plugin
     if deepspeed_plugin is not None:
@@ -1469,31 +1475,41 @@ def main():
                 train_loss = 0.0
 
                 if global_step % args.checkpointing_steps == 0:
-                    if args.use_deepspeed or accelerator.is_main_process:
+                    if accelerator.is_main_process:
                         # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
                         if args.checkpoints_total_limit is not None:
                             checkpoints = os.listdir(args.output_dir)
                             checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
                             checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
-                            # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
                             if len(checkpoints) >= args.checkpoints_total_limit:
                                 num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
                                 removing_checkpoints = checkpoints[0:num_to_remove]
-
-                                logger.info(
-                                    f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                )
                                 logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
-
                                 for removing_checkpoint in removing_checkpoints:
                                     removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
                                     shutil.rmtree(removing_checkpoint)
 
                         accelerator_save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         os.makedirs(accelerator_save_path, exist_ok=True)
-                        accelerator.save_state(accelerator_save_path)
-                        logger.info(f"Saved state to {accelerator_save_path}")
+
+                        # Save LoRA weights directly (no NCCL communication needed)
+                        unwrapped = accelerator.unwrap_model(combined_model)
+                        lora_save_path = os.path.join(accelerator_save_path, "lora_weights.safetensors")
+                        unwrapped.lora_network.save_weights(lora_save_path, weight_dtype, None)
+                        logger.info(f"Saved LoRA weights to {lora_save_path}")
+
+                        # Save vocal/audio projector weights
+                        extra_state = {}
+                        for name, para in unwrapped.transformer3d.named_parameters():
+                            if "vocal" in name or "audio" in name or "vocal_projector" in name or "audio_projector" in name:
+                                extra_state[name] = para.detach().cpu().to(weight_dtype)
+                        if extra_state:
+                            extra_save_path = os.path.join(accelerator_save_path, "projector_weights.pt")
+                            torch.save(extra_state, extra_save_path)
+                            logger.info(f"Saved projector weights ({len(extra_state)} params) to {extra_save_path}")
+
+                        logger.info(f"Saved checkpoint to {accelerator_save_path}")
 
             torch.cuda.empty_cache()
             logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
@@ -1502,13 +1518,29 @@ def main():
             if global_step >= args.max_train_steps:
                 break
 
-    # Create the pipeline using the trained modules and save it.
+    # Save trained LoRA weights and projector weights.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         accelerator_save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
         os.makedirs(accelerator_save_path, exist_ok=True)
-        accelerator.save_state(accelerator_save_path)
-        logger.info(f"Saved state to {accelerator_save_path}")
+
+        # Save LoRA weights directly (no NCCL communication needed)
+        unwrapped = accelerator.unwrap_model(combined_model)
+        lora_save_path = os.path.join(accelerator_save_path, "lora_weights.safetensors")
+        unwrapped.lora_network.save_weights(lora_save_path, weight_dtype, None)
+        logger.info(f"Saved LoRA weights to {lora_save_path}")
+
+        # Save vocal/audio projector weights
+        extra_state = {}
+        for name, para in unwrapped.transformer3d.named_parameters():
+            if "vocal" in name or "audio" in name or "vocal_projector" in name or "audio_projector" in name:
+                extra_state[name] = para.detach().cpu().to(weight_dtype)
+        if extra_state:
+            extra_save_path = os.path.join(accelerator_save_path, "projector_weights.pt")
+            torch.save(extra_state, extra_save_path)
+            logger.info(f"Saved projector weights ({len(extra_state)} params) to {extra_save_path}")
+
+        logger.info(f"Final checkpoint saved to {accelerator_save_path}")
     accelerator.end_training()
 
 

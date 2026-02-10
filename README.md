@@ -276,71 +276,310 @@ WanAvatar/
 
 ## LoRA 파인튜닝
 
-특정 인물에 대한 립싱크 품질을 향상시키기 위해 LoRA 파인튜닝을 수행할 수 있습니다.
+특정 인물에 대한 립싱크 품질을 향상시키기 위해 LoRA 파인튜닝을 수행할 수 있습니다. 소량의 비디오 데이터(10~30개, 각 3~6초)로 개인화된 모델을 학습합니다.
 
 ### 개요
 
 | 항목 | 사양 |
 |------|------|
-| 학습 파라미터 | ~0.1% of 14B 모델 |
-| 학습 시간 | ~3-4시간 (A100 80GB, 10 epochs) |
-| VRAM | ~45-55GB (DeepSpeed ZeRO Stage 2) |
-| RAM | ~100GB (CPU optimizer offload) |
+| 기반 모델 | Wan2.2-S2V-14B (18.9B 전체 파라미터) |
+| 학습 파라미터 | LoRA (rank 128) + Vocal/Audio Projector |
+| LoRA 모듈 수 | 488개 (Transformer 내 Linear/Conv2d 레이어) |
+| 학습 시간 | ~3-4시간 (2x A100 80GB, 10 epochs, 21개 비디오) |
+| VRAM | ~45-55GB/GPU (DeepSpeed ZeRO Stage 2) |
+| RAM | ~100GB+ (CPU optimizer offload) |
+| GPU | 2x A100 80GB 권장 (1x도 가능하나 느림) |
+
+### 학습 구조
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    학습 파이프라인                          │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  [Frozen] VAE Encoder → Latents                        │
+│  [Frozen] T5 Text Encoder → Text Embeddings            │
+│  [Frozen] CLIP Image Encoder → Image Embeddings        │
+│  [Frozen] Wav2Vec2 → Vocal Features                    │
+│                                                         │
+│  [Trainable] LoRA Adapters (488 modules, rank 128)     │
+│  [Trainable] Vocal/Audio Projector                     │
+│  [Trainable] Audio Injector                            │
+│  [Trainable] Patch Embedding (16→36ch, inpainting)     │
+│                                                         │
+│  Loss = MSE + Face/Lip Mask Weighting + Motion Loss    │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**학습 대상 파라미터:**
+
+| 구분 | 설명 |
+|------|------|
+| LoRA Adapters | Transformer의 Linear/Conv2d 레이어 488개에 적용 (rank=128, alpha=64) |
+| Vocal Projector | 음성 특성을 DiT 차원으로 변환하는 프로젝터 (from scratch) |
+| Audio Injector | 오디오 컨텍스트를 Transformer 블록에 주입 (from scratch) |
+| Patch Embedding | 16→36 채널 확장 (noisy latent + mask + masked latent) |
+
+**고정(Frozen) 파라미터:**
+
+- VAE (Wan2.1_VAE) — 비디오 인코딩/디코딩
+- T5 텍스트 인코더 (umt5-xxl) — 텍스트 프롬프트 인코딩
+- CLIP 이미지 인코더 — 참조 이미지 임베딩
+- Wav2Vec2 — 음성 특징 추출
 
 ### 추가 모델 다운로드
 
-학습에는 CLIP 이미지 인코더가 필요합니다:
+학습에는 CLIP 이미지 인코더가 추가로 필요합니다 (S2V 추론 모델에는 미포함):
 
-```python
-import open_clip
-import torch
+```bash
+# 방법 1: HuggingFace에서 직접 다운로드 (권장)
+source venv/bin/activate
+huggingface-cli download Wan-AI/Wan2.1-I2V-14B-480P \
+  models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth \
+  --local-dir /mnt/models/Wan2.2-S2V-14B
+```
 
+```bash
+# 방법 2: open_clip에서 추출
+pip install open-clip-torch
+python -c "
+import open_clip, torch
 model, _, _ = open_clip.create_model_and_transforms(
     'xlm-roberta-large-ViT-H-14',
     pretrained='frozen_laion5b_s13b_b90k'
 )
-visual_state_dict = model.visual.state_dict()
-torch.save(
-    visual_state_dict,
-    '/mnt/models/Wan2.2-S2V-14B/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth'
-)
+torch.save(model.visual.state_dict(),
+    '/mnt/models/Wan2.2-S2V-14B/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth')
+"
 ```
+
+다운로드 후 모델 디렉토리 확인:
+
+```
+/mnt/models/Wan2.2-S2V-14B/
+├── diffusion_pytorch_model-0000{1..4}-of-00004.safetensors  # DiT 14B
+├── Wan2.1_VAE.pth                                           # VAE
+├── models_t5_umt5-xxl-enc-bf16.pth                          # T5
+├── models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth  # CLIP (4.5GB, 학습용)
+├── google/umt5-xxl/                                         # T5 토크나이저
+└── wav2vec2-large-xlsr-53-english/                           # Wav2Vec2
+```
+
+### 학습 데이터 구조
+
+#### 디렉토리 구조
+
+각 학습 샘플은 아래 구조의 디렉토리입니다:
+
+```
+FT_data/
+├── processed/                    # 전처리된 학습 데이터
+│   ├── video_000/
+│   │   ├── sub_clip.mp4          # 원본 비디오 (3-6초, 24fps)
+│   │   ├── audio.wav             # 16kHz 모노 WAV (Wav2Vec2 입력)
+│   │   ├── images/               # 추출된 프레임
+│   │   │   ├── frame_0000.png    # PNG 형식, 원본 해상도
+│   │   │   ├── frame_0001.png
+│   │   │   └── ...
+│   │   ├── face_masks/           # 얼굴 영역 마스크 (MediaPipe)
+│   │   │   ├── frame_0000.png    # 그레이스케일, 0(배경)/255(얼굴)
+│   │   │   ├── frame_0001.png
+│   │   │   └── ...
+│   │   └── lip_masks/            # 입술 영역 마스크 (MediaPipe)
+│   │       ├── frame_0000.png    # 그레이스케일, 0(배경)/255(입술)
+│   │       ├── frame_0001.png
+│   │       └── ...
+│   ├── video_001/
+│   ├── ...
+│   └── video_path.txt            # 비디오 디렉토리 절대 경로 목록
+└── reference.jpeg                # (선택) 참조 이미지 원본
+```
+
+#### video_path.txt 형식
+
+각 줄에 학습 샘플 디렉토리의 절대 경로를 기재합니다:
+
+```
+/home/ubuntu/WanAvatar/FT_data/processed/video_000
+/home/ubuntu/WanAvatar/FT_data/processed/video_001
+/home/ubuntu/WanAvatar/FT_data/processed/video_002
+...
+```
+
+#### 마스크 상세
+
+| 마스크 타입 | 생성 방법 | 용도 |
+|------------|-----------|------|
+| face_masks | MediaPipe FaceLandmarker (FACE_OVAL 36점 컨투어) | 얼굴 영역 Loss 가중치 |
+| lip_masks | MediaPipe FaceLandmarker (LIP_OUTER 20점 컨투어) | 입술 영역 Loss 가중치 |
+
+- 형식: 그레이스케일 PNG (0-255), 학습 시 0-1로 정규화
+- 프레임별 1:1 대응 (같은 파일명)
+- 얼굴 미감지 시 이전 프레임 마스크 재사용, 첫 프레임 미감지 시 전체 흰색(255)
+
+### 데이터 전처리
+
+원본 MP4 비디오에서 학습 데이터를 자동 생성합니다:
 
 ```bash
-pip install open-clip-torch
+# 1. 원본 비디오를 FT_data/ 에 배치
+ls FT_data/*.mp4
+
+# 2. MediaPipe 모델 다운로드 (최초 1회)
+wget -O face_landmarker_v2_with_blendshapes.task \
+  https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+
+# 3. 전처리 실행
+source venv/bin/activate
+python preprocess_ft_data.py
 ```
 
-### 데이터 준비
+전처리 과정:
+1. 비디오 복사 → `sub_clip.mp4`
+2. ffmpeg로 오디오 추출 → `audio.wav` (16kHz, 모노)
+3. OpenCV로 프레임 추출 → `images/frame_XXXX.png`
+4. MediaPipe FaceLandmarker로 얼굴/입술 마스크 생성
+5. 검증용 데이터 생성 → `validation/reference.png`, `validation/audio.wav`
 
-```
-talking_face_data/
-├── video_001/
-│   ├── sub_clip.mp4          # 원본 비디오 (2-10초)
-│   ├── audio.wav             # 16kHz 오디오
-│   ├── images/               # 프레임 (25fps)
-│   ├── face_masks/           # 얼굴 마스크
-│   └── lip_masks/            # 입술 마스크
-├── video_002/
-└── video_path.txt            # 비디오 경로 목록
-```
+> **데이터 권장사항:**
+> - 비디오 수: 10~30개 (많을수록 좋으나 학습 시간 증가)
+> - 비디오 길이: 3~6초 (너무 짧으면 프레임 부족, 너무 길면 메모리 부족)
+> - 해상도: 최소 480p 이상 (학습 시 자동 리사이즈)
+> - 얼굴 정면 위주, 다양한 표정/입모양 포함
+> - 배경이 깔끔한 영상 선호
+
+### 3가지 종횡비 모드
+
+학습 시 3가지 종횡비로 동시 학습하여 다양한 출력 해상도를 지원합니다:
+
+| 모드 | 해상도 (W×H) | 종횡비 | 용도 |
+|------|-------------|--------|------|
+| **rec** (landscape) | 832×480 | ~16:9 | 가로 영상 |
+| **square** | 512×512 | 1:1 | 정사각형 |
+| **vec** (portrait) | 480×832 | ~9:16 | 세로 영상 (모바일) |
+
+- 동일한 학습 데이터를 3가지 해상도로 리사이즈하여 사용
+- 에폭 내에서 3가지 모드가 랜덤하게 교차 학습
+- `--train_data_rec_dir`, `--train_data_square_dir`, `--train_data_vec_dir`에 같은 `video_path.txt` 지정 가능
+
+### Loss 함수
+
+**기본 Loss**: Flow Matching MSE (예측 노이즈 vs 실제 노이즈)
+
+**얼굴/입술 마스크 가중치** (확률적 선택):
+
+| 확률 | Loss 계산 | 설명 |
+|------|----------|------|
+| 40% | `MSE × (1 + face_mask + lip_mask)` | 전체 프레임 + 얼굴/입술 강조 |
+| 10% | `MSE × face_mask` | 얼굴 영역만 |
+| 50% | `MSE × lip_mask` | 입술 영역만 (립싱크 중심) |
+
+**Motion Sub-Loss** (옵션, `--motion_sub_loss`):
+- 연속 프레임 간 차이의 MSE를 추가하여 자연스러운 움직임 학습
+- `loss = loss × 0.75 + motion_loss × 0.25`
+
+**Dropout 전략:**
+- CLIP 이미지 드롭아웃: 10% 확률로 이미지 컨텍스트 제거 (텍스트/오디오 의존도 향상)
+- Vocal 임베딩 드롭아웃: 10% 확률로 음성 임베딩 제거
 
 ### 학습 실행
 
 ```bash
+# 서버 중지 후 학습 시작 (GPU 메모리 확보)
 bash train_lora_14B.sh
 ```
 
-주요 하이퍼파라미터:
+#### 주요 하이퍼파라미터
 
-| 파라미터 | 권장값 | 설명 |
+| 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
-| `learning_rate` | 1e-4 | LoRA 학습률 |
-| `num_train_epochs` | 10 | 에폭 수 |
-| `gradient_accumulation_steps` | 8 | Gradient 누적 |
-| `lora_rank` | 128 | LoRA rank |
-| `video_sample_n_frames` | 81 | 프레임 수 (~2초@25fps) |
+| `--learning_rate` | `1e-4` | LoRA + Vocal Projector 학습률 |
+| `--num_train_epochs` | `10` | 에폭 수 |
+| `--train_batch_size` | `1` | GPU당 배치 크기 |
+| `--gradient_accumulation_steps` | `8` | Gradient 누적 (실효 배치 = 1×8×2GPU = 16) |
+| `--video_sample_n_frames` | `81` | 학습 프레임 수 (~5초@16fps) |
+| `--checkpointing_steps` | `500` | 체크포인트 저장 간격 (global steps, 총 스텝보다 크면 최종만 저장) |
+| `--max_grad_norm` | `0.05` | Gradient clipping |
+| `--adam_weight_decay` | `3e-2` | AdamW weight decay |
+| `--motion_sub_loss` | 활성화 | Motion sub-loss 사용 |
+| `--low_vram` | 활성화 | 메모리 절약 모드 |
+
+#### DeepSpeed 설정
+
+`deepspeed_config/zero2_config.json`:
+
+| 항목 | 설정 |
+|------|------|
+| ZeRO Stage | 2 (optimizer state + gradient partitioning) |
+| Optimizer Offload | CPU (pin_memory=True) |
+| Mixed Precision | bf16 |
+| Gradient Clipping | 0.05 |
+
+### 체크포인트
+
+체크포인트는 DeepSpeed 전체 상태가 아닌 **LoRA 가중치와 Projector 가중치만 직접 저장**합니다. 이는 멀티 GPU 환경에서 NCCL 통신 교착상태를 방지하고 저장 속도를 크게 향상시킵니다.
+
+**저장 경로**: `output_lora_14B/checkpoint-{step}/`
+
+**저장 파일:**
+
+| 파일 | 크기 (예시) | 설명 |
+|------|------------|------|
+| `lora_weights.safetensors` | ~1.4 GB | LoRA 어댑터 가중치 (rank=128, 488 modules) |
+| `projector_weights.pt` | ~4.8 GB | Vocal/Audio Projector, Audio Injector, Patch Embedding 등 학습된 추가 파라미터 (203개) |
+
+**저장 방식:**
+- `accelerator.save_state()` (DeepSpeed 전체 상태) 대신 모델에서 직접 추출하여 저장
+- LoRA: `safetensors` 형식으로 저장 (hash 메타데이터 포함)
+- Projector: `torch.save()`로 state_dict 저장
+- Main process(rank 0)에서만 저장 — NCCL 집합 통신 불필요
+
+> **참고**: 현재 방식은 옵티마이저 상태를 저장하지 않으므로 이어서 학습(resume)은 지원하지 않습니다. 처음부터 재학습이 필요합니다.
+
+### 학습 모니터링
+
+```bash
+# TensorBoard로 학습 곡선 확인
+tensorboard --logdir output_lora_14B --port 6006
+
+# 실시간 로그 확인
+tail -f training.log
+```
+
+### 학습된 LoRA 적용
+
+학습 완료 후 체크포인트의 가중치를 모델에 로드하여 추론합니다:
+
+```
+output_lora_14B/checkpoint-50/
+├── lora_weights.safetensors    # LoRA 어댑터 (1.4GB)
+└── projector_weights.pt        # Vocal/Audio Projector (4.8GB)
+```
+
+> **적용 방법**: 서버/추론 파이프라인에서 LoRA 가중치를 로드하는 기능은 향후 업데이트 예정입니다.
 
 ## Changelog
+
+### 2026-02-10: LoRA 미세조정 완료 및 체크포인트 저장 수정
+
+**체크포인트 저장 방식 변경 (`train_14B_lora.py`):**
+
+- `accelerator.save_state()` → LoRA/Projector 가중치 직접 저장으로 변경
+- **문제**: DeepSpeed ZeRO-2에서 `save_state()` 호출 시 rank 간 NCCL 통신 필요 → rank 1이 먼저 종료되어 교착상태 발생
+- **해결**: `unwrap_model()`로 원본 모델 추출 후 LoRA는 `safetensors`, Projector는 `torch.save()`로 독립 저장
+- 저장 파일: `lora_weights.safetensors` (1.4GB) + `projector_weights.pt` (4.8GB)
+
+**NCCL 타임아웃 확장:**
+
+- `InitProcessGroupKwargs(timeout=timedelta(seconds=7200))` 추가 (기본 30분 → 2시간)
+- 환경변수 `NCCL_TIMEOUT`, `TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC` 추가
+
+**학습 결과:**
+
+- 총 학습: 50 steps (10 에폭), 3시간 37분
+- 최종 Loss: 0.663-0.676
+- 데이터: 21개 비디오 (145 프레임/비디오), 2x A100 80GB
 
 ### 2026-02-09: 듀얼 GPU 추론 및 속도 최적화
 

@@ -81,7 +81,7 @@ const translations = {
     i2vTitle: 'Image to Video (SVI 2.0 Pro)',
     i2vImageLabel: 'Input Image',
     i2vPromptLabel: 'Prompt',
-    i2vPromptDefault: 'A cinematic video with natural motion, high quality, smooth movement',
+    i2vPromptDefault: 'A korean woman dances erotic dance, A cinematic video with natural motion, high quality, smooth movement, ORBITCAM',
     i2vNegPromptDefault: 'ugly, blurry, low quality, distorted, deformed, static, frozen',
     i2vFrameNumLabel: 'Frame Count',
     i2vShiftLabel: 'Noise Shift',
@@ -116,13 +116,14 @@ const translations = {
     fluxPromptDefault: 'K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\n\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.',
     fluxStepsLabel: 'Inference Steps',
     fluxGuidanceLabel: 'Guidance Scale',
+    fluxAspectRatio: 'Aspect Ratio',
+    fluxPortrait: 'Portrait (9:16)',
+    fluxLandscape: 'Landscape (16:9)',
+    fluxSquare: 'Square (1:1)',
     fluxUpscaleLabel: 'Upscale x2 (Real-ESRGAN)',
-    fluxUpscaleDesc: 'Upscale 720x1280 to 1440x2560',
     fluxGenerateBtn: 'Generate Image',
     fluxGenerating: 'Generating...',
     fluxModelNote: 'FLUX.2-klein-9B: 4-step fast generation. First use requires model download.',
-    fluxOutputOriginal: 'Original (720x1280)',
-    fluxOutputUpscaled: 'Upscaled (1440x2560)',
     // Gallery
     galleryImages: 'Images',
     galleryVideos: 'Videos',
@@ -183,7 +184,7 @@ const translations = {
     i2vTitle: '이미지-비디오 변환 (SVI 2.0 Pro)',
     i2vImageLabel: '입력 이미지',
     i2vPromptLabel: '프롬프트',
-    i2vPromptDefault: '자연스러운 움직임이 있는 시네마틱 영상, 고품질, 부드러운 모션',
+    i2vPromptDefault: 'A korean woman dances erotic dance, A cinematic video with natural motion, high quality, smooth movement, ORBITCAM',
     i2vNegPromptDefault: 'ugly, blurry, low quality, distorted, deformed, static, frozen',
     i2vFrameNumLabel: '프레임 수',
     i2vShiftLabel: '노이즈 시프트',
@@ -218,13 +219,14 @@ const translations = {
     fluxPromptDefault: 'K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\n\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.',
     fluxStepsLabel: '추론 스텝',
     fluxGuidanceLabel: '가이던스 스케일',
+    fluxAspectRatio: '비율',
+    fluxPortrait: '세로 (9:16)',
+    fluxLandscape: '가로 (16:9)',
+    fluxSquare: '정사각 (1:1)',
     fluxUpscaleLabel: '업스케일 x2 (Real-ESRGAN)',
-    fluxUpscaleDesc: '720x1280을 1440x2560으로 업스케일',
     fluxGenerateBtn: '이미지 생성',
     fluxGenerating: '생성 중...',
     fluxModelNote: 'FLUX.2-klein-9B: 4스텝 고속 생성. 첫 사용 시 모델 다운로드 필요.',
-    fluxOutputOriginal: '원본 (720x1280)',
-    fluxOutputUpscaled: '업스케일 (1440x2560)',
     // Gallery
     galleryImages: '이미지',
     galleryVideos: '동영상',
@@ -285,7 +287,7 @@ const translations = {
     i2vTitle: '图生视频 (SVI 2.0 Pro)',
     i2vImageLabel: '输入图片',
     i2vPromptLabel: '提示词',
-    i2vPromptDefault: '电影般的视频，自然运动，高品质，流畅运动',
+    i2vPromptDefault: 'A korean woman dances erotic dance, A cinematic video with natural motion, high quality, smooth movement, ORBITCAM',
     i2vNegPromptDefault: 'ugly, blurry, low quality, distorted, deformed, static, frozen',
     i2vFrameNumLabel: '帧数',
     i2vShiftLabel: '噪声偏移',
@@ -320,13 +322,14 @@ const translations = {
     fluxPromptDefault: 'K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\n\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.',
     fluxStepsLabel: '推理步数',
     fluxGuidanceLabel: '引导比例',
+    fluxAspectRatio: '比例',
+    fluxPortrait: '竖屏 (9:16)',
+    fluxLandscape: '横屏 (16:9)',
+    fluxSquare: '正方形 (1:1)',
     fluxUpscaleLabel: '放大 x2 (Real-ESRGAN)',
-    fluxUpscaleDesc: '将720x1280放大至1440x2560',
     fluxGenerateBtn: '生成图像',
     fluxGenerating: '生成中...',
     fluxModelNote: 'FLUX.2-klein-9B: 4步快速生成。首次使用需下载模型。',
-    fluxOutputOriginal: '原始 (720x1280)',
-    fluxOutputUpscaled: '放大 (1440x2560)',
     // Gallery
     galleryImages: '图片',
     galleryVideos: '视频',
@@ -415,6 +418,8 @@ function App() {
   const [i2vOutputSeed, setI2vOutputSeed] = useState('');
   // I2V file picker
   const [showI2vImagePicker, setShowI2vImagePicker] = useState(false);
+  const [showI2vOutputPicker, setShowI2vOutputPicker] = useState(false);
+  const [i2vGeneratedImages, setI2vGeneratedImages] = useState([]);
 
   // LoRA state
   const [loraAdapters, setLoraAdapters] = useState([]);
@@ -431,6 +436,7 @@ function App() {
   const [fluxSteps, setFluxSteps] = useState(4);
   const [fluxGuidance, setFluxGuidance] = useState(1.0);
   const [fluxSeed, setFluxSeed] = useState(-1);
+  const [fluxAspectRatio, setFluxAspectRatio] = useState('portrait');
   const [fluxUpscale, setFluxUpscale] = useState(false);
   const [fluxIsGenerating, setFluxIsGenerating] = useState(false);
   const [fluxProgress, setFluxProgress] = useState(0);
@@ -718,6 +724,26 @@ function App() {
     setShowI2vImagePicker(false);
   };
 
+  // I2V generated output picker
+  const toggleI2vOutputPicker = async () => {
+    if (!showI2vOutputPicker) {
+      try {
+        const data = await listOutputs();
+        setI2vGeneratedImages((data.outputs || []).filter(o => o.type === 'image'));
+      } catch (err) { console.error(err); }
+    }
+    setShowI2vOutputPicker(!showI2vOutputPicker);
+  };
+
+  const selectI2vGeneratedImage = (img) => {
+    setI2vImagePath(img.path); setI2vImagePreview(img.url); setI2vImageFile({ name: img.filename });
+    if (img.width && img.height) {
+      setI2vImageDimensions({ width: img.width, height: img.height });
+      if (i2vAutoResolution) setI2vResolution(`${img.height}*${img.width}`);
+    }
+    setShowI2vOutputPicker(false);
+  };
+
   // === Image Gen Handlers ===
   const handleImgGenUpload = async (e) => {
     const file = e.target.files[0];
@@ -757,6 +783,7 @@ function App() {
         num_inference_steps: fluxSteps,
         guidance_scale: fluxGuidance,
         seed: fluxSeed,
+        aspect_ratio: fluxAspectRatio,
         upscale: fluxUpscale,
         lora_weights: activeLoras.length > 0 ? activeLoras : null,
       });
@@ -880,7 +907,7 @@ function App() {
                   <div className="card">
                     <h3>{t('fluxPromptLabel')}</h3>
                     <div className="form-group">
-                      <textarea value={fluxPrompt} onChange={(e) => setFluxPrompt(e.target.value)} rows={4} />
+                      <textarea value={fluxPrompt} onChange={(e) => setFluxPrompt(e.target.value)} rows={8} />
                     </div>
 
                     <div className="form-row">
@@ -896,6 +923,17 @@ function App() {
 
                     <div className="form-row">
                       <div className="form-group">
+                        <label>{t('fluxAspectRatio')}</label>
+                        <div className="aspect-ratio-btns">
+                          <button className={`ar-btn${fluxAspectRatio === 'portrait' ? ' active' : ''}`} onClick={() => setFluxAspectRatio('portrait')}>{t('fluxPortrait')}</button>
+                          <button className={`ar-btn${fluxAspectRatio === 'landscape' ? ' active' : ''}`} onClick={() => setFluxAspectRatio('landscape')}>{t('fluxLandscape')}</button>
+                          <button className={`ar-btn${fluxAspectRatio === 'square' ? ' active' : ''}`} onClick={() => setFluxAspectRatio('square')}>{t('fluxSquare')}</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
                         <label>{t('seedLabel')}</label>
                         <input type="number" value={fluxSeed} onChange={(e) => setFluxSeed(parseInt(e.target.value))} />
                       </div>
@@ -904,7 +942,6 @@ function App() {
                           <input type="checkbox" checked={fluxUpscale} onChange={(e) => setFluxUpscale(e.target.checked)} />
                           {t('fluxUpscaleLabel')}
                         </label>
-                        <span className="image-size-info">{t('fluxUpscaleDesc')}</span>
                       </div>
                     </div>
 
@@ -1062,13 +1099,31 @@ function App() {
                         </label>
                       </div>
                     </div>
-                    <button className="btn secondary small" onClick={toggleI2vImagePicker}>
-                      {t('selectFromUploads')}
-                    </button>
+                    <div className="file-pickers">
+                      <button className="btn secondary small" onClick={toggleI2vImagePicker}>
+                        {t('selectFromUploads')}
+                      </button>
+                      <button className="btn secondary small" onClick={toggleI2vOutputPicker}>
+                        {t('selectFromOutputs')}
+                      </button>
+                    </div>
                     {showI2vImagePicker && (
                       <div className="picker-list">
                         {uploadedImages.length === 0 ? <p className="picker-empty">{t('noUploads')}</p> : uploadedImages.map((img) => (
                           <div key={img.filename} className={`picker-item${i2vImagePath === img.path ? ' selected' : ''}`} onClick={() => selectI2vUploadedImage(img)}>
+                            <img src={img.url} alt={img.filename} className="picker-thumb" />
+                            <div className="picker-info">
+                              <span className="picker-name">{img.filename}</span>
+                              <span className="picker-meta">{img.width}x{img.height} / {(img.size / 1024 / 1024).toFixed(1)}MB</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {showI2vOutputPicker && (
+                      <div className="picker-list">
+                        {i2vGeneratedImages.length === 0 ? <p className="picker-empty">{t('noOutputs')}</p> : i2vGeneratedImages.map((img) => (
+                          <div key={img.filename} className={`picker-item${i2vImagePath === img.path ? ' selected' : ''}`} onClick={() => selectI2vGeneratedImage(img)}>
                             <img src={img.url} alt={img.filename} className="picker-thumb" />
                             <div className="picker-info">
                               <span className="picker-name">{img.filename}</span>

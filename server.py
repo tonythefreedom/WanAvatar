@@ -261,6 +261,7 @@ class FluxGenerateRequest(BaseModel):
     num_inference_steps: int = 4
     guidance_scale: float = 1.0
     seed: int = -1
+    aspect_ratio: str = "portrait"  # "portrait" (720x1280), "landscape" (1280x720), "square" (1024x1024)
     upscale: bool = False
     lora_weights: Optional[list] = None  # List of {name, weight}
 
@@ -409,20 +410,23 @@ def load_flux_pipeline():
     global flux_pipeline, active_model
     if flux_pipeline is not None:
         if active_model != 'flux':
-            flux_pipeline.to(f'cuda:{LOCAL_RANK}')
-            active_model = 'flux'
-        return flux_pipeline
+            # Pipeline was offloaded — reload from cache (fast, files on disk)
+            flux_pipeline = None
+            torch.cuda.empty_cache()
+            gc.collect()
+        else:
+            return flux_pipeline
 
-    from diffusers import Flux2Pipeline
+    from diffusers import Flux2KleinPipeline
 
     logging.info("Loading FLUX.2-klein-9B model...")
-    flux_pipeline = Flux2Pipeline.from_pretrained(
+    flux_pipeline = Flux2KleinPipeline.from_pretrained(
         FLUX_MODEL_ID,
         torch_dtype=torch.bfloat16,
         cache_dir=FLUX_CACHE_DIR,
     )
-
     flux_pipeline.to(f'cuda:{LOCAL_RANK}')
+
     active_model = 'flux'
     logging.info("FLUX.2-klein-9B model loaded successfully!")
     return flux_pipeline
@@ -452,7 +456,7 @@ def get_upsampler():
 
 def ensure_model_loaded(model_type: str):
     """Ensure the requested model is on GPU. Swap if necessary."""
-    global active_model
+    global active_model, flux_pipeline
     if active_model == model_type:
         return
 
@@ -473,8 +477,8 @@ def ensure_model_loaded(model_type: str):
         torch.cuda.empty_cache()
         gc.collect()
     elif active_model == 'flux' and flux_pipeline is not None:
-        logging.info("Moving FLUX model to CPU...")
-        flux_pipeline.to('cpu')
+        logging.info("Unloading FLUX model from GPU...")
+        flux_pipeline = None
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -486,8 +490,8 @@ def ensure_model_loaded(model_type: str):
     elif model_type == 'flux':
         load_flux_pipeline()
 
-    if dist.is_initialized():
-        dist.barrier()
+    # NOTE: No dist.barrier() here — each rank loads independently.
+    # Synchronization happens via collective ops in generate() or via SP broadcast.
     logging.info(f"Model swap complete. Active: {active_model}")
 
 
@@ -521,8 +525,9 @@ def worker_loop():
 
         if cmd.item() == 1:  # S2V Generate
             params = broadcast_generate_params(None)
-            logging.info(f"Rank {LOCAL_RANK}: Starting S2V generation...")
+            logging.info(f"Rank {LOCAL_RANK}: Swapping to S2V model...")
             try:
+                ensure_model_loaded('s2v')
                 pipeline.generate(**params)
                 logging.info(f"Rank {LOCAL_RANK}: S2V generation done.")
             except Exception as e:
@@ -575,11 +580,6 @@ def generate_video_task(task_id: str, params: dict):
             "message": "Switching to S2V model...",
             "output_path": None,
         }
-
-        ensure_model_loaded('s2v')
-
-        generation_status[task_id]["progress"] = 0.1
-        generation_status[task_id]["message"] = "Preparing generation..."
 
         # Parse parameters
         seed = params["seed"]
@@ -638,11 +638,17 @@ def generate_video_task(task_id: str, params: dict):
             lora_weights=lora_weights,
         )
 
-        # Signal SP workers to start S2V generation
+        # Signal SP workers FIRST so they can start model swap concurrently
         if USE_SP:
             cmd = torch.tensor([1], dtype=torch.long, device=f'cuda:{LOCAL_RANK}')
             dist.broadcast(cmd, src=0)
             broadcast_generate_params(gen_kwargs)
+
+        # Swap model on rank 0 AFTER signaling workers (avoids barrier deadlock)
+        ensure_model_loaded('s2v')
+
+        generation_status[task_id]["progress"] = 0.1
+        generation_status[task_id]["message"] = "Preparing generation..."
 
         # Generate (rank 0 gets progress callback, workers don't)
         video = pipeline.generate(**gen_kwargs, progress_callback=progress_callback)
@@ -730,11 +736,6 @@ def generate_i2v_task(task_id: str, params: dict):
             "output_path": None,
         }
 
-        ensure_model_loaded('i2v')
-
-        generation_status[task_id]["progress"] = 0.1
-        generation_status[task_id]["message"] = "Preparing I2V generation..."
-
         seed = params["seed"]
         if seed < 0:
             seed = random.randint(0, 2**31 - 1)
@@ -782,7 +783,7 @@ def generate_i2v_task(task_id: str, params: dict):
             lora_weights=lora_weights,
         )
 
-        # Signal SP workers to start I2V generation
+        # Signal SP workers FIRST so they can start model swap concurrently
         if USE_SP:
             cmd = torch.tensor([2], dtype=torch.long, device=f'cuda:{LOCAL_RANK}')
             dist.broadcast(cmd, src=0)
@@ -790,6 +791,12 @@ def generate_i2v_task(task_id: str, params: dict):
             sp_kwargs = {k: v for k, v in gen_kwargs.items() if k != 'img'}
             sp_kwargs['_image_path'] = params["image_path"]
             broadcast_generate_params(sp_kwargs)
+
+        # Swap model on rank 0 AFTER signaling workers (avoids barrier deadlock)
+        ensure_model_loaded('i2v')
+
+        generation_status[task_id]["progress"] = 0.1
+        generation_status[task_id]["message"] = "Preparing I2V generation..."
 
         video = i2v_pipeline.generate(**gen_kwargs, progress_callback=progress_callback)
 
@@ -860,7 +867,17 @@ def generate_flux_task(task_id: str, params: dict):
             seed = random.randint(0, 2**31 - 1)
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        logging.info(f"Starting FLUX.2-klein-9B generation: seed={seed}, steps={params['num_inference_steps']}")
+
+        # Determine image dimensions from aspect ratio
+        ar = params.get("aspect_ratio", "portrait")
+        if ar == "landscape":
+            gen_height, gen_width = 720, 1280
+        elif ar == "square":
+            gen_height, gen_width = 1024, 1024
+        else:  # portrait
+            gen_height, gen_width = 1280, 720
+
+        logging.info(f"Starting FLUX.2-klein-9B generation: seed={seed}, steps={params['num_inference_steps']}, {gen_width}x{gen_height} ({ar})")
 
         generation_status[task_id]["progress"] = 0.15
         generation_status[task_id]["message"] = "Generating image..."
@@ -868,8 +885,8 @@ def generate_flux_task(task_id: str, params: dict):
         generator = torch.Generator(device=f'cuda:{LOCAL_RANK}').manual_seed(seed)
         image = flux_pipeline(
             prompt=params["prompt"],
-            height=720,
-            width=1280,
+            height=gen_height,
+            width=gen_width,
             guidance_scale=params["guidance_scale"],
             num_inference_steps=params["num_inference_steps"],
             generator=generator,

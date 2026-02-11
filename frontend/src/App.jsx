@@ -5,14 +5,20 @@ import {
   uploadVideo,
   startGeneration,
   startI2VGeneration,
+  startFluxGeneration,
   getTaskStatus,
   extractAudio,
   separateVocals,
   getConfig,
+  getLoraAdapters,
   listVideos,
   deleteVideo,
+  deleteOutput,
   listUploadedImages,
   listUploadedAudio,
+  getT2iStatus,
+  extractFirstFrame,
+  listOutputs,
 } from './api';
 import './App.css';
 
@@ -83,6 +89,48 @@ const translations = {
     i2vGenerating: 'Generating...',
     i2vModelNote: 'First use may take ~1 min for model loading',
     i2vNotAvailable: 'I2V model not available. Download Wan2.2-I2V-14B-A first.',
+    // LoRA
+    loraTitle: 'LoRA Adapters (High/Low Noise Mix)',
+    loraEnabled: 'Enabled',
+    loraHighWeight: 'High-Noise Weight',
+    loraLowWeight: 'Low-Noise Weight',
+    loraCharacter: 'Character',
+    loraMotion: 'Motion',
+    loraCamera: 'Camera',
+    loraTriggerWords: 'Trigger Words',
+    loraDescription: 'Description',
+    loraInfo: 'Info',
+    loraNoAdapters: 'No LoRA adapters available',
+    loraHighTip: 'Controls structure, motion, camera (early diffusion steps)',
+    loraLowTip: 'Controls appearance, face, texture (late diffusion steps)',
+    loraCivitai: 'CivitAI Page',
+    loraPreview: 'Preview',
+    // Image Gen
+    menuImageGen: 'Image Gen',
+    imgGenTitle: 'Image Generation (FLUX.2-klein-9B)',
+    imgGenNotConfigured: 'T2I model not configured. Upload images manually or add a T2I model later.',
+    imgGenUploadTitle: 'Upload / Manage Images',
+    imgGenNoImages: 'No images uploaded yet',
+    // FLUX
+    fluxPromptLabel: 'Prompt',
+    fluxPromptDefault: 'A hyper-realistic portrait, natural lighting, 8k',
+    fluxStepsLabel: 'Inference Steps',
+    fluxGuidanceLabel: 'Guidance Scale',
+    fluxUpscaleLabel: 'Upscale x2 (Real-ESRGAN)',
+    fluxUpscaleDesc: 'Upscale 720x1280 to 1440x2560',
+    fluxGenerateBtn: 'Generate Image',
+    fluxGenerating: 'Generating...',
+    fluxModelNote: 'FLUX.2-klein-9B: 4-step fast generation. First use requires model download.',
+    fluxOutputOriginal: 'Original (720x1280)',
+    fluxOutputUpscaled: 'Upscaled (1440x2560)',
+    // Gallery
+    galleryImages: 'Images',
+    galleryVideos: 'Videos',
+    // Output picker
+    selectFromOutputs: 'Select from generated outputs',
+    noOutputs: 'No generated outputs available',
+    outputTypeImage: 'Image',
+    outputTypeVideo: 'Video (first frame)',
   },
   ko: {
     title: 'WanAvatar',
@@ -143,6 +191,48 @@ const translations = {
     i2vGenerating: '생성 중...',
     i2vModelNote: '첫 사용 시 모델 로딩에 ~1분 소요',
     i2vNotAvailable: 'I2V 모델이 없습니다. Wan2.2-I2V-14B-A를 먼저 다운로드하세요.',
+    // LoRA
+    loraTitle: 'LoRA 어댑터 (High/Low 노이즈 믹스)',
+    loraEnabled: '활성화',
+    loraHighWeight: '하이 노이즈 가중치',
+    loraLowWeight: '로우 노이즈 가중치',
+    loraCharacter: '캐릭터',
+    loraMotion: '모션',
+    loraCamera: '카메라',
+    loraTriggerWords: '트리거 워드',
+    loraDescription: '설명',
+    loraInfo: '정보',
+    loraNoAdapters: '사용 가능한 LoRA 어댑터 없음',
+    loraHighTip: '구조, 동작, 카메라 제어 (초기 확산 단계)',
+    loraLowTip: '외관, 얼굴, 텍스처 제어 (후기 확산 단계)',
+    loraCivitai: 'CivitAI 페이지',
+    loraPreview: '미리보기',
+    // Image Gen
+    menuImageGen: '이미지 생성',
+    imgGenTitle: '이미지 생성 (FLUX.2-klein-9B)',
+    imgGenNotConfigured: 'T2I 모델이 구성되지 않았습니다. 이미지를 수동으로 업로드하거나 나중에 T2I 모델을 추가하세요.',
+    imgGenUploadTitle: '이미지 업로드 / 관리',
+    imgGenNoImages: '아직 업로드된 이미지가 없습니다',
+    // FLUX
+    fluxPromptLabel: '프롬프트',
+    fluxPromptDefault: '초현실적 인물 사진, 자연광, 8k',
+    fluxStepsLabel: '추론 스텝',
+    fluxGuidanceLabel: '가이던스 스케일',
+    fluxUpscaleLabel: '업스케일 x2 (Real-ESRGAN)',
+    fluxUpscaleDesc: '720x1280을 1440x2560으로 업스케일',
+    fluxGenerateBtn: '이미지 생성',
+    fluxGenerating: '생성 중...',
+    fluxModelNote: 'FLUX.2-klein-9B: 4스텝 고속 생성. 첫 사용 시 모델 다운로드 필요.',
+    fluxOutputOriginal: '원본 (720x1280)',
+    fluxOutputUpscaled: '업스케일 (1440x2560)',
+    // Gallery
+    galleryImages: '이미지',
+    galleryVideos: '동영상',
+    // Output picker
+    selectFromOutputs: '생성된 결과에서 선택',
+    noOutputs: '생성된 결과가 없습니다',
+    outputTypeImage: '이미지',
+    outputTypeVideo: '비디오 (첫 프레임)',
   },
   zh: {
     title: 'WanAvatar',
@@ -203,12 +293,54 @@ const translations = {
     i2vGenerating: '生成中...',
     i2vModelNote: '首次使用需约1分钟加载模型',
     i2vNotAvailable: 'I2V模型不可用，请先下载Wan2.2-I2V-14B-A。',
+    // LoRA
+    loraTitle: 'LoRA 适配器 (高/低噪声混合)',
+    loraEnabled: '启用',
+    loraHighWeight: '高噪声权重',
+    loraLowWeight: '低噪声权重',
+    loraCharacter: '角色',
+    loraMotion: '动作',
+    loraCamera: '摄影机',
+    loraTriggerWords: '触发词',
+    loraDescription: '描述',
+    loraInfo: '信息',
+    loraNoAdapters: '无可用LoRA适配器',
+    loraHighTip: '控制结构、运动、镜头（扩散早期步骤）',
+    loraLowTip: '控制外观、面部、纹理（扩散后期步骤）',
+    loraCivitai: 'CivitAI页面',
+    loraPreview: '预览',
+    // Image Gen
+    menuImageGen: '图像生成',
+    imgGenTitle: '图像生成 (FLUX.2-klein-9B)',
+    imgGenNotConfigured: 'T2I模型未配置。请手动上传图片或稍后添加T2I模型。',
+    imgGenUploadTitle: '上传/管理图片',
+    imgGenNoImages: '尚未上传图片',
+    // FLUX
+    fluxPromptLabel: '提示词',
+    fluxPromptDefault: '超写实人像照片，自然光线，8k',
+    fluxStepsLabel: '推理步数',
+    fluxGuidanceLabel: '引导比例',
+    fluxUpscaleLabel: '放大 x2 (Real-ESRGAN)',
+    fluxUpscaleDesc: '将720x1280放大至1440x2560',
+    fluxGenerateBtn: '生成图像',
+    fluxGenerating: '生成中...',
+    fluxModelNote: 'FLUX.2-klein-9B: 4步快速生成。首次使用需下载模型。',
+    fluxOutputOriginal: '原始 (720x1280)',
+    fluxOutputUpscaled: '放大 (1440x2560)',
+    // Gallery
+    galleryImages: '图片',
+    galleryVideos: '视频',
+    // Output picker
+    selectFromOutputs: '从生成结果中选择',
+    noOutputs: '没有生成结果',
+    outputTypeImage: '图片',
+    outputTypeVideo: '视频（首帧）',
   },
 };
 
 function App() {
   const [lang, setLang] = useState('en');
-  const [activeMenu, setActiveMenu] = useState('lipsync');
+  const [activeMenu, setActiveMenu] = useState('imagegen');
   const [lipsyncSubTab, setLipsyncSubTab] = useState('generate');
   const [config, setConfig] = useState(null);
 
@@ -284,11 +416,82 @@ function App() {
   // I2V file picker
   const [showI2vImagePicker, setShowI2vImagePicker] = useState(false);
 
+  // LoRA state
+  const [loraAdapters, setLoraAdapters] = useState([]);
+  const [loraWeights, setLoraWeights] = useState({}); // {name: {enabled, high_weight, low_weight}}
+  const [expandedLora, setExpandedLora] = useState(null); // name of expanded info panel
+
+  // Image Gen state
+  const [imgGenImages, setImgGenImages] = useState([]);
+  const [t2iAvailable, setT2iAvailable] = useState(false);
+  const [t2iMessage, setT2iMessage] = useState('');
+
+  // FLUX generation state
+  const [fluxPrompt, setFluxPrompt] = useState('K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.');
+  const [fluxSteps, setFluxSteps] = useState(4);
+  const [fluxGuidance, setFluxGuidance] = useState(1.0);
+  const [fluxSeed, setFluxSeed] = useState(-1);
+  const [fluxUpscale, setFluxUpscale] = useState(true);
+  const [fluxIsGenerating, setFluxIsGenerating] = useState(false);
+  const [fluxProgress, setFluxProgress] = useState(0);
+  const [fluxStatus, setFluxStatus] = useState('');
+  const [fluxOutputImage, setFluxOutputImage] = useState(null);
+  const [fluxOutputUpscaled, setFluxOutputUpscaled] = useState(null);
+  const [fluxOutputSeed, setFluxOutputSeed] = useState('');
+
+  // Gallery tab state
+  const [galleryTab, setGalleryTab] = useState('videos');
+  const [galleryImages, setGalleryImages] = useState([]);
+
+  // Image-category LoRA state (separate from mov LoRAs)
+  const [imgLoraAdapters, setImgLoraAdapters] = useState([]);
+  const [imgLoraWeights, setImgLoraWeights] = useState({});
+  const [expandedImgLora, setExpandedImgLora] = useState(null);
+
+  // Lipsync output picker state
+  const [showOutputPicker, setShowOutputPicker] = useState(false);
+  const [generatedOutputs, setGeneratedOutputs] = useState([]);
+  const [isExtractingFrame, setIsExtractingFrame] = useState(false);
+
   const t = useCallback((key) => translations[lang][key] || key, [lang]);
 
-  // Load config
+  // Load config & LoRA adapters
   useEffect(() => {
     getConfig().then(res => setConfig(res.data)).catch(console.error);
+
+    // Load mov-category LoRAs (for Video Gen page)
+    getLoraAdapters('mov').then(data => {
+      setLoraAdapters(data.adapters || []);
+      const defaults = {};
+      (data.adapters || []).forEach(a => {
+        defaults[a.name] = {
+          enabled: a.available,
+          high_weight: a.default_high_weight,
+          low_weight: a.default_low_weight,
+        };
+      });
+      setLoraWeights(defaults);
+    }).catch(console.error);
+
+    // Load img-category LoRAs (for Image Gen page)
+    getLoraAdapters('img').then(data => {
+      setImgLoraAdapters(data.adapters || []);
+      const defaults = {};
+      (data.adapters || []).forEach(a => {
+        defaults[a.name] = {
+          enabled: a.available,
+          high_weight: a.default_high_weight,
+          low_weight: a.default_low_weight,
+        };
+      });
+      setImgLoraWeights(defaults);
+    }).catch(console.error);
+
+    // Check T2I availability
+    getT2iStatus().then(data => {
+      setT2iAvailable(data.available);
+      setT2iMessage(data.message);
+    }).catch(console.error);
   }, []);
 
   // Update prompts when language changes
@@ -333,11 +536,17 @@ function App() {
     if (!imagePath || !audioPath) { setStatus('Please upload both image and audio'); return; }
     setIsGenerating(true); setProgress(0); setStatus('Starting generation...'); setOutputVideo(null);
     try {
+      // Build LoRA weights for request
+      const activeLoras = Object.entries(loraWeights)
+        .filter(([, w]) => w.enabled && (w.high_weight > 0 || w.low_weight > 0))
+        .map(([name, w]) => ({ name, high_weight: w.high_weight, low_weight: w.low_weight }));
+
       const { task_id } = await startGeneration({
         image_path: imagePath, audio_path: audioPath, prompt, negative_prompt: negPrompt,
         resolution, num_clips: numClips, inference_steps: steps, guidance_scale: guidance,
         infer_frames: frames, seed, offload_model: offload,
         use_teacache: useTeacache, teacache_thresh: teacacheThresh,
+        lora_weights: activeLoras.length > 0 ? activeLoras : null,
       });
       const pollInterval = setInterval(async () => {
         try {
@@ -376,10 +585,16 @@ function App() {
     if (!i2vImagePath) { setI2vStatus('Please upload an image'); return; }
     setI2vIsGenerating(true); setI2vProgress(0); setI2vStatus('Starting I2V generation...'); setI2vOutputVideo(null);
     try {
+      // Build LoRA weights for request
+      const activeLoras = Object.entries(loraWeights)
+        .filter(([, w]) => w.enabled && (w.high_weight > 0 || w.low_weight > 0))
+        .map(([name, w]) => ({ name, high_weight: w.high_weight, low_weight: w.low_weight }));
+
       const { task_id } = await startI2VGeneration({
         image_path: i2vImagePath, prompt: i2vPrompt, negative_prompt: i2vNegPrompt,
         resolution: i2vResolution, frame_num: i2vFrameNum, inference_steps: i2vSteps,
         guidance_scale: i2vGuidance, shift: i2vShift, seed: i2vSeed, offload_model: i2vOffload,
+        lora_weights: activeLoras.length > 0 ? activeLoras : null,
       });
       const pollInterval = setInterval(async () => {
         try {
@@ -432,20 +647,28 @@ function App() {
   };
 
   // === Gallery Handlers ===
-  const fetchVideos = useCallback(async () => {
+  const fetchGallery = useCallback(async () => {
     setGalleryLoading(true);
-    try { const data = await listVideos(); setVideos(data.videos || []); }
-    catch (err) { console.error('Failed to fetch videos:', err); }
+    try {
+      const data = await listOutputs();
+      const outputs = data.outputs || [];
+      setGalleryImages(outputs.filter(o => o.type === 'image'));
+      setVideos(outputs.filter(o => o.type === 'video'));
+    }
+    catch (err) { console.error('Failed to fetch gallery:', err); }
     finally { setGalleryLoading(false); }
   }, []);
 
-  const handleDeleteVideo = async (filename) => {
+  const handleDeleteOutput = async (filename) => {
     if (!window.confirm(t('galleryDeleteConfirm'))) return;
-    try { await deleteVideo(filename); setVideos(prev => prev.filter(v => v.filename !== filename)); }
-    catch (err) { console.error('Failed to delete video:', err); }
+    try {
+      await deleteOutput(filename);
+      setGalleryImages(prev => prev.filter(o => o.filename !== filename));
+      setVideos(prev => prev.filter(v => v.filename !== filename));
+    } catch (err) { console.error('Failed to delete:', err); }
   };
 
-  useEffect(() => { if (activeMenu === 'gallery') fetchVideos(); }, [activeMenu, fetchVideos]);
+  useEffect(() => { if (activeMenu === 'gallery') fetchGallery(); }, [activeMenu, fetchGallery]);
 
   // === File Picker Handlers ===
   const toggleImagePicker = async () => {
@@ -495,6 +718,108 @@ function App() {
     setShowI2vImagePicker(false);
   };
 
+  // === Image Gen Handlers ===
+  const handleImgGenUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      await uploadImage(file);
+      const data = await listUploadedImages();
+      setImgGenImages(data.images || []);
+    } catch (err) {
+      console.error('Image upload error:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeMenu === 'imagegen') {
+      listUploadedImages().then(data => setImgGenImages(data.images || [])).catch(console.error);
+    }
+  }, [activeMenu]);
+
+  // Update FLUX prompt when language changes
+  useEffect(() => {
+    setFluxPrompt(translations[lang].fluxPromptDefault);
+  }, [lang]);
+
+  // === FLUX Generation Handler ===
+  const handleFluxGenerate = async () => {
+    setFluxIsGenerating(true); setFluxProgress(0); setFluxStatus('Starting FLUX generation...');
+    setFluxOutputImage(null); setFluxOutputUpscaled(null);
+    try {
+      // Build img LoRA weights
+      const activeLoras = Object.entries(imgLoraWeights)
+        .filter(([, w]) => w.enabled && (w.high_weight > 0 || w.low_weight > 0))
+        .map(([name, w]) => ({ name, weight: Math.max(w.high_weight, w.low_weight) }));
+
+      const { task_id } = await startFluxGeneration({
+        prompt: fluxPrompt,
+        num_inference_steps: fluxSteps,
+        guidance_scale: fluxGuidance,
+        seed: fluxSeed,
+        upscale: fluxUpscale,
+        lora_weights: activeLoras.length > 0 ? activeLoras : null,
+      });
+      const pollInterval = setInterval(async () => {
+        try {
+          const ts = await getTaskStatus(task_id);
+          setFluxProgress(ts.progress * 100); setFluxStatus(ts.message);
+          if (ts.status === 'completed') {
+            clearInterval(pollInterval); setFluxIsGenerating(false);
+            setFluxOutputImage(ts.output_path);
+            if (ts.upscaled_path) setFluxOutputUpscaled(ts.upscaled_path);
+            setFluxOutputSeed(ts.seed?.toString() || '');
+          } else if (ts.status === 'failed') {
+            clearInterval(pollInterval); setFluxIsGenerating(false);
+            setFluxStatus(`Error: ${ts.message}`);
+          }
+        } catch (err) { clearInterval(pollInterval); setFluxIsGenerating(false); setFluxStatus(`Error: ${err.message}`); }
+      }, 2000);
+    } catch (err) { setFluxIsGenerating(false); setFluxStatus(`Error: ${err.message}`); }
+  };
+
+  // === Lipsync Output Picker Handlers ===
+  const toggleOutputPicker = async () => {
+    if (!showOutputPicker) {
+      try {
+        const data = await listOutputs();
+        setGeneratedOutputs(data.outputs || []);
+      } catch (err) { console.error(err); }
+    }
+    setShowOutputPicker(!showOutputPicker);
+  };
+
+  const selectOutputAsReference = async (output) => {
+    setShowOutputPicker(false);
+    if (output.type === 'image') {
+      setImagePath(output.path);
+      setImagePreview(output.url);
+      setImageFile({ name: output.filename });
+      if (output.width && output.height) {
+        setImageDimensions({ width: output.width, height: output.height });
+        if (autoResolution) setResolution(`${output.height}*${output.width}`);
+      }
+    } else if (output.type === 'video') {
+      setIsExtractingFrame(true);
+      setStatus('Extracting first frame from video...');
+      try {
+        const frameData = await extractFirstFrame(output.path);
+        setImagePath(frameData.path);
+        setImagePreview(frameData.url);
+        setImageFile({ name: frameData.url.split('/').pop() });
+        if (frameData.width && frameData.height) {
+          setImageDimensions({ width: frameData.width, height: frameData.height });
+          if (autoResolution) setResolution(`${frameData.height}*${frameData.width}`);
+        }
+        setStatus('Frame extracted successfully');
+      } catch (err) {
+        setStatus(`Error extracting frame: ${err.message}`);
+      } finally {
+        setIsExtractingFrame(false);
+      }
+    }
+  };
+
   return (
     <div className="app-layout">
       {/* Top Header */}
@@ -510,6 +835,13 @@ function App() {
       <div className="app-body">
         {/* Sidebar */}
         <nav className="sidebar">
+          <div
+            className={`sidebar-item${activeMenu === 'imagegen' ? ' active' : ''}`}
+            onClick={() => setActiveMenu('imagegen')}
+          >
+            <span className="sidebar-icon">&#128444;</span>
+            {t('menuImageGen')}
+          </div>
           <div
             className={`sidebar-item${activeMenu === 'videogen' ? ' active' : ''}`}
             onClick={() => setActiveMenu('videogen')}
@@ -535,6 +867,177 @@ function App() {
 
         {/* Main Content */}
         <main className="main-content">
+
+          {/* ============ IMAGE GEN ============ */}
+          {activeMenu === 'imagegen' && (
+            <div className="page-content">
+              <h2 className="page-title">{t('imgGenTitle')}</h2>
+              <p className="model-note">{t('fluxModelNote')}</p>
+
+              <div className="two-column">
+                {/* Left: Prompt + Settings + LoRA */}
+                <div className="column">
+                  <div className="card">
+                    <h3>{t('fluxPromptLabel')}</h3>
+                    <div className="form-group">
+                      <textarea value={fluxPrompt} onChange={(e) => setFluxPrompt(e.target.value)} rows={4} />
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>{t('fluxStepsLabel')}: {fluxSteps}</label>
+                        <input type="range" min={1} max={12} step={1} value={fluxSteps} onChange={(e) => setFluxSteps(parseInt(e.target.value))} />
+                      </div>
+                      <div className="form-group">
+                        <label>{t('fluxGuidanceLabel')}: {fluxGuidance}</label>
+                        <input type="range" min={1} max={10} step={0.5} value={fluxGuidance} onChange={(e) => setFluxGuidance(parseFloat(e.target.value))} />
+                      </div>
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>{t('seedLabel')}</label>
+                        <input type="number" value={fluxSeed} onChange={(e) => setFluxSeed(parseInt(e.target.value))} />
+                      </div>
+                      <div className="form-group checkbox">
+                        <label>
+                          <input type="checkbox" checked={fluxUpscale} onChange={(e) => setFluxUpscale(e.target.checked)} />
+                          {t('fluxUpscaleLabel')}
+                        </label>
+                        <span className="image-size-info">{t('fluxUpscaleDesc')}</span>
+                      </div>
+                    </div>
+
+                    <button className="btn primary" onClick={handleFluxGenerate} disabled={fluxIsGenerating || !fluxPrompt.trim()}>
+                      {fluxIsGenerating ? t('fluxGenerating') : t('fluxGenerateBtn')}
+                    </button>
+                  </div>
+
+                  {/* Upload images manually */}
+                  <div className="card">
+                    <h3>{t('imgGenUploadTitle')}</h3>
+                    <div className="file-upload">
+                      <input type="file" accept="image/*" onChange={handleImgGenUpload} id="imggen-upload" />
+                      <label htmlFor="imggen-upload" className="upload-area small">
+                        <span>{t('dropImage')}</span>
+                      </label>
+                    </div>
+                    {imgGenImages.length > 0 && (
+                      <div className="picker-list" style={{ maxHeight: '200px' }}>
+                        {imgGenImages.map((img) => (
+                          <div key={img.filename} className="picker-item">
+                            <img src={img.url} alt={img.filename} className="picker-thumb" />
+                            <div className="picker-info">
+                              <span className="picker-name">{img.filename}</span>
+                              <span className="picker-meta">{img.width}x{img.height}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Image LoRA panel */}
+                  {imgLoraAdapters.length > 0 && (
+                    <div className="card lora-card">
+                      <h3>{t('loraTitle')}</h3>
+                      {imgLoraAdapters.map(adapter => {
+                        const w = imgLoraWeights[adapter.name] || { enabled: false, high_weight: 0, low_weight: 0 };
+                        const isExpanded = expandedImgLora === adapter.name;
+                        const typeLabel = adapter.type === 'character' ? t('loraCharacter') : adapter.type === 'camera' ? t('loraCamera') : t('loraMotion');
+                        return (
+                          <div key={adapter.name} className={`lora-adapter${w.enabled ? ' enabled' : ''}`}>
+                            <div className="lora-adapter-header">
+                              <label className="lora-toggle">
+                                <input type="checkbox" checked={w.enabled} disabled={!adapter.available}
+                                  onChange={(e) => setImgLoraWeights(prev => ({
+                                    ...prev, [adapter.name]: { ...prev[adapter.name], enabled: e.target.checked }
+                                  }))} />
+                                <span className="lora-name">{adapter.name}</span>
+                                <span className={`lora-type-badge ${adapter.type}`}>{typeLabel}</span>
+                              </label>
+                              <button className="btn secondary small lora-info-btn"
+                                onClick={() => setExpandedImgLora(isExpanded ? null : adapter.name)}>
+                                {t('loraInfo')} {isExpanded ? '\u25B2' : '\u25BC'}
+                              </button>
+                            </div>
+                            {isExpanded && (
+                              <div className="lora-info-panel">
+                                <p className="lora-desc">{adapter.description}</p>
+                                {adapter.trigger_words?.length > 0 && (
+                                  <div className="lora-trigger">
+                                    <strong>{t('loraTriggerWords')}:</strong>
+                                    <div className="lora-tags">
+                                      {adapter.trigger_words.map(tw => <span key={tw} className="lora-tag">{tw}</span>)}
+                                    </div>
+                                  </div>
+                                )}
+                                {adapter.civitai_url && (
+                                  <a href={adapter.civitai_url} target="_blank" rel="noopener noreferrer" className="lora-civitai-link">
+                                    {t('loraCivitai')} &rarr;
+                                  </a>
+                                )}
+                              </div>
+                            )}
+                            {w.enabled && (
+                              <div className="lora-weights">
+                                <div className="form-group">
+                                  <label>{t('loraHighWeight')}: {w.high_weight.toFixed(2)}</label>
+                                  <input type="range" min={0} max={1.5} step={0.05} value={w.high_weight}
+                                    onChange={(e) => setImgLoraWeights(prev => ({
+                                      ...prev, [adapter.name]: { ...prev[adapter.name], high_weight: parseFloat(e.target.value) }
+                                    }))} />
+                                </div>
+                                <div className="form-group">
+                                  <label>{t('loraLowWeight')}: {w.low_weight.toFixed(2)}</label>
+                                  <input type="range" min={0} max={1.5} step={0.05} value={w.low_weight}
+                                    onChange={(e) => setImgLoraWeights(prev => ({
+                                      ...prev, [adapter.name]: { ...prev[adapter.name], low_weight: parseFloat(e.target.value) }
+                                    }))} />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right: Output */}
+                <div className="column">
+                  <div className="card">
+                    <h3>Output</h3>
+                    {fluxIsGenerating && (
+                      <div className="progress-container">
+                        <div className="progress-bar"><div className="progress-fill" style={{ width: `${fluxProgress}%` }} /></div>
+                        <span className="progress-text">{Math.round(fluxProgress)}%</span>
+                      </div>
+                    )}
+                    {fluxOutputImage && (
+                      <div className="flux-output">
+                        <div className="flux-output-item">
+                          <label>{t('fluxOutputOriginal')}</label>
+                          <img src={fluxOutputImage} alt="Generated" className="flux-output-img" />
+                        </div>
+                        {fluxOutputUpscaled && (
+                          <div className="flux-output-item">
+                            <label>{t('fluxOutputUpscaled')}</label>
+                            <img src={fluxOutputUpscaled} alt="Upscaled" className="flux-output-img" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {!fluxOutputImage && !fluxIsGenerating && (
+                      <div className="placeholder"><span>FLUX.2-klein-9B Output</span></div>
+                    )}
+                    {fluxOutputSeed && <div className="form-group"><label>{t('seedOutput')}</label><input type="text" value={fluxOutputSeed} readOnly /></div>}
+                    <div className="status-box"><label>{t('status')}</label><p>{fluxStatus || 'Ready'}</p></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ============ VIDEO GEN (I2V) ============ */}
           {activeMenu === 'videogen' && (
@@ -640,6 +1143,92 @@ function App() {
                       {i2vIsGenerating ? t('i2vGenerating') : t('i2vGenerateBtn')}
                     </button>
                   </div>
+
+                  {/* LoRA Adapters Card */}
+                  {loraAdapters.length > 0 && (
+                    <div className="card lora-card">
+                      <h3>{t('loraTitle')}</h3>
+                      <div className="lora-strategy-info">
+                        <p><strong>High-Noise:</strong> {t('loraHighTip')}</p>
+                        <p><strong>Low-Noise:</strong> {t('loraLowTip')}</p>
+                      </div>
+                      {loraAdapters.map(adapter => {
+                        const w = loraWeights[adapter.name] || { enabled: false, high_weight: 0, low_weight: 0 };
+                        const isExpanded = expandedLora === adapter.name;
+                        const typeLabel = adapter.type === 'character' ? t('loraCharacter') : adapter.type === 'camera' ? t('loraCamera') : t('loraMotion');
+                        return (
+                          <div key={adapter.name} className={`lora-adapter${w.enabled ? ' enabled' : ''}`}>
+                            <div className="lora-adapter-header">
+                              <label className="lora-toggle">
+                                <input type="checkbox" checked={w.enabled} disabled={!adapter.available}
+                                  onChange={(e) => setLoraWeights(prev => ({
+                                    ...prev, [adapter.name]: { ...prev[adapter.name], enabled: e.target.checked }
+                                  }))} />
+                                <span className="lora-name">{adapter.name}</span>
+                                <span className={`lora-type-badge ${adapter.type}`}>{typeLabel}</span>
+                              </label>
+                              <button className="btn secondary small lora-info-btn"
+                                onClick={() => setExpandedLora(isExpanded ? null : adapter.name)}>
+                                {t('loraInfo')} {isExpanded ? '\u25B2' : '\u25BC'}
+                              </button>
+                            </div>
+
+                            {isExpanded && (
+                              <div className="lora-info-panel">
+                                <p className="lora-desc">{adapter.description}</p>
+                                {adapter.trigger_words?.length > 0 && (
+                                  <div className="lora-trigger">
+                                    <strong>{t('loraTriggerWords')}:</strong>
+                                    <div className="lora-tags">
+                                      {adapter.trigger_words.map(tw => (
+                                        <span key={tw} className="lora-tag">{tw}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {adapter.preview_urls?.length > 0 && (
+                                  <div className="lora-previews">
+                                    <strong>{t('loraPreview')}:</strong>
+                                    <div className="lora-preview-grid">
+                                      {adapter.preview_urls.map((url, idx) => (
+                                        url.endsWith('.mp4') ?
+                                          <video key={idx} src={url} controls preload="metadata" className="lora-preview-media" /> :
+                                          <img key={idx} src={url} alt={`${adapter.name} preview ${idx+1}`} className="lora-preview-media" />
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {adapter.civitai_url && (
+                                  <a href={adapter.civitai_url} target="_blank" rel="noopener noreferrer" className="lora-civitai-link">
+                                    {t('loraCivitai')} &rarr;
+                                  </a>
+                                )}
+                              </div>
+                            )}
+
+                            {w.enabled && (
+                              <div className="lora-weights">
+                                <div className="form-group">
+                                  <label>{t('loraHighWeight')}: {w.high_weight.toFixed(2)}</label>
+                                  <input type="range" min={0} max={1.5} step={0.05} value={w.high_weight}
+                                    onChange={(e) => setLoraWeights(prev => ({
+                                      ...prev, [adapter.name]: { ...prev[adapter.name], high_weight: parseFloat(e.target.value) }
+                                    }))} />
+                                </div>
+                                <div className="form-group">
+                                  <label>{t('loraLowWeight')}: {w.low_weight.toFixed(2)}</label>
+                                  <input type="range" min={0} max={1.5} step={0.05} value={w.low_weight}
+                                    onChange={(e) => setLoraWeights(prev => ({
+                                      ...prev, [adapter.name]: { ...prev[adapter.name], low_weight: parseFloat(e.target.value) }
+                                    }))} />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Right — Output */}
@@ -700,6 +1289,9 @@ function App() {
                       <div className="file-pickers">
                         <button className="btn secondary small" onClick={toggleImagePicker}>{t('selectFromUploads')} ({t('imageLabel')})</button>
                         <button className="btn secondary small" onClick={toggleAudioPicker}>{t('selectFromUploads')} ({t('audioLabel')})</button>
+                        <button className="btn secondary small" onClick={toggleOutputPicker} disabled={isExtractingFrame}>
+                          {isExtractingFrame ? '...' : t('selectFromOutputs')}
+                        </button>
                       </div>
                       {showImagePicker && (
                         <div className="picker-list">
@@ -724,6 +1316,31 @@ function App() {
                               </div>
                             </div>
                           ))}
+                        </div>
+                      )}
+                      {showOutputPicker && (
+                        <div className="picker-list">
+                          {generatedOutputs.length === 0 ? (
+                            <p className="picker-empty">{t('noOutputs')}</p>
+                          ) : (
+                            generatedOutputs.map((output) => (
+                              <div key={output.filename} className="picker-item" onClick={() => selectOutputAsReference(output)}>
+                                {output.type === 'image' ? (
+                                  <img src={output.url} alt={output.filename} className="picker-thumb" />
+                                ) : (
+                                  <video src={output.url} className="picker-thumb" preload="metadata" />
+                                )}
+                                <div className="picker-info">
+                                  <span className="picker-name">{output.filename}</span>
+                                  <span className="picker-meta">
+                                    {output.type === 'image' ? t('outputTypeImage') : t('outputTypeVideo')}
+                                    {' / '}
+                                    {(output.size / 1024 / 1024).toFixed(1)}MB
+                                  </span>
+                                </div>
+                              </div>
+                            ))
+                          )}
                         </div>
                       )}
                     </div>
@@ -827,25 +1444,57 @@ function App() {
             <div className="page-content">
               <div className="card">
                 <div className="gallery-header">
-                  <h3>{t('galleryTitle')} ({videos.length})</h3>
-                  <button className="btn secondary" onClick={fetchVideos} disabled={galleryLoading}>{galleryLoading ? '...' : t('galleryRefresh')}</button>
+                  <h3>{t('galleryTitle')}</h3>
+                  <button className="btn secondary" onClick={fetchGallery} disabled={galleryLoading}>{galleryLoading ? '...' : t('galleryRefresh')}</button>
                 </div>
-                {videos.length === 0 ? (
-                  <div className="gallery-empty"><p>{t('galleryEmpty')}</p></div>
-                ) : (
-                  <div className="gallery-grid">
-                    {videos.map((video) => (
-                      <div key={video.filename} className="gallery-item">
-                        <video controls src={video.url} preload="metadata" />
-                        <div className="gallery-item-info">
-                          <span className="gallery-item-name" title={video.filename}>{video.filename}</span>
-                          <span className="gallery-item-meta">{t('gallerySize')}: {(video.size / 1024 / 1024).toFixed(1)} MB</span>
-                          <span className="gallery-item-meta">{t('galleryDate')}: {new Date(video.created_at).toLocaleString()}</span>
-                          <button className="btn danger small" onClick={() => handleDeleteVideo(video.filename)}>{t('galleryDelete')}</button>
+
+                <div className="sub-tabs">
+                  <button className={galleryTab === 'images' ? 'active' : ''} onClick={() => setGalleryTab('images')}>
+                    {t('galleryImages')} ({galleryImages.length})
+                  </button>
+                  <button className={galleryTab === 'videos' ? 'active' : ''} onClick={() => setGalleryTab('videos')}>
+                    {t('galleryVideos')} ({videos.length})
+                  </button>
+                </div>
+
+                {galleryTab === 'images' && (
+                  galleryImages.length === 0 ? (
+                    <div className="gallery-empty"><p>{t('galleryEmpty')}</p></div>
+                  ) : (
+                    <div className="gallery-grid">
+                      {galleryImages.map((img) => (
+                        <div key={img.filename} className="gallery-item">
+                          <img src={img.url} alt={img.filename} className="gallery-item-img" />
+                          <div className="gallery-item-info">
+                            <span className="gallery-item-name" title={img.filename}>{img.filename}</span>
+                            <span className="gallery-item-meta">{t('gallerySize')}: {(img.size / 1024 / 1024).toFixed(1)} MB</span>
+                            <span className="gallery-item-meta">{t('galleryDate')}: {new Date(img.created_at).toLocaleString()}</span>
+                            <button className="btn danger small" onClick={() => handleDeleteOutput(img.filename)}>{t('galleryDelete')}</button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )
+                )}
+
+                {galleryTab === 'videos' && (
+                  videos.length === 0 ? (
+                    <div className="gallery-empty"><p>{t('galleryEmpty')}</p></div>
+                  ) : (
+                    <div className="gallery-grid">
+                      {videos.map((video) => (
+                        <div key={video.filename} className="gallery-item">
+                          <video controls src={video.url} preload="metadata" />
+                          <div className="gallery-item-info">
+                            <span className="gallery-item-name" title={video.filename}>{video.filename}</span>
+                            <span className="gallery-item-meta">{t('gallerySize')}: {(video.size / 1024 / 1024).toFixed(1)} MB</span>
+                            <span className="gallery-item-meta">{t('galleryDate')}: {new Date(video.created_at).toLocaleString()}</span>
+                            <button className="btn danger small" onClick={() => handleDeleteOutput(video.filename)}>{t('galleryDelete')}</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
                 )}
               </div>
             </div>

@@ -9,6 +9,12 @@ export const healthCheck = () => api.get('/health');
 
 export const getConfig = () => api.get('/config');
 
+export const getLoraAdapters = async (category = null) => {
+  const params = category ? { category } : {};
+  const response = await api.get('/lora-adapters', { params });
+  return response.data;
+};
+
 export const uploadImage = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
@@ -82,6 +88,33 @@ export const listVideos = async () => {
 
 export const deleteVideo = async (filename) => {
   const response = await api.delete(`/videos/${filename}`);
+  return response.data;
+};
+
+export const getT2iStatus = async () => {
+  const response = await api.get('/t2i-status');
+  return response.data;
+};
+
+export const extractFirstFrame = async (videoPath) => {
+  const formData = new FormData();
+  formData.append('video_path', videoPath);
+  const response = await api.post('/extract-frame', formData);
+  return response.data;
+};
+
+export const listOutputs = async () => {
+  const response = await api.get('/outputs');
+  return response.data;
+};
+
+export const startFluxGeneration = async (params) => {
+  const response = await api.post('/generate-flux', params);
+  return response.data;
+};
+
+export const deleteOutput = async (filename) => {
+  const response = await api.delete(`/outputs/${filename}`);
   return response.data;
 };
 

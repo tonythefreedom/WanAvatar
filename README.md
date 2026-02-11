@@ -1,17 +1,42 @@
 # WanAvatar
 
-Wan2.2-S2V-14B 기반 립싱크 비디오 생성 프로젝트. 음성 오디오와 참조 이미지를 입력하면 자연스러운 립싱크 비디오를 생성합니다.
+AI 아바타 비디오 생성 파이프라인 — 텍스트, 이미지, 음성에서 립싱크 아바타 비디오를 생성하는 3단계 워크플로우.
+
+## 3단계 파이프라인
+
+```
+텍스트 프롬프트 ──→ [FLUX.2-klein-9B] ──→ 이미지 ──→ [Real-ESRGAN x2] ──→ 업스케일 이미지
+                                                                                │
+                                                                                ▼
+음성/오디오 ──────────────────────────────────────────────────→ [Wan2.2-I2V-14B] ──→ 비디오
+                                                                                │
+                                                                                ▼
+                                                                  [Wan2.2-S2V-14B] ──→ 립싱크 비디오
+```
+
+| 단계 | 모델 | 설명 |
+|------|-------|------|
+| **Image Gen** | FLUX.2-klein-9B (9B) | 텍스트→이미지, 4스텝 고속 생성 |
+| **Upscale** | Real-ESRGAN x2 | 720x1280 → 1440x2560 업스케일링 |
+| **Video Gen** | Wan2.2-I2V-14B-A (14B) | 이미지→비디오 + 모션 LoRA |
+| **Voice Lipsync** | Wan2.2-S2V-14B (14B) | 음성→비디오 립싱크 생성 |
 
 ## 주요 기능
 
-- **Wan2.2-S2V-14B 모델**: 14B 파라미터 Speech-to-Video 모델
-- **듀얼 GPU 추론**: T5 인코더 (GPU 1, ~15GB) + DiT 트랜스포머 (GPU 0, ~39GB) 분리 로딩
+- **3단계 파이프라인**: Image Gen → Video Gen → Voice Lipsync
+- **FLUX.2-klein-9B**: 9B 텍스트→이미지 모델, 4스텝 고속 생성 (guidance_scale=1.0)
+- **Real-ESRGAN x2**: 생성 이미지 2배 업스케일링 (RRDBNet, tile=512)
+- **Multi-LoRA 시스템**: 여러 LoRA 어댑터 동시 적용, 어댑터별 가중치 조절
+- **High/Low Noise MoE**: 디퓨전 스텝별 다른 LoRA 가중치 (고노이즈 vs 저노이즈)
+- **LoRA 카테고리**: `img/` (이미지 생성), `mov/` (비디오 생성) 자동 분류
+- **Wan2.2-I2V-14B-A**: 이미지→비디오 생성 (SVI 2.0 Pro)
+- **Wan2.2-S2V-14B**: 14B 파라미터 Speech-to-Video 립싱크 모델
 - **Sequence Parallel (SP)**: 2+ GPU에서 torchrun 기반 DeepSpeed Ulysses SP로 DiT 어텐션 병렬화
 - **자동 분할 생성**: 긴 오디오를 자동으로 ~5초 세그먼트로 분할, Auto-Regressive 방식으로 연결
+- **GPU 모델 스왑**: 3개 모델(S2V, I2V, FLUX)이 GPU VRAM 공유, 자동 CPU 오프로드
 - **속도 최적화**: UniPC 솔버 (25 steps) + infer_frames 80 + TeaCache (0.15 threshold)
-- **LoRA 추론**: 파인튜닝된 LoRA 체크포인트 자동 로드 (strength=0.5)
-- **FastAPI 서버**: REST API 기반 비디오 생성 서버 + React 프론트엔드
-- **갤러리 & 파일 피커**: 생성된 비디오 갤러리, 이전 업로드 파일 재사용
+- **갤러리**: 이미지/비디오 탭 분리, 삭제 기능
+- **FastAPI 서버**: REST API 기반 생성 서버 + React 프론트엔드
 - **다국어 UI**: 한국어, 영어, 중국어 지원
 - **LoRA 파인튜닝**: 특정 인물에 대한 립싱크 품질 향상
 
@@ -58,6 +83,10 @@ pip install -r requirements_s2v.txt
 # flash-attn (필수 - S2V 모델이 flash_attention()을 직접 호출)
 pip install wheel
 pip install flash-attn==2.7.4.post1 --no-build-isolation
+
+# FLUX 이미지 생성 + Real-ESRGAN 업스케일링
+pip install -U diffusers>=0.36.0
+pip install realesrgan basicsr
 ```
 
 > **주의**: `flash-attn 2.8.3`은 PyTorch 2.6.0과 ABI 호환성 문제가 있어 `2.7.4.post1` 버전을 사용합니다.
@@ -73,7 +102,23 @@ sudo apt-get install ffmpeg
 
 ```bash
 pip install huggingface-hub
+
+# S2V (립싱크)
 huggingface-cli download Wan-AI/Wan2.2-S2V-14B --local-dir /mnt/models/Wan2.2-S2V-14B
+
+# I2V (이미지→비디오)
+huggingface-cli download Wan-AI/Wan2.2-I2V-14B-A --local-dir /mnt/models/Wan2.2-I2V-14B-A
+
+# FLUX.2-klein-9B (텍스트→이미지, 첫 실행 시 자동 다운로드 가능)
+huggingface-cli download black-forest-labs/FLUX.2-klein-9B --local-dir /mnt/models/hub/FLUX.2-klein-9B
+```
+
+### 6. Real-ESRGAN 가중치 다운로드
+
+```bash
+mkdir -p weights
+wget -O weights/RealESRGAN_x2plus.pth \
+  https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth
 ```
 
 모델 구조:
@@ -154,19 +199,30 @@ curl -s http://localhost:8000/api/status/$TASK_ID | python3 -m json.tool
 
 | 엔드포인트 | 메서드 | 설명 |
 |-----------|--------|------|
-| `/api/generate` | POST | 이미지 + 오디오로 비디오 생성 |
+| `/api/generate` | POST | S2V 립싱크 비디오 생성 |
+| `/api/generate-i2v` | POST | I2V 이미지→비디오 생성 |
+| `/api/generate-flux` | POST | FLUX 텍스트→이미지 생성 |
 | `/api/status/{task_id}` | GET | 생성 진행 상황 확인 |
 | `/api/upload/image` | POST | 참조 이미지 업로드 |
 | `/api/upload/audio` | POST | 오디오 파일 업로드 |
+| `/api/upload/video` | POST | 비디오 파일 업로드 |
 | `/api/uploads/images` | GET | 업로드된 이미지 목록 |
 | `/api/uploads/audio` | GET | 업로드된 오디오 목록 |
+| `/api/outputs` | GET | 출력 파일 목록 (이미지 + 비디오) |
+| `/api/outputs/{filename}` | DELETE | 출력 파일 삭제 |
 | `/api/videos` | GET | 생성된 비디오 목록 |
 | `/api/videos/{filename}` | DELETE | 비디오 삭제 |
+| `/api/lora-adapters` | GET | LoRA 어댑터 목록 (?category=img/mov) |
+| `/api/t2i-status` | GET | FLUX 모델 상태 확인 |
 | `/api/extract-audio` | POST | 비디오에서 오디오 추출 |
+| `/api/extract-frame` | POST | 비디오에서 첫 프레임 추출 |
 | `/api/separate-vocals` | POST | 보컬 분리 |
+| `/api/config` | GET | 서버 설정 |
 | `/api/health` | GET | 서버 상태 확인 (SP 상태 포함) |
 
 ### 생성 파라미터
+
+#### S2V (립싱크)
 
 | 파라미터 | 기본값 | 설명 |
 |---------|--------|------|
@@ -176,8 +232,46 @@ curl -s http://localhost:8000/api/status/$TASK_ID | python3 -m json.tool
 | `guidance_scale` | `5.5` | CFG 스케일 |
 | `seed` | `-1` | 랜덤 시드 (-1: 무작위) |
 | `use_teacache` | `false` | TeaCache 캐싱 활성화 (품질 저하 가능) |
-| `teacache_thresh` | `0.15` | TeaCache 임계값 (낮을수록 캐싱 적극적) |
-| `offload_model` | `false` | 모델 CPU 오프로드 |
+| `lora_weights` | `[]` | Multi-LoRA 설정 (name, high_weight, low_weight) |
+
+#### I2V (이미지→비디오)
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `image_path` | (필수) | 입력 이미지 경로 |
+| `prompt` | | 모션 프롬프트 |
+| `frame_num` | `81` | 출력 프레임 수 |
+| `inference_steps` | `40` | 디노이징 스텝 수 |
+| `guidance_scale` | `5.0` | CFG 스케일 |
+| `shift` | `5.0` | 노이즈 스케줄 시프트 |
+| `lora_weights` | `[]` | Multi-LoRA 설정 (name, high_weight, low_weight) |
+
+#### FLUX (텍스트→이미지)
+
+| 파라미터 | 기본값 | 설명 |
+|---------|--------|------|
+| `prompt` | (필수) | 텍스트 프롬프트 |
+| `num_inference_steps` | `4` | 디노이징 스텝 (FLUX.2-klein: 1-12) |
+| `guidance_scale` | `1.0` | CFG 스케일 |
+| `upscale` | `true` | Real-ESRGAN x2 업스케일링 적용 |
+| `seed` | `-1` | 랜덤 시드 |
+
+### Multi-LoRA 시스템
+
+LoRA 어댑터는 `lora_adpts/`에서 자동 탐색됩니다:
+
+```
+lora_adpts/
+├── mov/              # 비디오 생성 LoRA (I2V/S2V)
+│   ├── character/    # 캐릭터 스타일링
+│   ├── move/         # 모션/댄스
+│   └── camera/       # 카메라 컨트롤
+└── img/              # 이미지 생성 LoRA (FLUX)
+```
+
+**High/Low Noise MoE 전략**: 디퓨전 단계에 따라 LoRA 가중치를 동적 조절
+- 고노이즈 스텝 (초반): `high_weight` 적용 — 전체 구조/포즈 제어
+- 저노이즈 스텝 (후반): `low_weight` 적용 — 세부 디테일 보존
 
 ## 아키텍처
 
@@ -250,6 +344,9 @@ ffmpeg -y -i video.mp4 -i audio.wav -c:v copy -c:a aac -shortest output.mp4
 ```
 WanAvatar/
 ├── server.py                 # FastAPI 서버 (포트 8000)
+│                             #   - S2V/I2V/FLUX 모델 관리
+│                             #   - GPU 모델 스왑 (자동 CPU 오프로드)
+│                             #   - Multi-LoRA, Real-ESRGAN 통합
 ├── app.py                    # Gradio 웹 앱 (포트 7891)
 ├── start.sh                  # 서버 시작 스크립트
 ├── generate.py               # CLI 생성 스크립트
@@ -261,14 +358,22 @@ WanAvatar/
 ├── vocal_seperator.py        # 보컬 분리
 ├── frontend/                 # React 프론트엔드
 │   ├── src/
-│   │   ├── App.jsx
-│   │   └── api.js
+│   │   ├── App.jsx           # 3페이지 UI (Image Gen, Video Gen, Gallery)
+│   │   ├── App.css
+│   │   └── api.js            # API 클라이언트
 │   └── vite.config.js
+├── lora_adpts/               # LoRA 어댑터 (자동 탐색)
+│   ├── mov/                  # 비디오 LoRA (character/, move/, camera/)
+│   └── img/                  # 이미지 LoRA (FLUX용)
+├── weights/                  # 업스케일러 가중치
+│   └── RealESRGAN_x2plus.pth
 ├── wan/
-│   ├── speech2video.py       # S2V 추론 파이프라인 (핵심)
-│   │                         #   - 듀얼 GPU 지원
+│   ├── speech2video.py       # S2V 추론 파이프라인
+│   │                         #   - Multi-LoRA + High/Low Noise MoE
 │   │                         #   - TeaCache 통합
 │   │                         #   - Auto-Regressive 생성
+│   ├── image2video.py        # I2V 추론 파이프라인
+│   │                         #   - Multi-LoRA + High/Low Noise MoE
 │   ├── animate.py            # 애니메이션 파이프라인
 │   ├── modules/
 │   │   ├── s2v/              # S2V 모델 컴포넌트
@@ -593,6 +698,45 @@ output_lora_14B/checkpoint-50/
 - `/api/health` 응답에서 `lora_enabled`, `lora_checkpoint` 필드로 확인 가능
 
 ## Changelog
+
+### 2026-02-11: 3단계 파이프라인 완성 (FLUX.2 + I2V + Real-ESRGAN)
+
+**FLUX.2-klein-9B 이미지 생성 (`server.py`, `App.jsx`):**
+
+- `diffusers.Flux2Pipeline` 기반 텍스트→이미지 생성
+- 4스텝 고속 생성 (guidance_scale=1.0)
+- 출력 해상도: 720x1280 (9:16, Wan I2V 입력 최적화)
+- GPU 모델 스왑: S2V/I2V/FLUX 간 자동 CPU 오프로드
+
+**Real-ESRGAN x2 업스케일링:**
+
+- `basicsr.RRDBNet` + `realesrgan.RealESRGANer`
+- 720x1280 → 1440x2560 (tile=512, half=True)
+- FLUX 생성 후 옵션으로 자동 적용
+
+**Wan2.2-I2V-14B-A 이미지→비디오 (`server.py`, `image2video.py`):**
+
+- SVI 2.0 Pro 기반 이미지→비디오 생성
+- Multi-LoRA + High/Low Noise MoE 전략
+- 모션 프롬프트로 카메라/동작 제어
+
+**Multi-LoRA 시스템 (`speech2video.py`, `image2video.py`):**
+
+- 여러 LoRA 어댑터 동시 적용 (캐릭터 + 모션 + 카메라)
+- High/Low Noise MoE: 디퓨전 스텝별 다른 가중치
+- LoRA 카테고리: `img/` (FLUX), `mov/` (I2V/S2V) 자동 탐색
+
+**갤러리 업데이트 (`App.jsx`):**
+
+- 이미지/비디오 탭 분리
+- `/api/outputs` 통합 API로 이미지+비디오 관리
+- 개별 삭제 기능
+
+**프론트엔드:**
+
+- Image Gen 페이지: FLUX 프롬프트, 스텝/가이던스 조절, 업스케일 옵션, img LoRA 패널
+- Video Gen 페이지: I2V 생성 UI, mov LoRA 패널, 사이드바 레이아웃
+- diffusers 0.30.1 → 0.36.0 업그레이드 (Flux2Pipeline 지원)
 
 ### 2026-02-10: Sequence Parallel, LoRA 추론, React 프론트엔드 대폭 개선
 

@@ -26,6 +26,8 @@ from .modules.vae2_1 import Wan2_1_VAE
 from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+from .utils.lora_utils import create_network
+from safetensors import safe_open
 
 
 class WanI2V:
@@ -34,6 +36,7 @@ class WanI2V:
         self,
         config,
         checkpoint_dir,
+        multi_lora_configs=None,
         device_id=0,
         rank=0,
         t5_fsdp=False,
@@ -119,6 +122,9 @@ class WanI2V:
         self.model = WanModel.from_pretrained(model_dir)
         self.model.eval().requires_grad_(False)
 
+        if multi_lora_configs:
+            self._apply_multi_lora(multi_lora_configs)
+
         if use_sp:
             for block in self.model.blocks:
                 block.self_attn.forward = types.MethodType(
@@ -148,6 +154,114 @@ class WanI2V:
 
         self.sample_neg_prompt = config.sample_neg_prompt
 
+    @staticmethod
+    def _remap_lora_state_dict(state_dict):
+        """Remap LoRA state dict keys from various formats to internal format."""
+        remapped = {}
+        for key, value in state_dict.items():
+            if key.startswith("lora_transformer"):
+                remapped[key] = value
+                continue
+            if key.startswith("diffusion_model."):
+                stripped = key[len("diffusion_model."):]
+                stripped = stripped.replace(".lora_A.", ".lora_down.")
+                stripped = stripped.replace(".lora_B.", ".lora_up.")
+                for sep in ['.lora_down.', '.lora_up.']:
+                    if sep in stripped:
+                        parts = stripped.split(sep, 1)
+                        module_path = parts[0].replace(".", "_")
+                        new_key = f"lora_transformer__{module_path}{sep}{parts[1]}"
+                        remapped[new_key] = value
+                        break
+                else:
+                    if stripped.endswith(".alpha"):
+                        module_path = stripped[:-len(".alpha")].replace(".", "_")
+                        remapped[f"lora_transformer__{module_path}.alpha"] = value
+                    else:
+                        remapped[key] = value
+                continue
+            if key.startswith("lora_unet_"):
+                new_key = "lora_transformer__" + key[len("lora_unet_"):]
+                remapped[new_key] = value
+                continue
+            remapped[key] = value
+        return remapped
+
+    def _apply_multi_lora(self, lora_configs):
+        """Apply multiple LoRA adapters to the model."""
+        from safetensors.torch import load_file
+        self.lora_networks = {}
+
+        for cfg in lora_configs:
+            lora_path = cfg['path']
+            name = cfg['name']
+
+            if not os.path.exists(lora_path):
+                logging.warning(f"LoRA adapter '{name}' not found at {lora_path}, skipping")
+                continue
+
+            logging.info(f"[I2V] Loading LoRA adapter '{name}' from {lora_path}")
+
+            rank = None
+            alpha = None
+            with safe_open(lora_path, framework="pt") as f:
+                for key in f.keys():
+                    if rank is None and ("lora_down.weight" in key or "lora_A.weight" in key):
+                        rank = f.get_tensor(key).shape[0]
+                    if alpha is None and ".alpha" in key:
+                        alpha = f.get_tensor(key).item()
+                    if rank is not None and alpha is not None:
+                        break
+
+            if rank is None:
+                rank = 32
+            if alpha is None:
+                alpha = float(rank)
+
+            logging.info(f"[I2V] LoRA '{name}': rank={rank}, alpha={alpha}, scale={alpha/rank:.4f}")
+
+            network = create_network(
+                1.0, rank, alpha, self.model,
+                TRANSFORMER_TARGET_REPLACE_MODULE="WanModel",
+            )
+            network.apply_to(self.model, True)
+
+            raw_sd = load_file(lora_path, device="cpu")
+            remapped_sd = self._remap_lora_state_dict(raw_sd)
+            info = network.load_state_dict(remapped_sd, strict=False)
+            n_loaded = len(remapped_sd) - len(info.unexpected_keys)
+            logging.info(f"[I2V] LoRA '{name}' loaded: {n_loaded} params matched, "
+                         f"{len(info.missing_keys)} missing, "
+                         f"{len(info.unexpected_keys)} unexpected")
+
+            network.to(dtype=self.param_dtype, device=self.device)
+            network.eval()
+            network.requires_grad_(False)
+
+            self.lora_networks[name] = network
+
+        logging.info(f"[I2V] Multi-LoRA setup complete: {list(self.lora_networks.keys())}")
+
+    def _set_lora_multiplier(self, name, multiplier):
+        """Set the multiplier for a specific LoRA adapter."""
+        if hasattr(self, 'lora_networks') and name in self.lora_networks:
+            for lora_module in self.lora_networks[name].transformer_loras:
+                lora_module.multiplier = multiplier
+
+    @staticmethod
+    def _get_step_lora_weight(step_idx, total_steps, high_weight, low_weight):
+        """Calculate LoRA weight based on diffusion step position."""
+        if total_steps <= 1:
+            return (high_weight + low_weight) / 2.0
+        progress = step_idx / (total_steps - 1)
+        if progress <= 0.4:
+            return high_weight
+        elif progress >= 0.6:
+            return low_weight
+        else:
+            t = (progress - 0.4) / 0.2
+            return high_weight * (1.0 - t) + low_weight * t
+
     def generate(self,
                  input_prompt,
                  img,
@@ -160,6 +274,7 @@ class WanI2V:
                  n_prompt="",
                  seed=-1,
                  offload_model=True,
+                 lora_weights=None,
                  progress_callback=None):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
@@ -311,6 +426,16 @@ class WanI2V:
                 if progress_callback:
                     step_progress = 0.1 + (step_idx / len(timesteps)) * 0.75
                     progress_callback(step_progress, f"Step {step_idx + 1}/{len(timesteps)}")
+
+                # Dynamic LoRA weight adjustment (High/Low noise strategy)
+                if lora_weights and hasattr(self, 'lora_networks'):
+                    for lname, lw in lora_weights.items():
+                        hw = lw.get('high_weight', 0.0)
+                        lwt = lw.get('low_weight', 0.0)
+                        mult = self._get_step_lora_weight(
+                            step_idx, len(timesteps), hw, lwt)
+                        self._set_lora_multiplier(lname, mult)
+
                 latent_model_input = [latent.to(self.device)]
                 timestep = [t]
 

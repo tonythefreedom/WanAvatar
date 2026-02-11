@@ -58,6 +58,94 @@ I2V_CHECKPOINT_DIR = "/mnt/models/Wan2.2-I2V-14B-A"
 LORA_CHECKPOINT_DIR = "/home/ubuntu/WanAvatar/output_lora_14B/checkpoint-50"
 LORA_STRENGTH = 0.0  # LoRA multiplier (0.0=off, 1.0=full)
 
+# FLUX configuration
+FLUX_MODEL_ID = "black-forest-labs/FLUX.2-klein-9B"
+FLUX_CACHE_DIR = "/mnt/models"
+REALESRGAN_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "RealESRGAN_x2plus.pth")
+
+# Multi-LoRA adapter configuration (Wan 2.2 High/Low Noise Mix strategy)
+LORA_ADAPTERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lora_adpts")
+LORA_ADAPTERS = [
+    {
+        "name": "KoreanWoman",
+        "category": "mov",
+        "path": os.path.join(LORA_ADAPTERS_DIR, "mov", "character", "KoreanWoman.safetensors"),
+        "type": "character",
+        "default_high_weight": 0.3,
+        "default_low_weight": 0.85,
+        "description": "Korean woman character LoRA (Wan2.2, Seoullina v2.1). Generates Korean female characters with improved skin texture and natural physics.",
+        "trigger_words": ["a korean woman"],
+        "civitai_url": "https://civitai.com/models/1837542/wan22-korean-women",
+        "preview_urls": [
+            "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/3f1d4975-1614-43fb-a406-39dd194ef8e3/original=true/98613343.mp4",
+            "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/9b43b67f-3a59-46b5-a1a7-45a1cb1c35c3/original=true/98613349.mp4",
+        ],
+    },
+    {
+        "name": "EroticDance",
+        "category": "mov",
+        "path": os.path.join(LORA_ADAPTERS_DIR, "mov", "move", "EroticDance.safetensors"),
+        "type": "motion",
+        "default_high_weight": 0.8,
+        "default_low_weight": 0.2,
+        "description": "Erotic dance motion LoRA (Wan 2.1 14B T2V). Generates dance choreography with body movement. Optimized for 9:16 portrait format.",
+        "trigger_words": ["erotic dance", "ass swaying", "boobs bouncing", "hands waving"],
+        "civitai_url": "https://civitai.com/models/1609106/erotic-dance-wan-t2v",
+        "preview_urls": [
+            "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/b750d140-5f33-4392-ba97-d5d3f028ab3a/original=true/78532799.jpeg",
+            "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/71d794e2-5cc7-4840-94a3-7b8cc2396e20/original=true/79364943.jpeg",
+        ],
+    },
+    {
+        "name": "OrbitCamV2",
+        "category": "mov",
+        "path": os.path.join(LORA_ADAPTERS_DIR, "mov", "camera", "wan2.2orbitcamv2_high_noise.safetensors"),
+        "type": "camera",
+        "default_high_weight": 0.8,
+        "default_low_weight": 0.0,
+        "description": "Orbit camera LoRA (Wan 2.2 I2V). Makes the camera orbit around the subject. High-noise only — apply during early diffusion steps for camera motion control.",
+        "trigger_words": ["ORBITCAM", "the viewer orbit around the subject"],
+        "civitai_url": "https://civitai.com/models/2093287/luisap-wan-22-i2v-orbit-around-subject-v2",
+        "preview_urls": [
+            "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/6b1f0e1e-a6ed-4b8e-a0f7-5cb2e9f58c24/original=true/ComfyUI_00165_.mp4",
+        ],
+    },
+]
+
+
+def _scan_lora_dir(base_dir, category):
+    """Scan a category directory for LoRA adapter files not already in LORA_ADAPTERS."""
+    known_paths = {a["path"] for a in LORA_ADAPTERS}
+    found = []
+    cat_dir = os.path.join(base_dir, category)
+    if not os.path.isdir(cat_dir):
+        return found
+    for sub_type in os.listdir(cat_dir):
+        sub_path = os.path.join(cat_dir, sub_type)
+        if not os.path.isdir(sub_path):
+            continue
+        for fname in os.listdir(sub_path):
+            if fname.endswith(".safetensors"):
+                full_path = os.path.join(sub_path, fname)
+                if full_path not in known_paths:
+                    found.append({
+                        "name": os.path.splitext(fname)[0],
+                        "category": category,
+                        "path": full_path,
+                        "type": sub_type,
+                        "default_high_weight": 0.5,
+                        "default_low_weight": 0.5,
+                        "description": f"Auto-discovered {category}/{sub_type} LoRA",
+                        "trigger_words": [],
+                        "civitai_url": "",
+                        "preview_urls": [],
+                    })
+    return found
+
+# Auto-discover any LoRA adapters not explicitly listed
+LORA_ADAPTERS.extend(_scan_lora_dir(LORA_ADAPTERS_DIR, "img"))
+LORA_ADAPTERS.extend(_scan_lora_dir(LORA_ADAPTERS_DIR, "mov"))
+
 # Device setup
 if torch.cuda.is_available():
     DEVICE = "cuda"
@@ -69,7 +157,9 @@ else:
 # Global pipelines
 pipeline = None       # S2V pipeline
 i2v_pipeline = None   # I2V pipeline
-active_model = None   # 's2v' or 'i2v' — tracks which model is on GPU
+flux_pipeline = None  # FLUX pipeline
+upsampler = None      # Real-ESRGAN upsampler
+active_model = None   # 's2v', 'i2v', or 'flux' — tracks which model is on GPU
 generation_status = {}
 gpu_lock = threading.Lock()
 executor = ThreadPoolExecutor(max_workers=1)
@@ -129,6 +219,12 @@ if FRONTEND_DIR.exists():
 # ============================================================================
 # Request Models
 # ============================================================================
+class LoraWeightConfig(BaseModel):
+    name: str
+    high_weight: float = 0.0
+    low_weight: float = 0.0
+
+
 class GenerateRequest(BaseModel):
     image_path: str
     audio_path: str
@@ -143,6 +239,7 @@ class GenerateRequest(BaseModel):
     offload_model: bool = False
     use_teacache: bool = False
     teacache_thresh: float = 0.15
+    lora_weights: Optional[list] = None  # List of {name, high_weight, low_weight}
 
 
 class I2VGenerateRequest(BaseModel):
@@ -156,6 +253,16 @@ class I2VGenerateRequest(BaseModel):
     shift: float = 5.0
     seed: int = -1
     offload_model: bool = False
+    lora_weights: Optional[list] = None  # List of {name, high_weight, low_weight}
+
+
+class FluxGenerateRequest(BaseModel):
+    prompt: str = "K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair."
+    num_inference_steps: int = 4
+    guidance_scale: float = 1.0
+    seed: int = -1
+    upscale: bool = True
+    lora_weights: Optional[list] = None  # List of {name, weight}
 
 
 class TaskStatus(BaseModel):
@@ -182,7 +289,21 @@ def load_pipeline():
     logging.info(f"Loading Wan2.2-S2V-14B model (rank={LOCAL_RANK}, SP={USE_SP})...")
     cfg = WAN_CONFIGS['s2v-14B']
 
-    lora_dir = LORA_CHECKPOINT_DIR if (LORA_STRENGTH > 0 and os.path.exists(LORA_CHECKPOINT_DIR)) else None
+    # Build multi-LoRA config from available mov-category adapters
+    multi_lora = [
+        {"name": a["name"], "path": a["path"]}
+        for a in LORA_ADAPTERS
+        if os.path.exists(a["path"]) and a.get("category") == "mov"
+    ]
+    if multi_lora:
+        logging.info(f"Multi-LoRA adapters found: {[a['name'] for a in multi_lora]}")
+    else:
+        logging.info("No multi-LoRA adapters found, checking legacy single LoRA...")
+
+    # Fallback to legacy single LoRA if no multi-LoRA adapters
+    lora_dir = None
+    if not multi_lora and LORA_STRENGTH > 0 and os.path.exists(LORA_CHECKPOINT_DIR):
+        lora_dir = LORA_CHECKPOINT_DIR
 
     if USE_SP:
         pipeline = wan.WanS2V(
@@ -190,6 +311,7 @@ def load_pipeline():
             checkpoint_dir=CHECKPOINT_DIR,
             lora_checkpoint_dir=lora_dir,
             lora_strength=LORA_STRENGTH,
+            multi_lora_configs=multi_lora if multi_lora else None,
             device_id=LOCAL_RANK,
             rank=LOCAL_RANK,
             t5_fsdp=False,
@@ -207,6 +329,7 @@ def load_pipeline():
             checkpoint_dir=CHECKPOINT_DIR,
             lora_checkpoint_dir=lora_dir,
             lora_strength=LORA_STRENGTH,
+            multi_lora_configs=multi_lora if multi_lora else None,
             device_id=0,
             rank=0,
             t5_fsdp=False,
@@ -236,10 +359,20 @@ def load_i2v_pipeline():
     logging.info(f"Loading Wan2.2-I2V-14B-A model (rank={LOCAL_RANK}, SP={USE_SP})...")
     cfg = WAN_CONFIGS['i2v-A14B']
 
+    # Build multi-LoRA config for I2V (mov-category only)
+    multi_lora_i2v = [
+        {"name": a["name"], "path": a["path"]}
+        for a in LORA_ADAPTERS
+        if os.path.exists(a["path"]) and a.get("category") == "mov"
+    ]
+    if multi_lora_i2v:
+        logging.info(f"I2V multi-LoRA adapters: {[a['name'] for a in multi_lora_i2v]}")
+
     if USE_SP:
         i2v_pipeline = wan.WanI2V(
             config=cfg,
             checkpoint_dir=I2V_CHECKPOINT_DIR,
+            multi_lora_configs=multi_lora_i2v if multi_lora_i2v else None,
             device_id=LOCAL_RANK,
             rank=LOCAL_RANK,
             t5_fsdp=False,
@@ -255,6 +388,7 @@ def load_i2v_pipeline():
         i2v_pipeline = wan.WanI2V(
             config=cfg,
             checkpoint_dir=I2V_CHECKPOINT_DIR,
+            multi_lora_configs=multi_lora_i2v if multi_lora_i2v else None,
             device_id=0,
             rank=0,
             t5_fsdp=False,
@@ -268,6 +402,52 @@ def load_i2v_pipeline():
     active_model = 'i2v'
     logging.info(f"I2V model loaded successfully on rank {LOCAL_RANK}!")
     return i2v_pipeline
+
+
+def load_flux_pipeline():
+    """Load FLUX.2-klein-9B pipeline for image generation."""
+    global flux_pipeline, active_model
+    if flux_pipeline is not None:
+        if active_model != 'flux':
+            flux_pipeline.to(f'cuda:{LOCAL_RANK}')
+            active_model = 'flux'
+        return flux_pipeline
+
+    from diffusers import Flux2Pipeline
+
+    logging.info("Loading FLUX.2-klein-9B model...")
+    flux_pipeline = Flux2Pipeline.from_pretrained(
+        FLUX_MODEL_ID,
+        torch_dtype=torch.bfloat16,
+        cache_dir=FLUX_CACHE_DIR,
+    )
+
+    flux_pipeline.to(f'cuda:{LOCAL_RANK}')
+    active_model = 'flux'
+    logging.info("FLUX.2-klein-9B model loaded successfully!")
+    return flux_pipeline
+
+
+def get_upsampler():
+    """Get or initialize Real-ESRGAN x2 upsampler."""
+    global upsampler
+    if upsampler is not None:
+        return upsampler
+
+    from basicsr.archs.rrdbnet_arch import RRDBNet
+    from realesrgan import RealESRGANer
+
+    logging.info("Initializing Real-ESRGAN x2 upsampler...")
+    model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
+    upsampler = RealESRGANer(
+        scale=2,
+        model_path=REALESRGAN_MODEL_PATH,
+        model=model,
+        tile=512,
+        half=True,
+    )
+    logging.info("Real-ESRGAN upsampler ready!")
+    return upsampler
 
 
 def ensure_model_loaded(model_type: str):
@@ -292,12 +472,19 @@ def ensure_model_loaded(model_type: str):
         i2v_pipeline.clip.model.cpu()
         torch.cuda.empty_cache()
         gc.collect()
+    elif active_model == 'flux' and flux_pipeline is not None:
+        logging.info("Moving FLUX model to CPU...")
+        flux_pipeline.to('cpu')
+        torch.cuda.empty_cache()
+        gc.collect()
 
     # Load requested model
     if model_type == 's2v':
         load_pipeline()
     elif model_type == 'i2v':
         load_i2v_pipeline()
+    elif model_type == 'flux':
+        load_flux_pipeline()
 
     if dist.is_initialized():
         dist.barrier()
@@ -415,6 +602,16 @@ def generate_video_task(task_id: str, params: dict):
             generation_status[task_id]["progress"] = round(progress, 3)
             generation_status[task_id]["message"] = message
 
+        # Build LoRA weights dict for pipeline
+        lora_weights = None
+        if params.get("lora_weights"):
+            lora_weights = {}
+            for lw in params["lora_weights"]:
+                lora_weights[lw["name"]] = {
+                    "high_weight": lw.get("high_weight", 0.0),
+                    "low_weight": lw.get("low_weight", 0.0),
+                }
+
         # Build generation kwargs
         gen_kwargs = dict(
             input_prompt=params["prompt"],
@@ -438,6 +635,7 @@ def generate_video_task(task_id: str, params: dict):
             init_first_frame=False,
             use_teacache=params.get("use_teacache", False),
             teacache_thresh=params.get("teacache_thresh", 0.15),
+            lora_weights=lora_weights,
         )
 
         # Signal SP workers to start S2V generation
@@ -559,6 +757,16 @@ def generate_i2v_task(task_id: str, params: dict):
             generation_status[task_id]["progress"] = round(progress, 3)
             generation_status[task_id]["message"] = message
 
+        # Build LoRA weights dict for pipeline
+        lora_weights = None
+        if params.get("lora_weights"):
+            lora_weights = {}
+            for lw in params["lora_weights"]:
+                lora_weights[lw["name"]] = {
+                    "high_weight": lw.get("high_weight", 0.0),
+                    "low_weight": lw.get("low_weight", 0.0),
+                }
+
         gen_kwargs = dict(
             input_prompt=params["prompt"],
             img=img,
@@ -571,6 +779,7 @@ def generate_i2v_task(task_id: str, params: dict):
             n_prompt=params["negative_prompt"],
             seed=seed,
             offload_model=params["offload_model"],
+            lora_weights=lora_weights,
         )
 
         # Signal SP workers to start I2V generation
@@ -619,6 +828,108 @@ def generate_i2v_task(task_id: str, params: dict):
         gpu_lock.release()
 
 
+def generate_flux_task(task_id: str, params: dict):
+    """Background task for FLUX image generation."""
+    global flux_pipeline, generation_status
+
+    if not gpu_lock.acquire(blocking=False):
+        generation_status[task_id] = {
+            "status": "queued",
+            "progress": 0,
+            "message": "Waiting for GPU (another generation in progress)...",
+            "output_path": None,
+        }
+        gpu_lock.acquire()
+
+    try:
+        logging.info(f"Starting FLUX generation task: {task_id}")
+        generation_status[task_id] = {
+            "status": "processing",
+            "progress": 0.02,
+            "message": "Switching to FLUX model...",
+            "output_path": None,
+        }
+
+        ensure_model_loaded('flux')
+
+        generation_status[task_id]["progress"] = 0.1
+        generation_status[task_id]["message"] = "Preparing FLUX generation..."
+
+        seed = params["seed"]
+        if seed < 0:
+            seed = random.randint(0, 2**31 - 1)
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        logging.info(f"Starting FLUX.2-klein generation: seed={seed}, steps={params['num_inference_steps']}")
+
+        generation_status[task_id]["progress"] = 0.15
+        generation_status[task_id]["message"] = "Generating image..."
+
+        generator = torch.Generator(device=f'cuda:{LOCAL_RANK}').manual_seed(seed)
+        image = flux_pipeline(
+            prompt=params["prompt"],
+            height=720,
+            width=1280,
+            guidance_scale=params["guidance_scale"],
+            num_inference_steps=params["num_inference_steps"],
+            generator=generator,
+        ).images[0]
+
+        generation_status[task_id]["progress"] = 0.7
+        generation_status[task_id]["message"] = "Saving image..."
+
+        # Save original image
+        image_path = str(OUTPUT_DIR / f"flux_{timestamp}.png")
+        image.save(image_path)
+        final_path = f"/outputs/flux_{timestamp}.png"
+        upscaled_path = None
+
+        # Upscale if requested
+        if params.get("upscale", True) and os.path.exists(REALESRGAN_MODEL_PATH):
+            generation_status[task_id]["progress"] = 0.75
+            generation_status[task_id]["message"] = "Upscaling with Real-ESRGAN x2..."
+            try:
+                import cv2
+                import numpy as np
+                cv2_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                esrgan = get_upsampler()
+                output, _ = esrgan.enhance(cv2_image, outscale=2)
+                upscaled_filename = f"flux_{timestamp}_x2.png"
+                upscaled_file_path = str(OUTPUT_DIR / upscaled_filename)
+                cv2.imwrite(upscaled_file_path, output)
+                upscaled_path = f"/outputs/{upscaled_filename}"
+                logging.info(f"Upscaled image saved: {upscaled_file_path}")
+            except Exception as up_err:
+                logging.warning(f"Upscaling failed: {up_err}")
+
+        # Cleanup
+        del image
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        generation_status[task_id] = {
+            "status": "completed",
+            "progress": 1.0,
+            "message": "FLUX generation completed!",
+            "output_path": final_path,
+            "upscaled_path": upscaled_path,
+            "seed": seed,
+        }
+
+    except Exception as e:
+        logging.error(f"FLUX generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        generation_status[task_id] = {
+            "status": "failed",
+            "progress": 0,
+            "message": str(e),
+            "output_path": None,
+        }
+    finally:
+        gpu_lock.release()
+
+
 # ============================================================================
 # API Endpoints
 # ============================================================================
@@ -639,6 +950,7 @@ async def health_check():
         "dtype": str(DTYPE),
         "model_loaded": pipeline is not None,
         "i2v_model_loaded": i2v_pipeline is not None,
+        "flux_model_loaded": flux_pipeline is not None,
         "active_model": active_model,
         "lora_enabled": LORA_STRENGTH > 0 and os.path.exists(LORA_CHECKPOINT_DIR),
         "lora_strength": LORA_STRENGTH,
@@ -667,7 +979,33 @@ async def get_config():
         "i2v_default_guidance": 5.0,
         "i2v_default_frame_num": 81,
         "i2v_default_shift": 5.0,
+        # LoRA info
+        "lora_adapters_available": any(os.path.exists(a["path"]) for a in LORA_ADAPTERS),
     }
+
+
+@app.get("/api/lora-adapters")
+async def get_lora_adapters(category: Optional[str] = None):
+    """List available LoRA adapters with metadata, optionally filtered by category."""
+    adapters = []
+    for a in LORA_ADAPTERS:
+        if category and a.get("category") != category:
+            continue
+        exists = os.path.exists(a["path"])
+        adapters.append({
+            "name": a["name"],
+            "category": a.get("category", "mov"),
+            "type": a["type"],
+            "available": exists,
+            "size_mb": round(os.path.getsize(a["path"]) / 1024 / 1024, 1) if exists else 0,
+            "default_high_weight": a["default_high_weight"],
+            "default_low_weight": a["default_low_weight"],
+            "description": a.get("description", ""),
+            "trigger_words": a.get("trigger_words", []),
+            "civitai_url": a.get("civitai_url", ""),
+            "preview_urls": a.get("preview_urls", []),
+        })
+    return {"adapters": adapters}
 
 
 @app.post("/api/upload/image")
@@ -912,6 +1250,107 @@ async def delete_video(filename: str):
         raise HTTPException(403, "Access denied")
     filepath.unlink()
     return {"message": f"Deleted {filename}"}
+
+
+@app.get("/api/t2i-status")
+async def t2i_status():
+    """Check if T2I (FLUX) model is available."""
+    return {
+        "available": True,
+        "model": "FLUX.2-klein-9B",
+        "upscale_available": os.path.exists(REALESRGAN_MODEL_PATH),
+        "message": "FLUX.2-klein-9B ready. 4-step generation. First use requires model download.",
+    }
+
+
+@app.post("/api/generate-flux")
+async def generate_flux(request: FluxGenerateRequest):
+    """Start FLUX image generation task."""
+    task_id = str(uuid.uuid4())
+
+    generation_status[task_id] = {
+        "status": "pending",
+        "progress": 0,
+        "message": "FLUX task queued",
+        "output_path": None,
+    }
+
+    executor.submit(generate_flux_task, task_id, request.dict())
+
+    return {"task_id": task_id}
+
+
+@app.delete("/api/outputs/{filename}")
+async def delete_output(filename: str):
+    """Delete a generated output (image or video)."""
+    filepath = OUTPUT_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(404, "File not found")
+    if filepath.resolve().parent != OUTPUT_DIR.resolve():
+        raise HTTPException(403, "Access denied")
+    filepath.unlink()
+    return {"message": f"Deleted {filename}"}
+
+
+@app.post("/api/extract-frame")
+async def extract_first_frame(video_path: str = Form(...)):
+    """Extract first frame from a video file and save as PNG."""
+    import cv2
+
+    if not os.path.exists(video_path):
+        raise HTTPException(404, "Video file not found")
+
+    cap = cv2.VideoCapture(video_path)
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret:
+        raise HTTPException(500, "Failed to read video frame")
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    frame_filename = f"{timestamp}_frame.png"
+    frame_path = UPLOAD_DIR / frame_filename
+
+    cv2.imwrite(str(frame_path), frame)
+
+    height, width = frame.shape[:2]
+
+    return {
+        "path": str(frame_path),
+        "url": f"/uploads/{frame_filename}",
+        "width": width,
+        "height": height,
+    }
+
+
+@app.get("/api/outputs")
+async def list_outputs():
+    """List all generated outputs (images and videos) for use as references."""
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+    VIDEO_EXTS = {".mp4", ".avi", ".mov", ".webm"}
+    outputs = []
+
+    for f in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        ext = f.suffix.lower()
+        if ext in IMAGE_EXTS or ext in VIDEO_EXTS:
+            stat = f.stat()
+            item = {
+                "filename": f.name,
+                "url": f"/outputs/{f.name}",
+                "path": str(f),
+                "type": "image" if ext in IMAGE_EXTS else "video",
+                "size": stat.st_size,
+                "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+            if ext in IMAGE_EXTS:
+                try:
+                    with Image.open(f) as img:
+                        item["width"], item["height"] = img.size
+                except Exception:
+                    item["width"], item["height"] = 0, 0
+            outputs.append(item)
+
+    return {"outputs": outputs, "total": len(outputs)}
 
 
 # ============================================================================

@@ -17,10 +17,12 @@ import torchvision.transforms.functional as TF
 from tqdm import tqdm
 
 from .distributed.fsdp import shard_model
-from .modules.clip import CLIPModel
+from .distributed.sequence_parallel import sp_attn_forward, sp_dit_forward
+from .distributed.util import get_world_size
+from .modules.animate import CLIPModel
 from .modules.model import WanModel
 from .modules.t5 import T5EncoderModel
-from .modules.vae import WanVAE
+from .modules.vae2_1 import Wan2_1_VAE
 from .utils.fm_solvers import (FlowDPMSolverMultistepScheduler,
                                get_sampling_sigmas, retrieve_timesteps)
 from .utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
@@ -37,7 +39,9 @@ class WanI2V:
         t5_fsdp=False,
         dit_fsdp=False,
         use_usp=False,
+        use_sp=False,
         t5_cpu=False,
+        t5_device_id=None,
         init_on_cpu=True,
     ):
         r"""
@@ -67,10 +71,18 @@ class WanI2V:
         self.config = config
         self.rank = rank
         self.use_usp = use_usp
+        self.use_sp = use_sp
         self.t5_cpu = t5_cpu
 
         self.num_train_timesteps = config.num_train_timesteps
         self.param_dtype = config.param_dtype
+
+        if t5_fsdp or dit_fsdp or use_sp or use_usp:
+            init_on_cpu = False
+
+        t5_device = torch.device('cpu')
+        if t5_device_id is not None and not t5_cpu:
+            t5_device = torch.device(f"cuda:{t5_device_id}")
 
         shard_fn = partial(shard_model, device_id=device_id)
         self.text_encoder = T5EncoderModel(
@@ -81,10 +93,12 @@ class WanI2V:
             tokenizer_path=os.path.join(checkpoint_dir, config.t5_tokenizer),
             shard_fn=shard_fn if t5_fsdp else None,
         )
+        if t5_device_id is not None and not t5_fsdp and not t5_cpu:
+            self.text_encoder.model.to(t5_device)
 
         self.vae_stride = config.vae_stride
         self.patch_size = config.patch_size
-        self.vae = WanVAE(
+        self.vae = Wan2_1_VAE(
             vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
             device=self.device)
 
@@ -95,14 +109,23 @@ class WanI2V:
                                          config.clip_checkpoint),
             tokenizer_path=os.path.join(checkpoint_dir, config.clip_tokenizer))
 
-        logging.info(f"Creating WanModel from {checkpoint_dir}")
-        self.model = WanModel.from_pretrained(checkpoint_dir)
+        # SVI Pro uses low_noise_model/high_noise_model subdirectories
+        model_dir = checkpoint_dir
+        if hasattr(config, 'low_noise_checkpoint'):
+            sub_dir = os.path.join(checkpoint_dir, config.low_noise_checkpoint)
+            if os.path.isdir(sub_dir):
+                model_dir = sub_dir
+        logging.info(f"Creating WanModel from {model_dir}")
+        self.model = WanModel.from_pretrained(model_dir)
         self.model.eval().requires_grad_(False)
 
-        if t5_fsdp or dit_fsdp or use_usp:
-            init_on_cpu = False
-
-        if use_usp:
+        if use_sp:
+            for block in self.model.blocks:
+                block.self_attn.forward = types.MethodType(
+                    sp_attn_forward, block.self_attn)
+            self.model.forward = types.MethodType(sp_dit_forward, self.model)
+            self.sp_size = get_world_size()
+        elif use_usp:
             from xfuser.core.distributed import \
                 get_sequence_parallel_world_size
 
@@ -136,7 +159,8 @@ class WanI2V:
                  guide_scale=5.0,
                  n_prompt="",
                  seed=-1,
-                 offload_model=True):
+                 offload_model=True,
+                 progress_callback=None):
         r"""
         Generates video frames from input image and text prompt using diffusion process.
 
@@ -283,7 +307,10 @@ class WanI2V:
                 torch.cuda.empty_cache()
 
             self.model.to(self.device)
-            for _, t in enumerate(tqdm(timesteps)):
+            for step_idx, t in enumerate(tqdm(timesteps)):
+                if progress_callback:
+                    step_progress = 0.1 + (step_idx / len(timesteps)) * 0.75
+                    progress_callback(step_progress, f"Step {step_idx + 1}/{len(timesteps)}")
                 latent_model_input = [latent.to(self.device)]
                 timestep = [t]
 

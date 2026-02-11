@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 WanAvatar - FastAPI Backend Server
-Based on Wan2.2-S2V-14B model
+S2V (Speech-to-Video) + I2V (Image-to-Video / SVI 2.0 Pro)
 """
 import os
 import sys
@@ -54,8 +54,9 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 CHECKPOINT_DIR = "/mnt/models/Wan2.2-S2V-14B"
+I2V_CHECKPOINT_DIR = "/mnt/models/Wan2.2-I2V-14B-A"
 LORA_CHECKPOINT_DIR = "/home/ubuntu/WanAvatar/output_lora_14B/checkpoint-50"
-LORA_STRENGTH = 0.5  # LoRA multiplier (0.0=off, 1.0=full)
+LORA_STRENGTH = 0.0  # LoRA multiplier (0.0=off, 1.0=full)
 
 # Device setup
 if torch.cuda.is_available():
@@ -65,8 +66,10 @@ else:
     DEVICE = "cpu"
     DTYPE = torch.float32
 
-# Global pipeline
-pipeline = None
+# Global pipelines
+pipeline = None       # S2V pipeline
+i2v_pipeline = None   # I2V pipeline
+active_model = None   # 's2v' or 'i2v' — tracks which model is on GPU
 generation_status = {}
 gpu_lock = threading.Lock()
 executor = ThreadPoolExecutor(max_workers=1)
@@ -86,7 +89,7 @@ def setup_distributed():
         torch.cuda.set_device(LOCAL_RANK)
         dist.init_process_group(
             backend='nccl',
-            timeout=datetime.timedelta(days=7),  # Worker waits indefinitely for commands
+            timeout=datetime.timedelta(days=7),
         )
         if WORLD_SIZE > 1:
             USE_SP = True
@@ -100,8 +103,8 @@ def setup_distributed():
 # ============================================================================
 app = FastAPI(
     title="WanAvatar API",
-    description="Speech-to-Video Generation API powered by Wan2.2-S2V-14B",
-    version="1.0.0",
+    description="S2V + I2V Video Generation API",
+    version="2.0.0",
 )
 
 # CORS middleware
@@ -124,7 +127,7 @@ if FRONTEND_DIR.exists():
 
 
 # ============================================================================
-# Models
+# Request Models
 # ============================================================================
 class GenerateRequest(BaseModel):
     image_path: str
@@ -142,6 +145,19 @@ class GenerateRequest(BaseModel):
     teacache_thresh: float = 0.15
 
 
+class I2VGenerateRequest(BaseModel):
+    image_path: str
+    prompt: str = "A cinematic video with natural motion, high quality"
+    negative_prompt: str = "ugly, blurry, low quality, distorted, deformed"
+    resolution: str = "720*1280"
+    frame_num: int = 81
+    inference_steps: int = 40
+    guidance_scale: float = 5.0
+    shift: float = 5.0
+    seed: int = -1
+    offload_model: bool = False
+
+
 class TaskStatus(BaseModel):
     task_id: str
     status: str  # pending, processing, completed, failed
@@ -155,17 +171,20 @@ class TaskStatus(BaseModel):
 # ============================================================================
 def load_pipeline():
     """Load Wan2.2 S2V pipeline."""
-    global pipeline
+    global pipeline, active_model
     if pipeline is not None:
+        if active_model != 's2v':
+            pipeline.noise_model.to(f'cuda:{LOCAL_RANK}')
+            pipeline.text_encoder.model.to(f'cuda:{LOCAL_RANK}')
+            active_model = 's2v'
         return pipeline
 
     logging.info(f"Loading Wan2.2-S2V-14B model (rank={LOCAL_RANK}, SP={USE_SP})...")
     cfg = WAN_CONFIGS['s2v-14B']
 
-    lora_dir = LORA_CHECKPOINT_DIR if os.path.exists(LORA_CHECKPOINT_DIR) else None
+    lora_dir = LORA_CHECKPOINT_DIR if (LORA_STRENGTH > 0 and os.path.exists(LORA_CHECKPOINT_DIR)) else None
 
     if USE_SP:
-        # SP mode: each rank loads full model on its own GPU
         pipeline = wan.WanS2V(
             config=cfg,
             checkpoint_dir=CHECKPOINT_DIR,
@@ -182,7 +201,6 @@ def load_pipeline():
         )
         dist.barrier()
     else:
-        # Single-process mode: DiT on GPU 0, T5 on GPU 1 (if available)
         num_gpus = torch.cuda.device_count()
         pipeline = wan.WanS2V(
             config=cfg,
@@ -199,8 +217,91 @@ def load_pipeline():
             init_on_cpu=False,
         )
 
-    logging.info(f"Model loaded successfully on rank {LOCAL_RANK}!")
+    active_model = 's2v'
+    logging.info(f"S2V model loaded successfully on rank {LOCAL_RANK}!")
     return pipeline
+
+
+def load_i2v_pipeline():
+    """Load Wan2.2 I2V pipeline."""
+    global i2v_pipeline, active_model
+    if i2v_pipeline is not None:
+        if active_model != 'i2v':
+            i2v_pipeline.model.to(f'cuda:{LOCAL_RANK}')
+            i2v_pipeline.text_encoder.model.to(f'cuda:{LOCAL_RANK}')
+            i2v_pipeline.clip.model.to(f'cuda:{LOCAL_RANK}')
+            active_model = 'i2v'
+        return i2v_pipeline
+
+    logging.info(f"Loading Wan2.2-I2V-14B-A model (rank={LOCAL_RANK}, SP={USE_SP})...")
+    cfg = WAN_CONFIGS['i2v-A14B']
+
+    if USE_SP:
+        i2v_pipeline = wan.WanI2V(
+            config=cfg,
+            checkpoint_dir=I2V_CHECKPOINT_DIR,
+            device_id=LOCAL_RANK,
+            rank=LOCAL_RANK,
+            t5_fsdp=False,
+            dit_fsdp=False,
+            use_sp=True,
+            t5_cpu=False,
+            t5_device_id=LOCAL_RANK,
+            init_on_cpu=False,
+        )
+        dist.barrier()
+    else:
+        num_gpus = torch.cuda.device_count()
+        i2v_pipeline = wan.WanI2V(
+            config=cfg,
+            checkpoint_dir=I2V_CHECKPOINT_DIR,
+            device_id=0,
+            rank=0,
+            t5_fsdp=False,
+            dit_fsdp=False,
+            use_sp=False,
+            t5_cpu=False,
+            t5_device_id=1 if num_gpus > 1 else 0,
+            init_on_cpu=False,
+        )
+
+    active_model = 'i2v'
+    logging.info(f"I2V model loaded successfully on rank {LOCAL_RANK}!")
+    return i2v_pipeline
+
+
+def ensure_model_loaded(model_type: str):
+    """Ensure the requested model is on GPU. Swap if necessary."""
+    global active_model
+    if active_model == model_type:
+        return
+
+    logging.info(f"Swapping model: {active_model} -> {model_type}")
+
+    # Offload current model to CPU
+    if active_model == 's2v' and pipeline is not None:
+        logging.info("Moving S2V model to CPU...")
+        pipeline.noise_model.cpu()
+        pipeline.text_encoder.model.cpu()
+        torch.cuda.empty_cache()
+        gc.collect()
+    elif active_model == 'i2v' and i2v_pipeline is not None:
+        logging.info("Moving I2V model to CPU...")
+        i2v_pipeline.model.cpu()
+        i2v_pipeline.text_encoder.model.cpu()
+        i2v_pipeline.clip.model.cpu()
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    # Load requested model
+    if model_type == 's2v':
+        load_pipeline()
+    elif model_type == 'i2v':
+        load_i2v_pipeline()
+
+    if dist.is_initialized():
+        dist.barrier()
+    logging.info(f"Model swap complete. Active: {active_model}")
 
 
 def broadcast_generate_params(params):
@@ -223,7 +324,7 @@ def broadcast_generate_params(params):
 
 def worker_loop():
     """Worker loop for non-master ranks in SP mode."""
-    global pipeline
+    global pipeline, i2v_pipeline
     logging.info(f"Rank {LOCAL_RANK}: Entering worker loop...")
 
     while True:
@@ -231,16 +332,33 @@ def worker_loop():
         cmd = torch.tensor([0], dtype=torch.long, device=f'cuda:{LOCAL_RANK}')
         dist.broadcast(cmd, src=0)
 
-        if cmd.item() == 1:  # Generate
+        if cmd.item() == 1:  # S2V Generate
             params = broadcast_generate_params(None)
-            logging.info(f"Rank {LOCAL_RANK}: Starting generation...")
+            logging.info(f"Rank {LOCAL_RANK}: Starting S2V generation...")
             try:
                 pipeline.generate(**params)
-                logging.info(f"Rank {LOCAL_RANK}: Generation done.")
+                logging.info(f"Rank {LOCAL_RANK}: S2V generation done.")
             except Exception as e:
-                logging.error(f"Rank {LOCAL_RANK}: Generation error: {e}")
+                logging.error(f"Rank {LOCAL_RANK}: S2V generation error: {e}")
                 import traceback
                 traceback.print_exc()
+
+        elif cmd.item() == 2:  # I2V Generate
+            params = broadcast_generate_params(None)
+            logging.info(f"Rank {LOCAL_RANK}: Swapping to I2V model...")
+            try:
+                ensure_model_loaded('i2v')
+                # Load image from path on each rank
+                image_path = params.pop('_image_path')
+                params['img'] = Image.open(image_path).convert('RGB')
+                logging.info(f"Rank {LOCAL_RANK}: Starting I2V generation...")
+                i2v_pipeline.generate(**params)
+                logging.info(f"Rank {LOCAL_RANK}: I2V generation done.")
+            except Exception as e:
+                logging.error(f"Rank {LOCAL_RANK}: I2V generation error: {e}")
+                import traceback
+                traceback.print_exc()
+
         elif cmd.item() == -1:  # Shutdown
             logging.info(f"Rank {LOCAL_RANK}: Shutting down.")
             break
@@ -250,7 +368,7 @@ def worker_loop():
 # Background Tasks
 # ============================================================================
 def generate_video_task(task_id: str, params: dict):
-    """Background task for video generation (runs in thread pool)."""
+    """Background task for S2V video generation (runs in thread pool)."""
     global pipeline, generation_status
 
     if not gpu_lock.acquire(blocking=False):
@@ -263,18 +381,16 @@ def generate_video_task(task_id: str, params: dict):
         gpu_lock.acquire()  # block until GPU is free
 
     try:
-        logging.info(f"Starting generation task: {task_id}")
+        logging.info(f"Starting S2V generation task: {task_id}")
         generation_status[task_id] = {
             "status": "processing",
-            "progress": 0.05,
-            "message": "Loading model...",
+            "progress": 0.02,
+            "message": "Switching to S2V model...",
             "output_path": None,
         }
 
-        logging.info("Loading pipeline...")
-        pipeline = load_pipeline()
+        ensure_model_loaded('s2v')
 
-        logging.info("Pipeline loaded successfully")
         generation_status[task_id]["progress"] = 0.1
         generation_status[task_id]["message"] = "Preparing generation..."
 
@@ -292,7 +408,7 @@ def generate_video_task(task_id: str, params: dict):
             max_area = MAX_AREA_CONFIGS.get(params["resolution"], 720 * 1280)
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        logging.info(f"Starting generation with resolution {params['resolution']}, max_area={max_area}")
+        logging.info(f"Starting S2V generation with resolution {params['resolution']}, max_area={max_area}")
 
         # Progress callback for real-time updates
         def progress_callback(progress, message):
@@ -324,7 +440,7 @@ def generate_video_task(task_id: str, params: dict):
             teacache_thresh=params.get("teacache_thresh", 0.15),
         )
 
-        # Signal SP workers to start generation
+        # Signal SP workers to start S2V generation
         if USE_SP:
             cmd = torch.tensor([1], dtype=torch.long, device=f'cuda:{LOCAL_RANK}')
             dist.broadcast(cmd, src=0)
@@ -340,7 +456,6 @@ def generate_video_task(task_id: str, params: dict):
         from wan.utils.utils import save_videos_grid
 
         video_path = str(OUTPUT_DIR / f"{timestamp}.mp4")
-        # video shape: [C, T, H, W] -> add batch dim [1, C, T, H, W]
         save_videos_grid(video[None], video_path, rescale=True, fps=16)
 
         generation_status[task_id]["progress"] = 0.9
@@ -382,7 +497,116 @@ def generate_video_task(task_id: str, params: dict):
         }
 
     except Exception as e:
-        logging.error(f"Generation failed: {e}")
+        logging.error(f"S2V generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        generation_status[task_id] = {
+            "status": "failed",
+            "progress": 0,
+            "message": str(e),
+            "output_path": None,
+        }
+    finally:
+        gpu_lock.release()
+
+
+def generate_i2v_task(task_id: str, params: dict):
+    """Background task for I2V video generation."""
+    global i2v_pipeline, generation_status
+
+    if not gpu_lock.acquire(blocking=False):
+        generation_status[task_id] = {
+            "status": "queued",
+            "progress": 0,
+            "message": "Waiting for GPU (another generation in progress)...",
+            "output_path": None,
+        }
+        gpu_lock.acquire()
+
+    try:
+        logging.info(f"Starting I2V generation task: {task_id}")
+        generation_status[task_id] = {
+            "status": "processing",
+            "progress": 0.02,
+            "message": "Switching to I2V model...",
+            "output_path": None,
+        }
+
+        ensure_model_loaded('i2v')
+
+        generation_status[task_id]["progress"] = 0.1
+        generation_status[task_id]["message"] = "Preparing I2V generation..."
+
+        seed = params["seed"]
+        if seed < 0:
+            seed = random.randint(0, 2**31 - 1)
+
+        # Parse resolution
+        try:
+            res_parts = params["resolution"].split("*")
+            res_height, res_width = int(res_parts[0]), int(res_parts[1])
+            max_area = res_height * res_width
+        except:
+            max_area = 720 * 1280
+
+        # Load input image
+        img = Image.open(params["image_path"]).convert("RGB")
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        logging.info(f"Starting I2V generation with resolution {params['resolution']}, max_area={max_area}")
+
+        def progress_callback(progress, message):
+            generation_status[task_id]["progress"] = round(progress, 3)
+            generation_status[task_id]["message"] = message
+
+        gen_kwargs = dict(
+            input_prompt=params["prompt"],
+            img=img,
+            max_area=max_area,
+            frame_num=params["frame_num"],
+            shift=params["shift"],
+            sample_solver='unipc',
+            sampling_steps=params["inference_steps"],
+            guide_scale=params["guidance_scale"],
+            n_prompt=params["negative_prompt"],
+            seed=seed,
+            offload_model=params["offload_model"],
+        )
+
+        # Signal SP workers to start I2V generation
+        if USE_SP:
+            cmd = torch.tensor([2], dtype=torch.long, device=f'cuda:{LOCAL_RANK}')
+            dist.broadcast(cmd, src=0)
+            # Send kwargs without PIL Image — workers load from path
+            sp_kwargs = {k: v for k, v in gen_kwargs.items() if k != 'img'}
+            sp_kwargs['_image_path'] = params["image_path"]
+            broadcast_generate_params(sp_kwargs)
+
+        video = i2v_pipeline.generate(**gen_kwargs, progress_callback=progress_callback)
+
+        generation_status[task_id]["progress"] = 0.9
+        generation_status[task_id]["message"] = "Saving video..."
+
+        from wan.utils.utils import save_videos_grid
+        video_path = str(OUTPUT_DIR / f"i2v_{timestamp}.mp4")
+        save_videos_grid(video[None], video_path, rescale=True, fps=16)
+
+        final_path = f"/outputs/i2v_{timestamp}.mp4"
+
+        del video
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        generation_status[task_id] = {
+            "status": "completed",
+            "progress": 1.0,
+            "message": "I2V generation completed!",
+            "output_path": final_path,
+            "seed": seed,
+        }
+
+    except Exception as e:
+        logging.error(f"I2V generation failed: {e}")
         import traceback
         traceback.print_exc()
         generation_status[task_id] = {
@@ -404,7 +628,7 @@ async def root():
     index_file = FRONTEND_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
-    return {"message": "WanAvatar API", "version": "1.0.0", "docs": "/docs"}
+    return {"message": "WanAvatar API", "version": "2.0.0", "docs": "/docs"}
 
 
 @app.get("/api/health")
@@ -414,11 +638,14 @@ async def health_check():
         "device": DEVICE,
         "dtype": str(DTYPE),
         "model_loaded": pipeline is not None,
-        "lora_enabled": os.path.exists(LORA_CHECKPOINT_DIR),
-        "lora_checkpoint": LORA_CHECKPOINT_DIR if os.path.exists(LORA_CHECKPOINT_DIR) else None,
+        "i2v_model_loaded": i2v_pipeline is not None,
+        "active_model": active_model,
+        "lora_enabled": LORA_STRENGTH > 0 and os.path.exists(LORA_CHECKPOINT_DIR),
+        "lora_strength": LORA_STRENGTH,
         "gpu_busy": gpu_lock.locked(),
         "sequence_parallel": USE_SP,
         "world_size": WORLD_SIZE,
+        "i2v_available": os.path.exists(os.path.join(I2V_CHECKPOINT_DIR, "low_noise_model", "config.json")),
         "has_moviepy": HAS_MOVIEPY,
         "has_audio_separator": HAS_AUDIO_SEPARATOR,
     }
@@ -434,6 +661,12 @@ async def get_config():
         "default_frames": 80,
         "default_use_teacache": False,
         "default_teacache_thresh": 0.15,
+        # I2V defaults
+        "i2v_available": os.path.exists(os.path.join(I2V_CHECKPOINT_DIR, "low_noise_model", "config.json")),
+        "i2v_default_steps": 40,
+        "i2v_default_guidance": 5.0,
+        "i2v_default_frame_num": 81,
+        "i2v_default_shift": 5.0,
     }
 
 
@@ -508,7 +741,7 @@ async def upload_video(file: UploadFile = File(...)):
 
 @app.post("/api/generate")
 async def generate_video(request: GenerateRequest):
-    """Start video generation task (async, runs in thread pool)."""
+    """Start S2V video generation task."""
     task_id = str(uuid.uuid4())
 
     generation_status[task_id] = {
@@ -519,6 +752,27 @@ async def generate_video(request: GenerateRequest):
     }
 
     executor.submit(generate_video_task, task_id, request.dict())
+
+    return {"task_id": task_id}
+
+
+@app.post("/api/generate-i2v")
+async def generate_i2v(request: I2VGenerateRequest):
+    """Start I2V video generation task."""
+    i2v_model_path = os.path.join(I2V_CHECKPOINT_DIR, "low_noise_model", "config.json")
+    if not os.path.exists(i2v_model_path):
+        raise HTTPException(503, "I2V model not available. Download Wan2.2-I2V-A14B first.")
+
+    task_id = str(uuid.uuid4())
+
+    generation_status[task_id] = {
+        "status": "pending",
+        "progress": 0,
+        "message": "I2V task queued",
+        "output_path": None,
+    }
+
+    executor.submit(generate_i2v_task, task_id, request.dict())
 
     return {"task_id": task_id}
 
@@ -675,14 +929,15 @@ if __name__ == "__main__":
     setup_distributed()
 
     logging.info("Starting WanAvatar API Server...")
-    logging.info(f"Checkpoint directory: {CHECKPOINT_DIR}")
+    logging.info(f"S2V checkpoint: {CHECKPOINT_DIR}")
+    logging.info(f"I2V checkpoint: {I2V_CHECKPOINT_DIR} (available={os.path.exists(I2V_CHECKPOINT_DIR)})")
     logging.info(f"Device: {DEVICE}, Dtype: {DTYPE}")
     logging.info(f"Sequence Parallel: {USE_SP}, World Size: {WORLD_SIZE}")
 
-    # Eager-load pipeline so all ranks load together
-    logging.info("Loading pipeline at startup...")
+    # Eager-load S2V pipeline so all ranks load together
+    logging.info("Loading S2V pipeline at startup...")
     load_pipeline()
-    logging.info("Pipeline ready!")
+    logging.info("S2V pipeline ready!")
 
     if USE_SP and LOCAL_RANK != 0:
         # Non-master ranks enter worker loop

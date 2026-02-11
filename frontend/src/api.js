@@ -41,6 +41,11 @@ export const startGeneration = async (params) => {
   return response.data;
 };
 
+export const startI2VGeneration = async (params) => {
+  const response = await api.post('/generate-i2v', params);
+  return response.data;
+};
+
 export const getTaskStatus = async (taskId) => {
   const response = await api.get(`/status/${taskId}`);
   return response.data;

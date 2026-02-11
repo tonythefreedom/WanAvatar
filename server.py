@@ -261,7 +261,7 @@ class FluxGenerateRequest(BaseModel):
     num_inference_steps: int = 4
     guidance_scale: float = 1.0
     seed: int = -1
-    upscale: bool = True
+    upscale: bool = False
     lora_weights: Optional[list] = None  # List of {name, weight}
 
 

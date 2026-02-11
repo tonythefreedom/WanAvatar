@@ -65,6 +65,9 @@ output_lora_14B/
 # Node modules
 node_modules/
 
+# Environment variables
+.env
+
 # Misc
 .DS_Store
 Thumbs.db

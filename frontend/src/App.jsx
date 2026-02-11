@@ -431,7 +431,7 @@ function App() {
   const [fluxSteps, setFluxSteps] = useState(4);
   const [fluxGuidance, setFluxGuidance] = useState(1.0);
   const [fluxSeed, setFluxSeed] = useState(-1);
-  const [fluxUpscale, setFluxUpscale] = useState(true);
+  const [fluxUpscale, setFluxUpscale] = useState(false);
   const [fluxIsGenerating, setFluxIsGenerating] = useState(false);
   const [fluxProgress, setFluxProgress] = useState(0);
   const [fluxStatus, setFluxStatus] = useState('');

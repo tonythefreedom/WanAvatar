@@ -113,7 +113,7 @@ const translations = {
     imgGenNoImages: 'No images uploaded yet',
     // FLUX
     fluxPromptLabel: 'Prompt',
-    fluxPromptDefault: 'A hyper-realistic portrait, natural lighting, 8k',
+    fluxPromptDefault: 'K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\n\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.',
     fluxStepsLabel: 'Inference Steps',
     fluxGuidanceLabel: 'Guidance Scale',
     fluxUpscaleLabel: 'Upscale x2 (Real-ESRGAN)',
@@ -215,7 +215,7 @@ const translations = {
     imgGenNoImages: '아직 업로드된 이미지가 없습니다',
     // FLUX
     fluxPromptLabel: '프롬프트',
-    fluxPromptDefault: '초현실적 인물 사진, 자연광, 8k',
+    fluxPromptDefault: 'K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\n\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.',
     fluxStepsLabel: '추론 스텝',
     fluxGuidanceLabel: '가이던스 스케일',
     fluxUpscaleLabel: '업스케일 x2 (Real-ESRGAN)',
@@ -317,7 +317,7 @@ const translations = {
     imgGenNoImages: '尚未上传图片',
     // FLUX
     fluxPromptLabel: '提示词',
-    fluxPromptDefault: '超写实人像照片，自然光线，8k',
+    fluxPromptDefault: 'K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\n\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.',
     fluxStepsLabel: '推理步数',
     fluxGuidanceLabel: '引导比例',
     fluxUpscaleLabel: '放大 x2 (Real-ESRGAN)',
@@ -427,7 +427,7 @@ function App() {
   const [t2iMessage, setT2iMessage] = useState('');
 
   // FLUX generation state
-  const [fluxPrompt, setFluxPrompt] = useState('K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.');
+  const [fluxPrompt, setFluxPrompt] = useState('K-pop idol, young Korean female, symmetrical face, V-shaped jawline, clear glass skin, double eyelids, trendy idol makeup.\n\nStage lighting, cinematic bokeh, pink and purple neon highlights, professional studio portrait, high-end fashion editorial style.\n\n8k resolution, photorealistic, raw photo, masterwork, intricate details of eyes and hair.');
   const [fluxSteps, setFluxSteps] = useState(4);
   const [fluxGuidance, setFluxGuidance] = useState(1.0);
   const [fluxSeed, setFluxSeed] = useState(-1);

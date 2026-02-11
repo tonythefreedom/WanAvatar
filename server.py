@@ -860,7 +860,7 @@ def generate_flux_task(task_id: str, params: dict):
             seed = random.randint(0, 2**31 - 1)
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        logging.info(f"Starting FLUX.2-klein generation: seed={seed}, steps={params['num_inference_steps']}")
+        logging.info(f"Starting FLUX.2-klein-9B generation: seed={seed}, steps={params['num_inference_steps']}")
 
         generation_status[task_id]["progress"] = 0.15
         generation_status[task_id]["message"] = "Generating image..."

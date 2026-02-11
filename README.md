@@ -699,6 +699,21 @@ output_lora_14B/checkpoint-50/
 
 ## Changelog
 
+### 2026-02-11: FLUX.2-klein-9B 인증 및 기본값 설정
+
+**FLUX.2-klein-9B HuggingFace 인증:**
+
+- HuggingFace gated repo 접근을 위한 토큰 인증 설정
+- `.env`에 `HUGGINGFACE_TOKEN` 추가, `huggingface-cli login`으로 인증
+- FLUX.2-klein-9B는 gated 모델로 HuggingFace 라이센스 동의 + 토큰 필요
+
+**기본값 변경:**
+
+- FLUX 기본 프롬프트: K-pop idol portrait 프롬프트로 변경
+- Real-ESRGAN 업스케일: 기본 OFF (`upscale: false`)
+- guidance_scale: 1.0 (FLUX.2-klein-9B 최적값)
+- 3개 언어(EN/KO/ZH) 모두 동일 기본 프롬프트 적용
+
 ### 2026-02-11: 3단계 파이프라인 완성 (FLUX.2 + I2V + Real-ESRGAN)
 
 **FLUX.2-klein-9B 이미지 생성 (`server.py`, `App.jsx`):**

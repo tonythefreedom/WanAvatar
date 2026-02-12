@@ -138,6 +138,7 @@ const translations = {
     wfTrimStart: 'Start',
     wfTrimEnd: 'End',
     wfTrimApply: 'Apply Trim',
+    wfClearVideo: 'Clear',
     wfDuration: 'Duration',
     wfReplaceAudio: 'Replace Audio',
     wfTrimming: 'Trimming...',
@@ -337,6 +338,7 @@ const translations = {
     wfTrimStart: '시작',
     wfTrimEnd: '종료',
     wfTrimApply: '트림 적용',
+    wfClearVideo: '초기화',
     wfDuration: '길이',
     wfReplaceAudio: '오디오 교체',
     wfTrimming: '트리밍 중...',
@@ -536,6 +538,7 @@ const translations = {
     wfTrimStart: '开始',
     wfTrimEnd: '结束',
     wfTrimApply: '应用裁剪',
+    wfClearVideo: '清除',
     wfDuration: '时长',
     wfReplaceAudio: '替换音频',
     wfTrimming: '裁剪中...',
@@ -921,8 +924,14 @@ function App() {
   }, [activeMenu, authUser, fetchAdminUsers]);
 
   // Load config & LoRA adapters
+  // Load config (public endpoint — needed for google_client_id on login page)
   useEffect(() => {
     getConfig().then(res => setConfig(res.data)).catch(console.error);
+  }, []);
+
+  // Load app data after authentication
+  useEffect(() => {
+    if (!authUser) return;
 
     // Load mov-category LoRAs (for Video Gen page)
     getLoraAdapters('mov').then(data => {
@@ -998,7 +1007,7 @@ function App() {
       });
       setWorkflowStates(initStates);
     }).catch(console.error);
-  }, []);
+  }, [authUser]);
 
   // Workflow state helpers
   const updateWfState = useCallback((wfId, updates) => {
@@ -1600,6 +1609,29 @@ function App() {
     }
   };
 
+  const handleWfVideoClear = useCallback((wfId, key) => {
+    setWorkflowStates(prev => {
+      const wf = prev[wfId];
+      if (!wf) return prev;
+      const newFilePaths = { ...wf.filePaths };
+      const newPreviews = { ...wf.previews };
+      const newDuration = { ...wf.videoDuration };
+      const newTrimStart = { ...wf.trimStart };
+      const newTrimEnd = { ...wf.trimEnd };
+      const newPlayhead = { ...wf.playheadPosition };
+      delete newFilePaths[key];
+      delete newPreviews[key];
+      delete newDuration[key];
+      delete newTrimStart[key];
+      delete newTrimEnd[key];
+      delete newPlayhead[key];
+      return { ...prev, [wfId]: { ...wf,
+        filePaths: newFilePaths, previews: newPreviews, videoDuration: newDuration,
+        trimStart: newTrimStart, trimEnd: newTrimEnd, playheadPosition: newPlayhead,
+      }};
+    });
+  }, []);
+
   const handleWfAudioUpload = async (wfId, key, e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1870,6 +1902,12 @@ function App() {
           if (s.status === 'completed') {
             clearInterval(poll);
             updateWfState(wfId, { isGenerating: false, progress: 100, outputVideo: s.output_url, currentTaskId: null });
+            // Refresh avatar gallery for all workflows after fashion_change saves output to avatars
+            if (wfId === 'fashion_change') {
+              Object.keys(workflowStates).forEach(id => {
+                setWorkflowStates(prev => ({ ...prev, [id]: { ...prev[id], avatarGroups: [], avatarImages: {} } }));
+              });
+            }
           } else if (s.status === 'failed') {
             clearInterval(poll);
             updateWfState(wfId, { isGenerating: false, status: `Error: ${s.error || 'Failed'}`, currentTaskId: null });
@@ -2344,6 +2382,10 @@ function App() {
                         {t('download')}
                       </a>
                     </div>
+                    <button className="btn secondary trim-btn" style={{ width: '100%', marginTop: 6 }}
+                      onClick={() => handleWfVideoClear(wfId, inputDef.key)}>
+                      {t('wfClearVideo')}
+                    </button>
                   </div>
                 </div>
               )}
@@ -3144,8 +3186,8 @@ function App() {
                       <div className="column">
                         {wf.inputs.map(inputDef => renderWorkflowInput(wf.id, inputDef))}
 
-                        {/* YouTube Shorts metadata */}
-                        <div className="card yt-meta-card">
+                        {/* YouTube Shorts metadata — only for video-output workflows */}
+                        {wf.output_type !== 'image' && <div className="card yt-meta-card">
                           <h3>{t('ytMeta')}</h3>
                           <div className="yt-meta-fields">
                             <label className="yt-meta-label">{t('ytTitle')}
@@ -3167,7 +3209,7 @@ function App() {
                                 onChange={e => updateWfState(wf.id, { ytHashtags: e.target.value })} />
                             </label>
                           </div>
-                        </div>
+                        </div>}
 
                         <div className="wf-btn-row">
                           {wfState.isGenerating ? (
@@ -3191,7 +3233,6 @@ function App() {
                           <button
                             className="btn secondary"
                             onClick={() => handleWfQueueAdd(wf.id)}
-                            disabled={wfQueue[wf.id]?.isProcessing}
                             style={{ flex: 1 }}
                           >
                             {t('wfAddToQueue')}

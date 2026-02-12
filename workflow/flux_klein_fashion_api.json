@@ -1,7 +1,7 @@
 {
   "200": {
     "inputs": {
-      "model_name": "sam_vit_h_4b8939.pth"
+      "model_name": "sam_vit_h (2.56GB)"
     },
     "class_type": "SAMModelLoader (segment anything)",
     "_meta": {
@@ -203,31 +203,18 @@
   },
   "106:90": {
     "inputs": {
-      "noise_mask": true,
-      "positive": [
-        "106:79:77",
+      "samples": [
+        "106:79:78",
         0
-      ],
-      "negative": [
-        "106:79:76",
-        0
-      ],
-      "vae": [
-        "106:72",
-        0
-      ],
-      "pixels": [
-        "106:88",
-        1
       ],
       "mask": [
         "106:88",
         2
       ]
     },
-    "class_type": "InpaintModelConditioning",
+    "class_type": "SetLatentNoiseMask",
     "_meta": {
-      "title": "InpaintModelConditioning"
+      "title": "SetLatentNoiseMask"
     }
   },
   "106:85": {
@@ -264,7 +251,7 @@
   "106:84:77": {
     "inputs": {
       "conditioning": [
-        "106:90",
+        "106:79:77",
         0
       ],
       "latent": [
@@ -280,8 +267,8 @@
   "106:84:76": {
     "inputs": {
       "conditioning": [
-        "106:90",
-        1
+        "106:79:76",
+        0
       ],
       "latent": [
         "106:84:78",
@@ -393,7 +380,7 @@
       ],
       "latent_image": [
         "106:90",
-        2
+        0
       ]
     },
     "class_type": "SamplerCustomAdvanced",

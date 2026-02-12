@@ -150,6 +150,35 @@ WORKFLOW_REGISTRY = {
              "label": {"en": "Replace Audio (Optional)", "ko": "오디오 교체 (선택)", "zh": "替换音频（可选）"}},
         ],
     },
+    "fashion_change": {
+        "id": "fashion_change",
+        "display_name": {"en": "Fashion Change", "ko": "패션 체인지", "zh": "时尚换装"},
+        "description": {
+            "en": "Change avatar clothing using FLUX Klein inpainting. Auto-masks clothing area and replaces with new fashion style.",
+            "ko": "FLUX Klein 인페인팅으로 아바타 의상을 변경합니다. 옷 영역을 자동 마스킹하고 새로운 패션 스타일로 교체합니다.",
+            "zh": "使用FLUX Klein修复功能更换角色服装。自动遮罩服装区域并替换为新的时尚风格。",
+        },
+        "api_json": "flux_klein_fashion_api.json",
+        "output_type": "image",
+        "inputs": [
+            {"key": "avatar_image", "type": "image", "node_id": "76", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
+             "label": {"en": "Avatar Image", "ko": "아바타 이미지", "zh": "角色图片"}},
+            {"key": "clothing_ref", "type": "image", "node_id": "105", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": False,
+             "label": {"en": "Clothing Reference (Optional)", "ko": "의류 참조 이미지 (선택)", "zh": "服装参考图片（可选）"}},
+            {"key": "fashion_prompt", "type": "text", "node_id": "106:74", "field": "inputs.text",
+             "default": "Oversized graphic t-shirt with biker shorts and chunky sneakers",
+             "rows": 3,
+             "label": {"en": "Fashion Description", "ko": "패션 설명", "zh": "时尚描述"}},
+            {"key": "fashion_style", "type": "fashion_select",
+             "csv_path": "settings/fashion/s1.csv",
+             "label": {"en": "Fashion Style Presets", "ko": "패션 스타일 프리셋", "zh": "时尚风格预设"}},
+            {"key": "seed", "type": "number", "node_id": "113", "field": "inputs.value",
+             "default": -1, "min": -1, "max": 2147483647, "step": 1,
+             "label": {"en": "Seed (-1 = random)", "ko": "시드 (-1 = 랜덤)", "zh": "种子 (-1 = 随机)"}},
+        ],
+    },
     "wan_infinitalk": {
         "id": "wan_infinitalk",
         "display_name": {"en": "InfiniTalk (Unlimited Duration)", "ko": "인피니톡 (무제한 길이)", "zh": "InfiniTalk (无限时长)"},
@@ -213,35 +242,6 @@ WORKFLOW_REGISTRY = {
             {"key": "looping", "type": "toggle", "node_id": "434", "field": "inputs.boolean",
              "default": True,
              "label": {"en": "Looping Video", "ko": "루프 비디오", "zh": "循环视频"}},
-        ],
-    },
-    "fashion_change": {
-        "id": "fashion_change",
-        "display_name": {"en": "Fashion Change", "ko": "패션 체인지", "zh": "时尚换装"},
-        "description": {
-            "en": "Change avatar clothing using FLUX Klein inpainting. Auto-masks clothing area and replaces with new fashion style.",
-            "ko": "FLUX Klein 인페인팅으로 아바타 의상을 변경합니다. 옷 영역을 자동 마스킹하고 새로운 패션 스타일로 교체합니다.",
-            "zh": "使用FLUX Klein修复功能更换角色服装。自动遮罩服装区域并替换为新的时尚风格。",
-        },
-        "api_json": "flux_klein_fashion_api.json",
-        "output_type": "image",
-        "inputs": [
-            {"key": "avatar_image", "type": "image", "node_id": "76", "field": "inputs.image",
-             "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
-             "label": {"en": "Avatar Image", "ko": "아바타 이미지", "zh": "角色图片"}},
-            {"key": "clothing_ref", "type": "image", "node_id": "105", "field": "inputs.image",
-             "upload_to_comfyui": True, "required": False,
-             "label": {"en": "Clothing Reference (Optional)", "ko": "의류 참조 이미지 (선택)", "zh": "服装参考图片（可选）"}},
-            {"key": "fashion_prompt", "type": "text", "node_id": "106:74", "field": "inputs.text",
-             "default": "Oversized graphic t-shirt with biker shorts and chunky sneakers",
-             "rows": 3,
-             "label": {"en": "Fashion Description", "ko": "패션 설명", "zh": "时尚描述"}},
-            {"key": "fashion_style", "type": "fashion_select",
-             "csv_path": "settings/fashion/s1.csv",
-             "label": {"en": "Fashion Style Presets", "ko": "패션 스타일 프리셋", "zh": "时尚风格预设"}},
-            {"key": "seed", "type": "number", "node_id": "113", "field": "inputs.value",
-             "default": -1, "min": -1, "max": 2147483647, "step": 1,
-             "label": {"en": "Seed (-1 = random)", "ko": "시드 (-1 = 랜덤)", "zh": "种子 (-1 = 随机)"}},
         ],
     },
 }
@@ -556,7 +556,7 @@ async def on_startup():
 
 def create_jwt_token(user_id: int, email: str, role: str) -> str:
     return pyjwt.encode(
-        {"sub": user_id, "email": email, "role": role,
+        {"sub": str(user_id), "email": email, "role": role,
          "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=JWT_EXPIRY_HOURS)},
         JWT_SECRET, algorithm=JWT_ALGORITHM,
     )
@@ -564,7 +564,9 @@ def create_jwt_token(user_id: int, email: str, role: str) -> str:
 
 def decode_jwt_token(token: str) -> dict:
     try:
-        return pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload["sub"] = int(payload["sub"])
+        return payload
     except pyjwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
     except pyjwt.InvalidTokenError:
@@ -2000,6 +2002,12 @@ async def trim_video(request: TrimVideoRequest, user=Depends(get_current_user)):
         ], capture_output=True, text=True, timeout=30)
         duration = float(probe.stdout.strip()) if probe.returncode == 0 else (request.end - request.start)
 
+        # Delete original file after successful trim
+        original = os.path.abspath(request.video_path)
+        trimmed = os.path.abspath(trimmed_path)
+        if original != trimmed and os.path.exists(original):
+            os.remove(original)
+
         filename = os.path.basename(trimmed_path)
         return {
             "path": trimmed_path,
@@ -2224,12 +2232,13 @@ def ensure_comfyui_running():
         raise Exception(f"ComfyUI not installed at {COMFYUI_DIR}")
 
     logging.info("Starting ComfyUI server...")
+    comfyui_log = open("/tmp/comfyui.log", "w")
     comfyui_process = subprocess.Popen(
         [sys.executable, str(COMFYUI_DIR / "main.py"),
          "--listen", "127.0.0.1", "--port", "8188",
          "--disable-auto-launch", "--preview-method", "none"],
         cwd=str(COMFYUI_DIR),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdout=comfyui_log, stderr=comfyui_log,
     )
     for _ in range(180):
         try:
@@ -2354,7 +2363,17 @@ def merge_audio_to_video(video_path: str, audio_source_path: str) -> str:
     """
     import subprocess
 
+    # Only merge audio into video files
+    VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+    if os.path.splitext(video_path)[1].lower() not in VIDEO_EXTS:
+        logging.warning(f"Skipping audio merge: not a video file ({video_path})")
+        return video_path
+
     output_path = video_path.replace(".mp4", "_audio.mp4")
+    # Safety: ensure output_path differs from input
+    if output_path == video_path:
+        base, ext = os.path.splitext(video_path)
+        output_path = f"{base}_audio{ext}"
 
     try:
         result = subprocess.run([
@@ -2562,10 +2581,10 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             # Remove clothing reference nodes
             for nid in ["105", "106:85", "106:84:78", "106:84:77", "106:84:76"]:
                 workflow.pop(nid, None)
-            # CFGGuider now gets conditioning directly from InpaintModelConditioning
+            # CFGGuider gets conditioning from cropped-image ReferenceLatent nodes
             if "106:63" in workflow:
-                workflow["106:63"]["inputs"]["positive"] = ["106:90", 0]
-                workflow["106:63"]["inputs"]["negative"] = ["106:90", 1]
+                workflow["106:63"]["inputs"]["positive"] = ["106:79:77", 0]
+                workflow["106:63"]["inputs"]["negative"] = ["106:79:76", 0]
             logging.info("Fashion change: text-only mode (no clothing reference image)")
         else:
             logging.info(f"Fashion change: reference mode with clothing image: {clothing_ref}")
@@ -2769,6 +2788,9 @@ def workflow_generate_task(task_id: str, params: dict):
         generation_status[task_id].update({"progress": 0.05, "message": "Starting ComfyUI..."})
         ensure_comfyui_running()
 
+        # Save original avatar path before ComfyUI upload overwrites it
+        original_avatar_path = user_inputs.get("avatar_image", "") or user_inputs.get("ref_image", "")
+
         # Step 3: Upload files to ComfyUI as needed
         for input_def in wf_config["inputs"]:
             key = input_def["key"]
@@ -2799,16 +2821,17 @@ def workflow_generate_task(task_id: str, params: dict):
         generation_status[task_id].update({"progress": 0.92, "message": "Retrieving output..."})
         output_path = retrieve_comfyui_output(prompt_id)
 
-        # Step 8: Post-processing — merge audio
+        # Step 8: Post-processing — merge audio (video outputs only)
         # Priority: custom_audio > reference video audio
         custom_audio = params.get("_custom_audio_path")
         ref_video_original = params.get("_ref_video_original")
         abs_output = str(OUTPUT_DIR / os.path.basename(output_path))
-        if custom_audio and os.path.exists(custom_audio):
+        is_video_output = os.path.splitext(output_path)[1].lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+        if is_video_output and custom_audio and os.path.exists(custom_audio):
             generation_status[task_id].update({"progress": 0.95, "message": "Merging custom audio..."})
             merge_audio_to_video(abs_output, custom_audio)
             logging.info(f"Custom audio merged: {custom_audio}")
-        elif ref_video_original and os.path.exists(ref_video_original):
+        elif is_video_output and ref_video_original and os.path.exists(ref_video_original):
             generation_status[task_id].update({"progress": 0.95, "message": "Merging audio from reference video..."})
             merge_audio_to_video(abs_output, ref_video_original)
             logging.info(f"Audio merged from reference video: {ref_video_original}")
@@ -2874,6 +2897,44 @@ def workflow_generate_task(task_id: str, params: dict):
                 loop.close()
             except Exception as db_err:
                 logging.error(f"Failed to record output to DB: {db_err}")
+
+        # Step 10: For fashion_change, save output image to avatar directory
+        if workflow_id == "fashion_change" and _user_id and output_path and os.path.exists(abs_output):
+            try:
+                import shutil
+                import json as json_mod2
+                # Determine avatar group from the original avatar path (before ComfyUI upload)
+                src_avatar = original_avatar_path
+                avatar_group = None
+                if "avatars/" in src_avatar:
+                    parts = src_avatar.split("avatars/")
+                    if len(parts) > 1:
+                        avatar_group = parts[1].split("/")[0]
+                if not avatar_group:
+                    avatar_group = "fashion"  # fallback group
+                logging.info(f"Fashion auto-save: src_avatar={src_avatar}, group={avatar_group}")
+
+                avatar_dir = AVATARS_DIR / avatar_group
+                avatar_dir.mkdir(parents=True, exist_ok=True)
+
+                # Generate unique filename: fashion_{timestamp}{ext}
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                ext = os.path.splitext(abs_output)[1] or ".png"
+                avatar_fn = f"fashion_{ts}{ext}"
+                avatar_fp = str(avatar_dir / avatar_fn)
+
+                shutil.copy2(abs_output, avatar_fp)
+                logging.info(f"Fashion output saved to avatar: {avatar_fp}")
+
+                # Record in DB as avatar
+                loop2 = _aio.new_event_loop()
+                meta = json_mod2.dumps({"group": avatar_group})
+                loop2.run_until_complete(record_user_file(
+                    _user_id, "avatar", avatar_fn, avatar_fp, avatar_fn, meta
+                ))
+                loop2.close()
+            except Exception as av_err:
+                logging.error(f"Failed to save fashion output to avatar dir: {av_err}")
 
         generation_status[task_id].update({
             "status": "completed", "progress": 1.0,
@@ -2949,6 +3010,7 @@ async def list_workflows(user=Depends(get_current_user)):
                 "display_name": wf["display_name"],
                 "description": wf["description"],
                 "inputs": wf["inputs"],
+                "output_type": wf.get("output_type", "video"),
             })
     return {"workflows": result}
 

@@ -119,7 +119,7 @@ class WanI2V:
             if os.path.isdir(sub_dir):
                 model_dir = sub_dir
         logging.info(f"Creating WanModel from {model_dir}")
-        self.model = WanModel.from_pretrained(model_dir)
+        self.model = WanModel.from_pretrained(model_dir, torch_dtype=self.param_dtype)
         self.model.eval().requires_grad_(False)
 
         if multi_lora_configs:
@@ -368,8 +368,21 @@ class WanI2V:
         if offload_model:
             self.clip.model.cpu()
 
+        # Offload DiT to CPU before VAE encode — DiT + VAE together exceed GPU memory
+        self.model.cpu()
+        gc.collect()
+        torch.cuda.empty_cache()
+
         y = self.vae.encode([torch.concat([torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode='bicubic').transpose(0, 1), torch.zeros(3, 80, h, w)],dim=1).to(self.device)])[0]
         y = torch.concat([msk, y])
+
+        # Offload all encoders before diffusion loop — only DiT is needed
+        if not self.t5_cpu:
+            self.text_encoder.model.cpu()
+        self.clip.model.cpu()
+        self.vae.model.cpu()
+        gc.collect()
+        torch.cuda.empty_cache()
 
         @contextmanager
         def noop_no_sync():
@@ -468,11 +481,14 @@ class WanI2V:
                 x0 = [latent.to(self.device)]
                 del latent_model_input, timestep
 
-            if offload_model:
-                self.model.cpu()
-                torch.cuda.empty_cache()
+            # Always offload DiT before VAE decode — with SP + Multi-LoRA,
+            # the DiT consumes most of GPU memory and VAE decode needs headroom
+            self.model.cpu()
+            gc.collect()
+            torch.cuda.empty_cache()
 
             if self.rank == 0:
+                self.vae.model.to(self.device)
                 videos = self.vae.decode(x0)
 
         del noise, latent

@@ -35,7 +35,9 @@ AI 아바타 비디오 생성 파이프라인 — 텍스트, 이미지, 음성�
 - **자동 분할 생성**: 긴 오디오를 자동으로 ~5초 세그먼트로 분할, Auto-Regressive 방식으로 연결
 - **GPU 모델 스왑**: 3개 모델(S2V, I2V, FLUX)이 GPU VRAM 공유, 자동 CPU 오프로드
 - **속도 최적화**: UniPC 솔버 (25 steps) + infer_frames 80 + TeaCache (0.15 threshold)
-- **갤러리**: 이미지/비디오 탭 분리, 삭제 기능
+- **ComfyUI 워크플로우**: 외부 ComfyUI 서버와 연동, 워크플로우별 동적 UI 자동 생성
+- **YouTube 다운로드**: 워크플로우 입력용 YouTube 비디오 자동 다운로드
+- **갤러리**: 이미지/비디오 탭 분리, 삭제 기능, 워크플로우용 다중 선택
 - **FastAPI 서버**: REST API 기반 생성 서버 + React 프론트엔드
 - **다국어 UI**: 한국어, 영어, 중국어 지원
 - **LoRA 파인튜닝**: 특정 인물에 대한 립싱크 품질 향상
@@ -219,6 +221,11 @@ curl -s http://localhost:8000/api/status/$TASK_ID | python3 -m json.tool
 | `/api/separate-vocals` | POST | 보컬 분리 |
 | `/api/config` | GET | 서버 설정 |
 | `/api/health` | GET | 서버 상태 확인 (SP 상태 포함) |
+| `/api/workflows` | GET | ComfyUI 워크플로우 목록 |
+| `/api/workflow/generate` | POST | 워크플로우 실행 |
+| `/api/workflow/status` | GET | ComfyUI 연결 상태 확인 |
+| `/api/workflow/prepare-images` | POST | 갤러리 이미지를 워크플로우용 폴더로 복사 |
+| `/api/download-youtube` | POST | YouTube 비디오 다운로드 |
 
 ### 생성 파라미터
 
@@ -358,10 +365,13 @@ WanAvatar/
 ├── vocal_seperator.py        # 보컬 분리
 ├── frontend/                 # React 프론트엔드
 │   ├── src/
-│   │   ├── App.jsx           # 3페이지 UI (Image Gen, Video Gen, Gallery)
+│   │   ├── App.jsx           # 4페이지 UI (Video Gen, Lipsync, Workflow, Gallery)
 │   │   ├── App.css
 │   │   └── api.js            # API 클라이언트
 │   └── vite.config.js
+├── workflow/                 # ComfyUI 워크플로우
+│   ├── Change_character_V1.1_api.json   # 캐릭터 변경 워크플로우
+│   └── wan_fflf_auto_v2_api.json        # FFLF 자동 루프 워크플로우
 ├── lora_adpts/               # LoRA 어댑터 (자동 탐색)
 │   ├── mov/                  # 비디오 LoRA (character/, move/, camera/)
 │   └── img/                  # 이미지 LoRA (FLUX용)
@@ -698,6 +708,96 @@ output_lora_14B/checkpoint-50/
 - `/api/health` 응답에서 `lora_enabled`, `lora_checkpoint` 필드로 확인 가능
 
 ## Changelog
+
+### 2026-02-12: ComfyUI 워크플로우 통합 + LoRA UI 개선
+
+**ComfyUI 워크플로우 시스템 (`server.py`, `App.jsx`):**
+
+- ComfyUI 원격 실행 통합 — `WORKFLOW_REGISTRY`로 워크플로우 정의, `workflow/` 디렉토리에서 API JSON 자동 탐색
+- 워크플로우별 동적 UI 자동 생성: 이미지/비디오/텍스트/슬라이더/셀렉트/토글 입력 타입 지원
+- ComfyUI WebSocket 연결로 실시간 진행률 모니터링
+- 이미지 → ComfyUI 자동 업로드, 결과 비디오 자동 다운로드
+
+**등록된 워크플로우:**
+
+| 워크플로우 | 설명 |
+|-----------|------|
+| **Change Character V1.1** | 참조 비디오의 캐릭터를 사용자 이미지로 교체 (정면 사진 1장) |
+| **FFLF Auto Loop V2** | 이미지 시퀀스에서 듀얼 패스 샘플링으로 루핑 전환 비디오 생성 |
+
+**워크플로우 입력 기능:**
+
+- 비디오 입력: 파일 업로드 / YouTube URL 다운로드 전환 탭
+- 갤러리 선택: 기존 갤러리 이미지를 다중 선택하여 워크플로우 입력으로 사용
+- 비율 선택: Portrait (9:16) / Landscape (16:9) / Square (1:1)
+- YouTube 다운로드: URL 입력 → `yt-dlp`으로 자동 다운로드 후 입력으로 연결
+
+**새 API 엔드포인트:**
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/workflows` | GET | 사용 가능한 워크플로우 목록 |
+| `/api/workflow/generate` | POST | 워크플로우 실행 시작 |
+| `/api/workflow/status` | GET | ComfyUI 연결 상태 확인 |
+| `/api/workflow/prepare-images` | POST | 갤러리 이미지를 워크플로우용 폴더로 복사 |
+| `/api/download-youtube` | POST | YouTube 비디오 다운로드 |
+
+**LoRA UI 개선 (`App.jsx`, `App.css`):**
+
+- **트리거 워드 버튼**: 각 LoRA의 트리거 워드 태그에 `+` (프롬프트에 추가) / 클립보드 복사 버튼 추가
+- **다중 선택**: 같은 카테고리의 LoRA를 동시 적용 가능 (라디오 → 체크박스 전환)
+- **추천값 표시**: 각 LoRA 슬라이더 옆에 "추천: X.X" 배지 표시, 클릭 시 추천값으로 리셋
+- 다국어 지원 (EN/KO/ZH): 트리거 워드 복사/추가, 다중 선택, 추천값 관련 번역 추가
+
+### 2026-02-12: I2V LoRA 버그 수정 (GGUF + diffusers WanImageToVideoPipeline)
+
+**I2V 파이프라인 전환:**
+
+- 커스텀 WanI2V 클래스 → `diffusers.WanImageToVideoPipeline` + GGUF Q4_K_M 양자화 전환
+- `WanTransformer3DModel.from_single_file()` + `GGUFQuantizationConfig(compute_dtype=bfloat16)`
+- HighNoise (transformer) + LowNoise (transformer_2) MoE 구조 유지
+- 모델 크기: ~9.65GB/expert (Q4_K_M), 총 ~20GB (기존 ~28GB fp8 대비 절감)
+
+**LoRA 3중 버그 수정 (`server.py`):**
+
+1. **`LORA_SCALE_CORRECTION` 32배 과보정 제거**: diffusers가 Kohya LoRA 변환 시 `alpha/rank`를 가중치에 직접 bake → PEFT에서 `lora_alpha=rank`, scaling=1.0. `set_adapters(weight=1.0)` = ComfyUI strength 1.0. 불필요한 `rank/alpha` 보정이 32배 과도한 weight를 만들어 영상 픽셀 깨짐 유발
+2. **`set_adapters(..., component="transformer_2")` 잘못된 파라미터 제거**: `LoraBaseMixin.set_adapters()`는 `component` 인자를 받지 않음. `WanLoraLoaderMixin`이 `_lora_loadable_modules = ["transformer", "transformer_2"]`를 순회하며 각 transformer에 존재하는 adapter만 자동 활성화
+3. **`set_adapters` 이중 호출 → 단일 호출**: 첫 번째 호출에서 high adapters만 지정하면 transformer_2의 low adapters가 전부 비활성화됨 → HIGH + LOW 어댑터를 하나의 리스트로 합쳐서 단일 호출
+
+**수정된 LoRA 활성화 흐름:**
+
+```python
+i2v_pipeline.disable_lora()  # 모든 어댑터 비활성화
+if all_adapter_names:
+    i2v_pipeline.enable_lora()
+    # HIGH + LOW 합쳐서 단일 호출 — 파이프라인이 각 transformer에 자동 분배
+    i2v_pipeline.set_adapters(all_adapter_names, adapter_weights=all_adapter_weights)
+```
+
+**테스트 스크립트 (`test_i2v_lora.py`):**
+
+- 17프레임 (~1초) 빠른 LoRA 검증 스크립트
+- 테스트 시나리오: none (base), ulzzang, uka, both, hipsway
+- PEFT adapter debug (rank, alpha, scaling 출력)
+- 모든 테스트에서 정상 생성 확인
+
+### Troubleshooting
+
+**I2V 영상 픽셀 깨짐 (LoRA 적용 시):**
+
+- **원인**: `LORA_SCALE_CORRECTION`이 `rank/alpha` (=32)를 곱해 weight=32 전달 → 극심한 과보정
+- **확인**: PEFT debug에서 `scaling = lora_alpha / r` 값 확인. diffusers 변환 후 항상 1.0이어야 함
+- **해결**: `LORA_SCALE_CORRECTION` 완전 제거. 사용자 weight를 그대로 `set_adapters()`에 전달
+
+**`set_adapters` 호출 시 adapter 누락:**
+
+- **원인**: `set_adapters()`를 두 번 호출하면 첫 호출에서 나머지 transformer의 adapter가 비활성화
+- **해결**: HIGH + LOW adapter를 하나의 리스트로 합쳐 단일 `set_adapters()` 호출
+
+**GGUF 모델 + LoRA 테스트 시 CUDA OOM:**
+
+- 서버가 실행 중이면 S2V 모델이 GPU에 ~45GB 점유 → 테스트 스크립트 실행 불가
+- **해결**: 서버를 중지하거나 서버 API (`/api/generate-i2v`)로 테스트 요청
 
 ### 2026-02-11: FLUX.2-klein-9B 인증 및 기본값 설정
 

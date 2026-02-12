@@ -68,6 +68,7 @@ def sp_dit_forward(
     context,
     seq_len,
     y=None,
+    clip_fea=None,
 ):
     """
     x:              A list of videos each with shape [C, T, H, W].

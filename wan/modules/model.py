@@ -414,6 +414,7 @@ class WanModel(ModelMixin, ConfigMixin):
         context,
         seq_len,
         y=None,
+        clip_fea=None,
     ):
         r"""
         Forward pass through the diffusion model

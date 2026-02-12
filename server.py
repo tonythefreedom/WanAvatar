@@ -12,10 +12,15 @@ import logging
 import datetime
 import random
 import shutil
+import subprocess
 import threading
+import time as _time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
+
+import requests as http_requests
+import websocket as ws_client
 
 import pickle
 import torch
@@ -58,10 +63,122 @@ I2V_CHECKPOINT_DIR = "/mnt/models/Wan2.2-I2V-14B-A"
 LORA_CHECKPOINT_DIR = "/home/ubuntu/WanAvatar/output_lora_14B/checkpoint-50"
 LORA_STRENGTH = 0.0  # LoRA multiplier (0.0=off, 1.0=full)
 
+# I2V GGUF configuration (diffusers pipeline with Q4_K_M quantization)
+I2V_DIFFUSERS_DIR = "/mnt/models/Wan2.2-I2V-A14B-Diffusers"
+I2V_GGUF_DIR = "/mnt/models/Wan2.2-I2V-A14B-GGUF"
+I2V_GGUF_HIGH = os.path.join(I2V_GGUF_DIR, "HighNoise", "Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf")
+I2V_GGUF_LOW = os.path.join(I2V_GGUF_DIR, "LowNoise", "Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf")
+
 # FLUX configuration
 FLUX_MODEL_ID = "black-forest-labs/FLUX.2-klein-9B"
 FLUX_CACHE_DIR = "/mnt/models"
 REALESRGAN_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "RealESRGAN_x2plus.pth")
+
+# ComfyUI configuration
+COMFYUI_DIR = Path("/home/ubuntu/ComfyUI")
+COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188")
+COMFYUI_WS_URL = os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws")
+WORKFLOW_DIR = Path(__file__).parent / "workflow"
+
+# Workflow registry - defines available workflows and their input mappings
+WORKFLOW_REGISTRY = {
+    "change_character": {
+        "id": "change_character",
+        "display_name": {"en": "Change Character V1.1", "ko": "캐릭터 변경 V1.1", "zh": "角色替换 V1.1"},
+        "description": {
+            "en": "Replace a character in a reference video with your character image. Single front-facing photo needed.",
+            "ko": "참조 비디오의 캐릭터를 사용자 이미지로 교체합니다. 정면 사진 1장 필요.",
+            "zh": "将参考视频中的角色替换为您的角色图片。只需一张正面照片。",
+        },
+        "api_json": "Change_character_V1.1_api.json",
+        "inputs": [
+            {"key": "ref_image", "type": "image", "node_id": "91", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True,
+             "label": {"en": "Reference Image (Character)", "ko": "참조 이미지 (캐릭터)", "zh": "参考图片（角色）"}},
+            {"key": "ref_video", "type": "video", "node_id": "114", "field": "inputs.video",
+             "upload_to_comfyui": True, "required": True, "allow_youtube": True,
+             "label": {"en": "Reference Video (Motion)", "ko": "참조 비디오 (모션)", "zh": "参考视频（动作）"}},
+            {"key": "prompt", "type": "text", "node_id": "209", "field": "inputs.positive_prompt",
+             "default": "The character is dancing in the room", "rows": 4,
+             "label": {"en": "Scene Description", "ko": "장면 설명", "zh": "场景描述"}},
+            {"key": "aspect_ratio", "type": "select_buttons",
+             "node_ids": {"width": "123", "height": "124"},
+             "fields": {"width": "inputs.value", "height": "inputs.value"},
+             "default": "portrait",
+             "label": {"en": "Aspect Ratio", "ko": "비율", "zh": "比例"},
+             "options": [
+                 {"value": "portrait", "label": {"en": "Portrait (9:16)", "ko": "세로 (9:16)", "zh": "竖屏 (9:16)"}, "params": {"width": 480, "height": 832}},
+                 {"value": "landscape", "label": {"en": "Landscape (16:9)", "ko": "가로 (16:9)", "zh": "横屏 (16:9)"}, "params": {"width": 832, "height": 480}},
+                 {"value": "square", "label": {"en": "Square (1:1)", "ko": "정사각 (1:1)", "zh": "正方形 (1:1)"}, "params": {"width": 640, "height": 640}},
+             ]},
+        ],
+    },
+    "wan_infinitalk": {
+        "id": "wan_infinitalk",
+        "display_name": {"en": "InfiniTalk (Unlimited Duration)", "ko": "인피니톡 (무제한 길이)", "zh": "InfiniTalk (无限时长)"},
+        "description": {
+            "en": "Image + Audio → unlimited duration narration/presentation video using Wan2.2 I2V + InfiniTalk patch.",
+            "ko": "이미지 + 오디오 → 무제한 길이 나레이션/프리젠테이션 비디오 (Wan2.2 I2V + InfiniTalk 패치).",
+            "zh": "图片 + 音频 → 无限时长旁白/演示视频 (Wan2.2 I2V + InfiniTalk 补丁)。",
+        },
+        "api_json": "wan_infinitalk_api.json",
+        "inputs": [
+            {"key": "image", "type": "image", "node_id": "97", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True,
+             "label": {"en": "Character/Scene Image", "ko": "캐릭터/장면 이미지", "zh": "角色/场景图片"}},
+            {"key": "audio", "type": "audio", "node_id": "168", "field": "inputs.audio",
+             "upload_to_comfyui": True, "required": True,
+             "label": {"en": "Narration Audio (WAV/MP3)", "ko": "나레이션 오디오 (WAV/MP3)", "zh": "旁白音频 (WAV/MP3)"}},
+            {"key": "prompt", "type": "text", "node_id": "215", "field": "inputs.prompt",
+             "default": "A person speaking naturally, clear expression, professional lighting", "rows": 4,
+             "label": {"en": "Scene Description", "ko": "장면 설명", "zh": "场景描述"}},
+            {"key": "length", "type": "number", "node_id": "206", "field": "inputs.value",
+             "default": 160, "min": 40, "max": 2000, "step": 1,
+             "label": {"en": "Frame Count (20fps)", "ko": "프레임 수 (20fps)", "zh": "帧数 (20fps)"},
+             "description": {"en": "Auto-calculated from audio: seconds × 20", "ko": "오디오에서 자동 계산: 초 × 20", "zh": "从音频自动计算: 秒 × 20"}},
+            {"key": "resolution", "type": "number", "node_id": "216", "field": "inputs.value",
+             "default": 1024, "min": 512, "max": 2048, "step": 64,
+             "label": {"en": "Long-edge Resolution", "ko": "장변 해상도", "zh": "长边分辨率"}},
+        ],
+    },
+    "fflf_auto_v2": {
+        "id": "fflf_auto_v2",
+        "display_name": {"en": "FFLF Auto Loop V2", "ko": "FFLF 자동 루프 V2", "zh": "FFLF 自动循环 V2"},
+        "description": {
+            "en": "Generate a looping transition video from an image sequence using dual-pass sampling.",
+            "ko": "이미지 시퀀스에서 듀얼 패스 샘플링으로 루핑 전환 비디오를 생성합니다.",
+            "zh": "使用双通道采样从图像序列生成循环过渡视频。",
+        },
+        "api_json": "wan_fflf_auto_v2_api.json",
+        "inputs": [
+            {"key": "images", "type": "gallery_select", "node_id": "278", "field": "inputs.folder_path",
+             "required": True,
+             "label": {"en": "Input Images", "ko": "입력 이미지", "zh": "输入图片"},
+             "description": {"en": "Select images from gallery", "ko": "갤러리에서 이미지 선택", "zh": "从画廊选择图片"}},
+            {"key": "positive_prompt", "type": "text", "node_id": "469", "field": "inputs.string_a",
+             "default": "This scene is based on the 24fps, accelerated, fast-motion, Best quality, futuristic 8k, 4k UHD, Realistic delicacy, vibrant.\nA beautiful videoclip of a dynamic lovely photomodel.", "rows": 6,
+             "label": {"en": "Master Prompt", "ko": "마스터 프롬프트", "zh": "主提示词"}},
+            {"key": "negative_prompt", "type": "text", "node_id": "170", "field": "inputs.text",
+             "default": "slow motion, gaudy, overexposed, blurred details, still image, low quality, cartoon, static", "rows": 4,
+             "label": {"en": "Negative Prompt", "ko": "네거티브 프롬프트", "zh": "负面提示词"}},
+            {"key": "segment_lengths", "type": "text", "node_id": "490", "field": "inputs.prompt",
+             "default": "33\n37\n33\n33", "rows": 4,
+             "label": {"en": "Segment Lengths (per line)", "ko": "세그먼트 길이 (줄당)", "zh": "段长度（每行）"}},
+            {"key": "initial_width", "type": "number", "node_id": "501", "field": "inputs.value",
+             "default": 288, "min": 64, "max": 2048, "step": 16,
+             "label": {"en": "Initial Width", "ko": "초기 너비", "zh": "初始宽度"}},
+            {"key": "upscale_factor", "type": "number", "node_id": "482", "field": "inputs.scale_factor",
+             "default": 2.5, "min": 1.0, "max": 4.0, "step": 0.5,
+             "label": {"en": "Upscale Factor", "ko": "업스케일 배율", "zh": "放大因子"}},
+            {"key": "seed", "type": "number", "node_ids": ["408", "409"], "field": "inputs.noise_seed",
+             "default": 138, "min": 0, "max": 2147483647, "step": 1,
+             "label": {"en": "Seed", "ko": "시드", "zh": "种子"}},
+            {"key": "looping", "type": "toggle", "node_id": "434", "field": "inputs.boolean",
+             "default": True,
+             "label": {"en": "Looping Video", "ko": "루프 비디오", "zh": "循环视频"}},
+        ],
+    },
+}
 
 # Multi-LoRA adapter configuration (Wan 2.2 High/Low Noise Mix strategy)
 LORA_ADAPTERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lora_adpts")
@@ -73,8 +190,11 @@ LORA_ADAPTERS = [
         "type": "character",
         "default_high_weight": 0.3,
         "default_low_weight": 0.85,
+        "alpha": 4.0,
+        "rank": 32,
         "description": "Korean woman character LoRA (Wan2.2, Seoullina v2.1). Generates Korean female characters with improved skin texture and natural physics.",
         "trigger_words": ["a korean woman"],
+        "semantic_tags": ["korean", "woman", "female", "asian", "natural", "realistic", "skin", "idol", "kpop"],
         "civitai_url": "https://civitai.com/models/1837542/wan22-korean-women",
         "preview_urls": [
             "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/3f1d4975-1614-43fb-a406-39dd194ef8e3/original=true/98613343.mp4",
@@ -82,19 +202,49 @@ LORA_ADAPTERS = [
         ],
     },
     {
-        "name": "EroticDance",
+        "name": "UlzzangG1",
         "category": "mov",
-        "path": os.path.join(LORA_ADAPTERS_DIR, "mov", "move", "EroticDance.safetensors"),
+        "path": os.path.join(LORA_ADAPTERS_DIR, "mov", "character", "UlzzangG1.safetensors"),
+        "type": "character",
+        "default_high_weight": 0.0,
+        "default_low_weight": 0.85,
+        "alpha": 1.0,
+        "rank": 32,
+        "description": "Beautiful Korean Ulzzang Girl (Wan 2.2 T2V-A14B). Creates consistent character with large eyes, pale skin, makeup and small full lips. Low noise only (0.7-1.0).",
+        "trigger_words": ["UlzzangG1", "a beautiful young korean woman with large eyes, pale skin, makeup and small full lips"],
+        "semantic_tags": ["korean", "ulzzang", "girl", "cute", "pale", "makeup", "beauty", "idol"],
+        "civitai_url": "https://civitai.com/models/2193272/beautiful-korean-ulzzang-girls-wan-22",
+        "preview_urls": [],
+    },
+    {
+        "name": "UkaSexyLight",
+        "category": "mov",
+        "path": os.path.join(LORA_ADAPTERS_DIR, "mov", "move", "wan22-uka-sexy-light.safetensors"),
         "type": "motion",
-        "default_high_weight": 0.8,
-        "default_low_weight": 0.2,
-        "description": "Erotic dance motion LoRA (Wan 2.1 14B T2V). Generates dance choreography with body movement. Optimized for 9:16 portrait format.",
-        "trigger_words": ["erotic dance", "ass swaying", "boobs bouncing", "hands waving"],
-        "civitai_url": "https://civitai.com/models/1609106/erotic-dance-wan-t2v",
-        "preview_urls": [
-            "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/b750d140-5f33-4392-ba97-d5d3f028ab3a/original=true/78532799.jpeg",
-            "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/71d794e2-5cc7-4840-94a3-7b8cc2396e20/original=true/79364943.jpeg",
-        ],
+        "default_high_weight": 1.0,
+        "default_low_weight": 0.0,
+        "alpha": 1.0,
+        "rank": 32,
+        "description": "Uka Sexy Light motion LoRA (Wan 2.2 T2V-A14B). Generates realistic video with bright colors and a slight blur, like a dream. Strength 0.5-1.8 recommended.",
+        "trigger_words": ["uka"],
+        "semantic_tags": ["sexy", "light", "dreamy", "blur", "warm", "sensual", "dance", "glow"],
+        "civitai_url": "https://civitai.com/models/1904858/wan22-uka-sexy-light",
+        "preview_urls": [],
+    },
+    {
+        "name": "HipSway",
+        "category": "mov",
+        "path": os.path.join(LORA_ADAPTERS_DIR, "mov", "move", "wan22_i2v_zxtp_hip_sway_low_r1.safetensors"),
+        "type": "motion",
+        "default_high_weight": 1.0,
+        "default_low_weight": 0.0,
+        "alpha": 32.0,
+        "rank": 32,
+        "description": "Hip sway motion LoRA (Wan 2.2 I2V-A14B). Generates hip swaying side-to-side motion. Trained by ZXTOPOWER. Strength 1.0 recommended. Lower quantization (Q4) may reduce motion quality — try lowering Shift to 5.",
+        "trigger_words": ["She sways her hips side to side with her arms crossed"],
+        "semantic_tags": ["hip", "sway", "dance", "motion", "sexy", "body", "movement"],
+        "civitai_url": "https://civitai.com/models/2371603/wan-22-hip-sway",
+        "preview_urls": [],
     },
     {
         "name": "OrbitCamV2",
@@ -103,14 +253,18 @@ LORA_ADAPTERS = [
         "type": "camera",
         "default_high_weight": 0.8,
         "default_low_weight": 0.0,
+        "alpha": 4.0,
+        "rank": 4,
         "description": "Orbit camera LoRA (Wan 2.2 I2V). Makes the camera orbit around the subject. High-noise only — apply during early diffusion steps for camera motion control.",
         "trigger_words": ["ORBITCAM", "the viewer orbit around the subject"],
+        "semantic_tags": ["camera", "orbit", "rotate", "360", "presentation", "product", "showcase"],
         "civitai_url": "https://civitai.com/models/2093287/luisap-wan-22-i2v-orbit-around-subject-v2",
         "preview_urls": [
             "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/6b1f0e1e-a6ed-4b8e-a0f7-5cb2e9f58c24/original=true/ComfyUI_00165_.mp4",
         ],
     },
 ]
+
 
 
 def _scan_lora_dir(base_dir, category):
@@ -159,10 +313,12 @@ pipeline = None       # S2V pipeline
 i2v_pipeline = None   # I2V pipeline
 flux_pipeline = None  # FLUX pipeline
 upsampler = None      # Real-ESRGAN upsampler
-active_model = None   # 's2v', 'i2v', or 'flux' — tracks which model is on GPU
+active_model = None   # 's2v', 'i2v', or 'flux' — last-loaded model for API
+models_on_gpu = set() # actual GPU occupancy: I2V on cuda:0, FLUX on cuda:1, S2V on both
 generation_status = {}
-gpu_lock = threading.Lock()
-executor = ThreadPoolExecutor(max_workers=1)
+gpu0_lock = threading.Lock()  # I2V (cuda:0) / S2V (both GPUs)
+gpu1_lock = threading.Lock()  # FLUX (cuda:1) / S2V (both GPUs)
+executor = ThreadPoolExecutor(max_workers=2)  # Allow concurrent I2V + FLUX
 
 # Distributed / Sequence Parallel setup
 USE_SP = False
@@ -279,12 +435,13 @@ class TaskStatus(BaseModel):
 # ============================================================================
 def load_pipeline():
     """Load Wan2.2 S2V pipeline."""
-    global pipeline, active_model
+    global pipeline, active_model, models_on_gpu
     if pipeline is not None:
-        if active_model != 's2v':
+        if 's2v' not in models_on_gpu:
             pipeline.noise_model.to(f'cuda:{LOCAL_RANK}')
             pipeline.text_encoder.model.to(f'cuda:{LOCAL_RANK}')
-            active_model = 's2v'
+        active_model = 's2v'
+        models_on_gpu.add('s2v')
         return pipeline
 
     logging.info(f"Loading Wan2.2-S2V-14B model (rank={LOCAL_RANK}, SP={USE_SP})...")
@@ -342,93 +499,104 @@ def load_pipeline():
         )
 
     active_model = 's2v'
+    models_on_gpu.add('s2v')
     logging.info(f"S2V model loaded successfully on rank {LOCAL_RANK}!")
     return pipeline
 
 
+
+
 def load_i2v_pipeline():
-    """Load Wan2.2 I2V pipeline."""
-    global i2v_pipeline, active_model
+    """Load Wan2.2 I2V pipeline with GGUF Q4_K_M quantized transformers (diffusers)."""
+    global i2v_pipeline, active_model, models_on_gpu
     if i2v_pipeline is not None:
-        if active_model != 'i2v':
-            i2v_pipeline.model.to(f'cuda:{LOCAL_RANK}')
-            i2v_pipeline.text_encoder.model.to(f'cuda:{LOCAL_RANK}')
-            i2v_pipeline.clip.model.to(f'cuda:{LOCAL_RANK}')
-            active_model = 'i2v'
+        if 'i2v' not in models_on_gpu:
+            i2v_pipeline.to(f"cuda:{LOCAL_RANK}")
+            models_on_gpu.add('i2v')
+        active_model = 'i2v'
         return i2v_pipeline
 
-    logging.info(f"Loading Wan2.2-I2V-14B-A model (rank={LOCAL_RANK}, SP={USE_SP})...")
-    cfg = WAN_CONFIGS['i2v-A14B']
+    from diffusers import WanImageToVideoPipeline, WanTransformer3DModel, GGUFQuantizationConfig
 
-    # Build multi-LoRA config for I2V (mov-category only)
-    multi_lora_i2v = [
-        {"name": a["name"], "path": a["path"]}
-        for a in LORA_ADAPTERS
-        if os.path.exists(a["path"]) and a.get("category") == "mov"
-    ]
-    if multi_lora_i2v:
-        logging.info(f"I2V multi-LoRA adapters: {[a['name'] for a in multi_lora_i2v]}")
+    logging.info("Loading I2V GGUF Q4_K_M transformers (HighNoise + LowNoise)...")
+    quantization_config = GGUFQuantizationConfig(compute_dtype=torch.bfloat16)
 
-    if USE_SP:
-        i2v_pipeline = wan.WanI2V(
-            config=cfg,
-            checkpoint_dir=I2V_CHECKPOINT_DIR,
-            multi_lora_configs=multi_lora_i2v if multi_lora_i2v else None,
-            device_id=LOCAL_RANK,
-            rank=LOCAL_RANK,
-            t5_fsdp=False,
-            dit_fsdp=False,
-            use_sp=True,
-            t5_cpu=False,
-            t5_device_id=LOCAL_RANK,
-            init_on_cpu=False,
-        )
-        dist.barrier()
-    else:
-        num_gpus = torch.cuda.device_count()
-        i2v_pipeline = wan.WanI2V(
-            config=cfg,
-            checkpoint_dir=I2V_CHECKPOINT_DIR,
-            multi_lora_configs=multi_lora_i2v if multi_lora_i2v else None,
-            device_id=0,
-            rank=0,
-            t5_fsdp=False,
-            dit_fsdp=False,
-            use_sp=False,
-            t5_cpu=False,
-            t5_device_id=1 if num_gpus > 1 else 0,
-            init_on_cpu=False,
-        )
+    transformer_high = WanTransformer3DModel.from_single_file(
+        I2V_GGUF_HIGH,
+        config=I2V_DIFFUSERS_DIR,
+        subfolder="transformer",
+        quantization_config=quantization_config,
+        torch_dtype=torch.bfloat16,
+    )
+    transformer_low = WanTransformer3DModel.from_single_file(
+        I2V_GGUF_LOW,
+        config=I2V_DIFFUSERS_DIR,
+        subfolder="transformer_2",
+        quantization_config=quantization_config,
+        torch_dtype=torch.bfloat16,
+    )
+
+    logging.info("Loading I2V diffusers pipeline (T5, CLIP, VAE, scheduler)...")
+    i2v_pipeline = WanImageToVideoPipeline.from_pretrained(
+        I2V_DIFFUSERS_DIR,
+        transformer=transformer_high,
+        transformer_2=transformer_low,
+        torch_dtype=torch.bfloat16,
+    )
+
+    # Load LoRA adapters onto each expert transformer
+    mov_adapters = [a for a in LORA_ADAPTERS if a.get("category") == "mov" and os.path.exists(a["path"])]
+    for adapter in mov_adapters:
+        name = adapter["name"]
+        hw = adapter.get("default_high_weight", 0.0)
+        lw = adapter.get("default_low_weight", 0.0)
+        try:
+            if hw > 0:
+                i2v_pipeline.load_lora_weights(adapter["path"], adapter_name=f"{name}_high")
+                logging.info(f"LoRA '{name}_high' loaded onto transformer (scale={hw})")
+            if lw > 0:
+                i2v_pipeline.load_lora_weights(
+                    adapter["path"], adapter_name=f"{name}_low",
+                    load_into_transformer_2=True,
+                )
+                logging.info(f"LoRA '{name}_low' loaded onto transformer_2 (scale={lw})")
+        except Exception as e:
+            logging.warning(f"Failed to load LoRA '{name}': {e}")
+
+    # Load all components onto single GPU
+    i2v_pipeline.to(f"cuda:{LOCAL_RANK}")
 
     active_model = 'i2v'
-    logging.info(f"I2V model loaded successfully on rank {LOCAL_RANK}!")
+    models_on_gpu.add('i2v')
+    logging.info(f"I2V GGUF pipeline loaded on cuda:{LOCAL_RANK}!")
     return i2v_pipeline
 
 
 def load_flux_pipeline():
     """Load FLUX.2-klein-9B pipeline for image generation."""
-    global flux_pipeline, active_model
+    global flux_pipeline, active_model, models_on_gpu
+    flux_gpu = 1 if torch.cuda.device_count() >= 2 else 0
+
     if flux_pipeline is not None:
-        if active_model != 'flux':
-            # Pipeline was offloaded — reload from cache (fast, files on disk)
-            flux_pipeline = None
-            torch.cuda.empty_cache()
-            gc.collect()
-        else:
-            return flux_pipeline
+        if 'flux' not in models_on_gpu:
+            flux_pipeline.to(f"cuda:{flux_gpu}")
+            models_on_gpu.add('flux')
+        active_model = 'flux'
+        return flux_pipeline
 
     from diffusers import Flux2KleinPipeline
 
-    logging.info("Loading FLUX.2-klein-9B model...")
+    logging.info(f"Loading FLUX.2-klein-9B model on cuda:{flux_gpu}...")
     flux_pipeline = Flux2KleinPipeline.from_pretrained(
         FLUX_MODEL_ID,
         torch_dtype=torch.bfloat16,
         cache_dir=FLUX_CACHE_DIR,
     )
-    flux_pipeline.to(f'cuda:{LOCAL_RANK}')
+    flux_pipeline.to(f'cuda:{flux_gpu}')
 
     active_model = 'flux'
-    logging.info("FLUX.2-klein-9B model loaded successfully!")
+    models_on_gpu.add('flux')
+    logging.info(f"FLUX.2-klein-9B model loaded on cuda:{flux_gpu}!")
     return flux_pipeline
 
 
@@ -454,45 +622,81 @@ def get_upsampler():
     return upsampler
 
 
-def ensure_model_loaded(model_type: str):
-    """Ensure the requested model is on GPU. Swap if necessary."""
-    global active_model, flux_pipeline
-    if active_model == model_type:
-        return
-
-    logging.info(f"Swapping model: {active_model} -> {model_type}")
-
-    # Offload current model to CPU
-    if active_model == 's2v' and pipeline is not None:
+def _offload_s2v():
+    """Offload S2V model from both GPUs to CPU."""
+    global models_on_gpu
+    if 's2v' in models_on_gpu and pipeline is not None:
         logging.info("Moving S2V model to CPU...")
         pipeline.noise_model.cpu()
         pipeline.text_encoder.model.cpu()
-        torch.cuda.empty_cache()
-        gc.collect()
-    elif active_model == 'i2v' and i2v_pipeline is not None:
-        logging.info("Moving I2V model to CPU...")
-        i2v_pipeline.model.cpu()
-        i2v_pipeline.text_encoder.model.cpu()
-        i2v_pipeline.clip.model.cpu()
-        torch.cuda.empty_cache()
-        gc.collect()
-    elif active_model == 'flux' and flux_pipeline is not None:
-        logging.info("Unloading FLUX model from GPU...")
-        flux_pipeline = None
-        torch.cuda.empty_cache()
-        gc.collect()
+        if hasattr(pipeline, 'vae') and pipeline.vae is not None:
+            pipeline.vae.model.cpu()
+        if hasattr(pipeline, 'audio') and pipeline.audio is not None:
+            pipeline.audio.cpu()
+        models_on_gpu.discard('s2v')
 
-    # Load requested model
+
+def _offload_i2v():
+    """Offload I2V pipeline from cuda:0 to CPU."""
+    global models_on_gpu
+    if 'i2v' in models_on_gpu and i2v_pipeline is not None:
+        logging.info("Moving I2V pipeline to CPU...")
+        i2v_pipeline.to("cpu")
+        models_on_gpu.discard('i2v')
+
+
+def _offload_flux():
+    """Offload FLUX pipeline from cuda:1 to CPU."""
+    global flux_pipeline, models_on_gpu
+    if 'flux' in models_on_gpu and flux_pipeline is not None:
+        logging.info("Unloading FLUX model from GPU...")
+        for attr in ('transformer', 'text_encoder', 'text_encoder_2', 'vae', 'scheduler'):
+            if hasattr(flux_pipeline, attr):
+                delattr(flux_pipeline, attr)
+        flux_pipeline = None
+        models_on_gpu.discard('flux')
+
+
+def ensure_model_loaded(model_type: str):
+    """Ensure the requested model is on GPU.
+
+    GPU layout:
+      - I2V: cuda:0 (~20 GB GGUF)
+      - FLUX: cuda:1 (~18 GB)
+      - S2V: both GPUs (Sequence Parallel)
+
+    I2V and FLUX can coexist on separate GPUs.
+    S2V requires exclusive access to both GPUs.
+    """
+    global active_model, models_on_gpu
+
+    if model_type in models_on_gpu:
+        active_model = model_type
+        return
+
+    logging.info(f"Loading model: {model_type} (currently on GPU: {models_on_gpu})")
+
     if model_type == 's2v':
+        # S2V needs both GPUs — offload everything
+        _offload_i2v()
+        _offload_flux()
+        gc.collect()
+        torch.cuda.empty_cache()
         load_pipeline()
     elif model_type == 'i2v':
+        # I2V uses cuda:0 — only S2V conflicts
+        _offload_s2v()
+        gc.collect()
+        torch.cuda.empty_cache()
         load_i2v_pipeline()
     elif model_type == 'flux':
+        # FLUX uses cuda:1 — only S2V conflicts
+        _offload_s2v()
+        gc.collect()
+        torch.cuda.empty_cache()
         load_flux_pipeline()
 
-    # NOTE: No dist.barrier() here — each rank loads independently.
-    # Synchronization happens via collective ops in generate() or via SP broadcast.
-    logging.info(f"Model swap complete. Active: {active_model}")
+    logging.info(f"Model loaded: {model_type}. On GPU: {models_on_gpu}")
 
 
 def broadcast_generate_params(params):
@@ -535,21 +739,9 @@ def worker_loop():
                 import traceback
                 traceback.print_exc()
 
-        elif cmd.item() == 2:  # I2V Generate
+        elif cmd.item() == 2:  # I2V Generate (diffusers pipeline runs on rank 0 only)
             params = broadcast_generate_params(None)
-            logging.info(f"Rank {LOCAL_RANK}: Swapping to I2V model...")
-            try:
-                ensure_model_loaded('i2v')
-                # Load image from path on each rank
-                image_path = params.pop('_image_path')
-                params['img'] = Image.open(image_path).convert('RGB')
-                logging.info(f"Rank {LOCAL_RANK}: Starting I2V generation...")
-                i2v_pipeline.generate(**params)
-                logging.info(f"Rank {LOCAL_RANK}: I2V generation done.")
-            except Exception as e:
-                logging.error(f"Rank {LOCAL_RANK}: I2V generation error: {e}")
-                import traceback
-                traceback.print_exc()
+            logging.info(f"Rank {LOCAL_RANK}: I2V uses diffusers pipeline on rank 0 — skipping.")
 
         elif cmd.item() == -1:  # Shutdown
             logging.info(f"Rank {LOCAL_RANK}: Shutting down.")
@@ -563,14 +755,16 @@ def generate_video_task(task_id: str, params: dict):
     """Background task for S2V video generation (runs in thread pool)."""
     global pipeline, generation_status
 
-    if not gpu_lock.acquire(blocking=False):
+    # S2V uses both GPUs — acquire both locks
+    if not gpu0_lock.acquire(blocking=False):
         generation_status[task_id] = {
             "status": "queued",
             "progress": 0,
-            "message": "Waiting for GPU (another generation in progress)...",
+            "message": "Waiting for GPU 0 (another generation in progress)...",
             "output_path": None,
         }
-        gpu_lock.acquire()  # block until GPU is free
+        gpu0_lock.acquire()
+    gpu1_lock.acquire()  # also need GPU 1
 
     try:
         logging.info(f"Starting S2V generation task: {task_id}")
@@ -711,21 +905,23 @@ def generate_video_task(task_id: str, params: dict):
             "output_path": None,
         }
     finally:
-        gpu_lock.release()
+        gpu1_lock.release()
+        gpu0_lock.release()
 
 
 def generate_i2v_task(task_id: str, params: dict):
-    """Background task for I2V video generation."""
+    """Background task for I2V video generation (diffusers GGUF pipeline)."""
     global i2v_pipeline, generation_status
 
-    if not gpu_lock.acquire(blocking=False):
+    # I2V uses cuda:0 only
+    if not gpu0_lock.acquire(blocking=False):
         generation_status[task_id] = {
             "status": "queued",
             "progress": 0,
-            "message": "Waiting for GPU (another generation in progress)...",
+            "message": "Waiting for GPU 0 (another generation in progress)...",
             "output_path": None,
         }
-        gpu_lock.acquire()
+        gpu0_lock.acquire()
 
     try:
         logging.info(f"Starting I2V generation task: {task_id}")
@@ -740,76 +936,104 @@ def generate_i2v_task(task_id: str, params: dict):
         if seed < 0:
             seed = random.randint(0, 2**31 - 1)
 
-        # Parse resolution
+        # Load input image
+        img = Image.open(params["image_path"]).convert("RGB")
+        img_w, img_h = img.size  # PIL: (width, height)
+
+        # Parse resolution, auto-correct to match input image aspect ratio
         try:
             res_parts = params["resolution"].split("*")
             res_height, res_width = int(res_parts[0]), int(res_parts[1])
-            max_area = res_height * res_width
-        except:
-            max_area = 720 * 1280
+        except Exception:
+            res_height, res_width = 720, 1280
 
-        # Load input image
-        img = Image.open(params["image_path"]).convert("RGB")
+        # If image is portrait but resolution is landscape (or vice versa), swap
+        img_is_portrait = img_h > img_w
+        res_is_portrait = res_height > res_width
+        if img_is_portrait != res_is_portrait:
+            res_height, res_width = res_width, res_height
+            logging.info(f"Resolution auto-corrected to match image orientation: {res_height}x{res_width}")
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        logging.info(f"Starting I2V generation with resolution {params['resolution']}, max_area={max_area}")
+        logging.info(f"Starting I2V generation: {res_height}x{res_width}, steps={params['inference_steps']}, seed={seed}")
 
-        def progress_callback(progress, message):
-            generation_status[task_id]["progress"] = round(progress, 3)
-            generation_status[task_id]["message"] = message
-
-        # Build LoRA weights dict for pipeline
-        lora_weights = None
-        if params.get("lora_weights"):
-            lora_weights = {}
-            for lw in params["lora_weights"]:
-                lora_weights[lw["name"]] = {
-                    "high_weight": lw.get("high_weight", 0.0),
-                    "low_weight": lw.get("low_weight", 0.0),
-                }
-
-        gen_kwargs = dict(
-            input_prompt=params["prompt"],
-            img=img,
-            max_area=max_area,
-            frame_num=params["frame_num"],
-            shift=params["shift"],
-            sample_solver='unipc',
-            sampling_steps=params["inference_steps"],
-            guide_scale=params["guidance_scale"],
-            n_prompt=params["negative_prompt"],
-            seed=seed,
-            offload_model=params["offload_model"],
-            lora_weights=lora_weights,
-        )
-
-        # Signal SP workers FIRST so they can start model swap concurrently
+        # Signal SP workers (they'll just no-op for I2V now)
         if USE_SP:
             cmd = torch.tensor([2], dtype=torch.long, device=f'cuda:{LOCAL_RANK}')
             dist.broadcast(cmd, src=0)
-            # Send kwargs without PIL Image — workers load from path
-            sp_kwargs = {k: v for k, v in gen_kwargs.items() if k != 'img'}
-            sp_kwargs['_image_path'] = params["image_path"]
-            broadcast_generate_params(sp_kwargs)
+            # Broadcast dummy params so workers don't hang
+            broadcast_generate_params({"_noop": True})
 
-        # Swap model on rank 0 AFTER signaling workers (avoids barrier deadlock)
+        # Swap model — loads I2V diffusers pipeline if not already loaded
         ensure_model_loaded('i2v')
 
-        generation_status[task_id]["progress"] = 0.1
-        generation_status[task_id]["message"] = "Preparing I2V generation..."
+        # Configure LoRA adapter weights for this generation (after pipeline is loaded)
+        # diffusers bakes alpha/rank scaling into weights during Kohya→PEFT conversion,
+        # so user_weight=1.0 directly equals ComfyUI strength=1.0. No correction needed.
+        # WanLoraLoaderMixin.set_adapters() auto-distributes across transformer + transformer_2.
+        i2v_pipeline.disable_lora()  # Disable all adapters first
+        if params.get("lora_weights"):
+            all_adapter_names, all_adapter_weights = [], []
+            for lw in params["lora_weights"]:
+                name = lw["name"]
+                hw = lw.get("high_weight", 0.0)
+                lwt = lw.get("low_weight", 0.0)
+                if hw > 0:
+                    all_adapter_names.append(f"{name}_high")
+                    all_adapter_weights.append(hw)
+                    logging.info(f"LoRA {name} HIGH: weight={hw}")
+                if lwt > 0:
+                    all_adapter_names.append(f"{name}_low")
+                    all_adapter_weights.append(lwt)
+                    logging.info(f"LoRA {name} LOW: weight={lwt}")
+            if all_adapter_names:
+                try:
+                    i2v_pipeline.enable_lora()
+                    i2v_pipeline.set_adapters(all_adapter_names, adapter_weights=all_adapter_weights)
+                    logging.info(f"LoRA adapters activated: {list(zip(all_adapter_names, all_adapter_weights))}")
+                except Exception as e:
+                    logging.warning(f"Failed to set LoRA adapters: {e}")
+                    import traceback
+                    traceback.print_exc()
 
-        video = i2v_pipeline.generate(**gen_kwargs, progress_callback=progress_callback)
+        generation_status[task_id]["progress"] = 0.1
+        generation_status[task_id]["message"] = "Generating video with GGUF Q4_K_M..."
+
+        # Progress callback for diffusers pipeline
+        total_steps = params["inference_steps"]
+
+        def step_callback(pipe, step, timestep, callback_kwargs):
+            progress = 0.1 + 0.8 * ((step + 1) / total_steps)
+            generation_status[task_id]["progress"] = round(progress, 3)
+            generation_status[task_id]["message"] = f"Denoising step {step + 1}/{total_steps}..."
+            return callback_kwargs
+
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+
+        output = i2v_pipeline(
+            image=img,
+            prompt=params["prompt"],
+            negative_prompt=params["negative_prompt"],
+            height=res_height,
+            width=res_width,
+            num_frames=params["frame_num"],
+            num_inference_steps=params["inference_steps"],
+            guidance_scale=params["guidance_scale"],
+            generator=generator,
+            callback_on_step_end=step_callback,
+        )
 
         generation_status[task_id]["progress"] = 0.9
         generation_status[task_id]["message"] = "Saving video..."
 
-        from wan.utils.utils import save_videos_grid
+        # Save video from diffusers output (list of PIL Images)
+        from diffusers.utils import export_to_video
         video_path = str(OUTPUT_DIR / f"i2v_{timestamp}.mp4")
-        save_videos_grid(video[None], video_path, rescale=True, fps=16)
+        export_to_video(output.frames[0], video_path, fps=16)
 
         final_path = f"/outputs/i2v_{timestamp}.mp4"
 
-        del video
+        del output
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -832,21 +1056,22 @@ def generate_i2v_task(task_id: str, params: dict):
             "output_path": None,
         }
     finally:
-        gpu_lock.release()
+        gpu0_lock.release()
 
 
 def generate_flux_task(task_id: str, params: dict):
     """Background task for FLUX image generation."""
     global flux_pipeline, generation_status
 
-    if not gpu_lock.acquire(blocking=False):
+    # FLUX uses cuda:1 only
+    if not gpu1_lock.acquire(blocking=False):
         generation_status[task_id] = {
             "status": "queued",
             "progress": 0,
-            "message": "Waiting for GPU (another generation in progress)...",
+            "message": "Waiting for GPU 1 (another generation in progress)...",
             "output_path": None,
         }
-        gpu_lock.acquire()
+        gpu1_lock.acquire()
 
     try:
         logging.info(f"Starting FLUX generation task: {task_id}")
@@ -882,7 +1107,8 @@ def generate_flux_task(task_id: str, params: dict):
         generation_status[task_id]["progress"] = 0.15
         generation_status[task_id]["message"] = "Generating image..."
 
-        generator = torch.Generator(device=f'cuda:{LOCAL_RANK}').manual_seed(seed)
+        flux_gpu = 1 if torch.cuda.device_count() >= 2 else 0
+        generator = torch.Generator(device=f'cuda:{flux_gpu}').manual_seed(seed)
         image = flux_pipeline(
             prompt=params["prompt"],
             height=gen_height,
@@ -929,6 +1155,7 @@ def generate_flux_task(task_id: str, params: dict):
             "progress": 1.0,
             "message": "FLUX generation completed!",
             "output_path": final_path,
+            "absolute_path": image_path,
             "upscaled_path": upscaled_path,
             "seed": seed,
         }
@@ -944,7 +1171,7 @@ def generate_flux_task(task_id: str, params: dict):
             "output_path": None,
         }
     finally:
-        gpu_lock.release()
+        gpu1_lock.release()
 
 
 # ============================================================================
@@ -971,10 +1198,11 @@ async def health_check():
         "active_model": active_model,
         "lora_enabled": LORA_STRENGTH > 0 and os.path.exists(LORA_CHECKPOINT_DIR),
         "lora_strength": LORA_STRENGTH,
-        "gpu_busy": gpu_lock.locked(),
+        "gpu0_busy": gpu0_lock.locked(),
+        "gpu1_busy": gpu1_lock.locked(),
         "sequence_parallel": USE_SP,
         "world_size": WORLD_SIZE,
-        "i2v_available": os.path.exists(os.path.join(I2V_CHECKPOINT_DIR, "low_noise_model", "config.json")),
+        "i2v_available": os.path.exists(I2V_GGUF_HIGH) and os.path.exists(I2V_GGUF_LOW),
         "has_moviepy": HAS_MOVIEPY,
         "has_audio_separator": HAS_AUDIO_SEPARATOR,
     }
@@ -991,7 +1219,7 @@ async def get_config():
         "default_use_teacache": False,
         "default_teacache_thresh": 0.15,
         # I2V defaults
-        "i2v_available": os.path.exists(os.path.join(I2V_CHECKPOINT_DIR, "low_noise_model", "config.json")),
+        "i2v_available": os.path.exists(I2V_GGUF_HIGH) and os.path.exists(I2V_GGUF_LOW),
         "i2v_default_steps": 40,
         "i2v_default_guidance": 5.0,
         "i2v_default_frame_num": 81,
@@ -1114,9 +1342,8 @@ async def generate_video(request: GenerateRequest):
 @app.post("/api/generate-i2v")
 async def generate_i2v(request: I2VGenerateRequest):
     """Start I2V video generation task."""
-    i2v_model_path = os.path.join(I2V_CHECKPOINT_DIR, "low_noise_model", "config.json")
-    if not os.path.exists(i2v_model_path):
-        raise HTTPException(503, "I2V model not available. Download Wan2.2-I2V-A14B first.")
+    if not os.path.exists(I2V_GGUF_HIGH) or not os.path.exists(I2V_GGUF_LOW):
+        raise HTTPException(503, "I2V GGUF models not available. Download Q4_K_M GGUF files first.")
 
     task_id = str(uuid.uuid4())
 
@@ -1371,6 +1598,783 @@ async def list_outputs():
 
 
 # ============================================================================
+# ComfyUI Workflow Integration
+# ============================================================================
+comfyui_process = None
+
+
+class WorkflowGenerateRequest(BaseModel):
+    workflow_id: str
+    inputs: dict = {}  # {key: value} matching registry input definitions
+
+
+class YouTubeDownloadRequest(BaseModel):
+    url: str
+
+
+def ensure_comfyui_running():
+    """Ensure ComfyUI server is running, start if needed."""
+    global comfyui_process
+    try:
+        resp = http_requests.get(f"{COMFYUI_URL}/system_stats", timeout=3)
+        if resp.status_code == 200:
+            return
+    except Exception:
+        pass
+
+    if not COMFYUI_DIR.exists():
+        raise Exception(f"ComfyUI not installed at {COMFYUI_DIR}")
+
+    logging.info("Starting ComfyUI server...")
+    comfyui_process = subprocess.Popen(
+        [sys.executable, str(COMFYUI_DIR / "main.py"),
+         "--listen", "127.0.0.1", "--port", "8188",
+         "--disable-auto-launch", "--preview-method", "none"],
+        cwd=str(COMFYUI_DIR),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    for _ in range(180):
+        try:
+            resp = http_requests.get(f"{COMFYUI_URL}/system_stats", timeout=2)
+            if resp.status_code == 200:
+                logging.info("ComfyUI server is ready!")
+                return
+        except Exception:
+            pass
+        _time.sleep(1)
+    raise Exception("ComfyUI failed to start within 3 minutes")
+
+
+def upload_to_comfyui(local_path: str, subfolder: str = "") -> str:
+    """Upload a file to ComfyUI's input directory."""
+    filename = os.path.basename(local_path)
+    with open(local_path, 'rb') as f:
+        resp = http_requests.post(
+            f"{COMFYUI_URL}/upload/image",
+            files={"image": (filename, f, "application/octet-stream")},
+            data={"overwrite": "true", "subfolder": subfolder},
+        )
+    if resp.status_code != 200:
+        raise Exception(f"ComfyUI upload failed: {resp.text}")
+    return resp.json().get("name", filename)
+
+
+def _set_nested(workflow: dict, node_id: str, field_path: str, value):
+    """Set a value in a workflow node using dot-separated path like 'inputs.image'."""
+    node = workflow.get(str(node_id))
+    if not node:
+        return
+    parts = field_path.split(".")
+    obj = node
+    for p in parts[:-1]:
+        obj = obj.setdefault(p, {})
+    obj[parts[-1]] = value
+
+
+def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
+    """Load API-format workflow and inject user parameters using the registry."""
+    import json as json_mod
+    wf_config = WORKFLOW_REGISTRY.get(workflow_id)
+    if not wf_config:
+        raise Exception(f"Unknown workflow: {workflow_id}")
+
+    api_path = WORKFLOW_DIR / wf_config["api_json"]
+    with open(api_path) as f:
+        workflow = json_mod.load(f)
+
+    for input_def in wf_config["inputs"]:
+        key = input_def["key"]
+        value = user_inputs.get(key, input_def.get("default"))
+        if value is None:
+            continue
+
+        if input_def["type"] == "select_buttons":
+            option = next((o for o in input_def["options"] if o["value"] == value), None)
+            if option and "params" in option:
+                for param_key, param_val in option["params"].items():
+                    _set_nested(workflow, input_def["node_ids"][param_key], input_def["fields"][param_key], param_val)
+        elif "node_ids" in input_def:
+            for nid in input_def["node_ids"]:
+                _set_nested(workflow, nid, input_def["field"], value)
+        else:
+            _set_nested(workflow, input_def["node_id"], input_def["field"], value)
+
+    return workflow
+
+
+def monitor_comfyui_progress(task_id: str, prompt_id: str, client_id: str):
+    """Monitor ComfyUI execution via WebSocket."""
+    ws = ws_client.WebSocket()
+    ws.settimeout(600)  # 10 min timeout
+    ws.connect(f"{COMFYUI_WS_URL}?clientId={client_id}")
+    import json as json_mod
+
+    completed_nodes = 0
+
+    try:
+        while True:
+            msg = ws.recv()
+            if isinstance(msg, str):
+                data = json_mod.loads(msg)
+                msg_type = data.get("type")
+                msg_data = data.get("data", {})
+
+                if msg_type == "progress":
+                    value = msg_data.get("value", 0)
+                    max_val = msg_data.get("max", 1)
+                    node_pct = value / max_val if max_val > 0 else 0
+                    overall = 0.15 + 0.75 * (completed_nodes / 78.0) + 0.75 * node_pct / 78.0
+                    generation_status[task_id]["progress"] = round(min(overall, 0.90), 3)
+                    generation_status[task_id]["message"] = (
+                        f"Processing... node {completed_nodes}/78 (step {value}/{max_val})"
+                    )
+                elif msg_type == "executing":
+                    node_id = msg_data.get("node")
+                    if node_id is None and msg_data.get("prompt_id") == prompt_id:
+                        break
+                    completed_nodes += 1
+                    overall = 0.15 + 0.75 * (completed_nodes / 78.0)
+                    generation_status[task_id]["progress"] = round(min(overall, 0.90), 3)
+                    generation_status[task_id]["message"] = f"Executing node {completed_nodes}/78..."
+                elif msg_type == "execution_error":
+                    error = msg_data.get("exception_message", "Unknown ComfyUI error")
+                    raise Exception(f"ComfyUI error: {error}")
+    finally:
+        ws.close()
+
+
+def retrieve_comfyui_output(prompt_id: str) -> str:
+    """Retrieve the output video from ComfyUI history."""
+    import json as json_mod
+    resp = http_requests.get(f"{COMFYUI_URL}/history/{prompt_id}")
+    history = resp.json()
+
+    outputs = history.get(prompt_id, {}).get("outputs", {})
+
+    for node_id, node_output in outputs.items():
+        # VHS_VideoCombine outputs appear under 'gifs' key
+        if "gifs" in node_output:
+            for gif in node_output["gifs"]:
+                filename = gif["filename"]
+                subfolder = gif.get("subfolder", "")
+                file_type = gif.get("type", "temp")
+
+                view_resp = http_requests.get(
+                    f"{COMFYUI_URL}/view",
+                    params={"filename": filename, "subfolder": subfolder, "type": file_type},
+                )
+                if view_resp.status_code != 200:
+                    continue
+
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_filename = f"workflow_{timestamp}.mp4"
+                output_path = OUTPUT_DIR / output_filename
+                with open(output_path, 'wb') as f:
+                    f.write(view_resp.content)
+
+                return f"/outputs/{output_filename}"
+
+    raise Exception("No output video found in ComfyUI history")
+
+
+def download_youtube_video(url: str) -> dict:
+    """Download a YouTube video using yt-dlp and return the file path."""
+    import yt_dlp
+
+    filename = f"{uuid.uuid4()}.mp4"
+    filepath = UPLOAD_DIR / filename
+
+    ydl_opts = {
+        'format': 'best[ext=mp4]/best',
+        'outtmpl': str(filepath),
+        'quiet': True,
+        'no_warnings': True,
+        'socket_timeout': 30,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        title = info.get('title', 'Unknown')
+
+    # yt-dlp may add extensions; find the actual file
+    actual_path = filepath
+    if not filepath.exists():
+        for f in UPLOAD_DIR.glob(f"{filepath.stem}*"):
+            actual_path = f
+            break
+
+    return {
+        "path": str(actual_path),
+        "url": f"/uploads/{actual_path.name}",
+        "filename": actual_path.name,
+        "title": title,
+    }
+
+
+def workflow_generate_task(task_id: str, params: dict):
+    """Background task for ComfyUI workflow execution."""
+    import json as json_mod
+
+    gpu0_lock.acquire()
+    gpu1_lock.acquire()
+
+    try:
+        workflow_id = params["workflow_id"]
+        user_inputs = dict(params.get("inputs", {}))
+        wf_config = WORKFLOW_REGISTRY[workflow_id]
+
+        # Step 1: Offload all WanAvatar models
+        generation_status[task_id].update({
+            "status": "processing", "progress": 0.02,
+            "message": "Offloading models for ComfyUI...",
+        })
+        _offload_s2v()
+        _offload_i2v()
+        _offload_flux()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # Step 2: Ensure ComfyUI is running
+        generation_status[task_id].update({"progress": 0.05, "message": "Starting ComfyUI..."})
+        ensure_comfyui_running()
+
+        # Step 3: Upload files to ComfyUI as needed
+        for input_def in wf_config["inputs"]:
+            key = input_def["key"]
+            if input_def.get("upload_to_comfyui") and key in user_inputs and user_inputs[key]:
+                generation_status[task_id].update({"progress": 0.08, "message": f"Uploading {key}..."})
+                user_inputs[key] = upload_to_comfyui(user_inputs[key])
+
+        # Step 4: Prepare workflow
+        generation_status[task_id].update({"progress": 0.12, "message": "Preparing workflow..."})
+        workflow = prepare_comfyui_workflow(workflow_id, user_inputs)
+
+        # Step 5: Submit workflow
+        generation_status[task_id].update({"progress": 0.15, "message": "Submitting workflow..."})
+        client_id = str(uuid.uuid4())
+        resp = http_requests.post(
+            f"{COMFYUI_URL}/prompt",
+            json={"prompt": workflow, "client_id": client_id},
+        )
+        if resp.status_code != 200:
+            raise Exception(f"ComfyUI rejected workflow: {resp.text}")
+        prompt_id = resp.json()["prompt_id"]
+
+        # Step 6: Monitor progress
+        generation_status[task_id].update({"message": "Executing workflow..."})
+        monitor_comfyui_progress(task_id, prompt_id, client_id)
+
+        # Step 7: Retrieve output
+        generation_status[task_id].update({"progress": 0.95, "message": "Retrieving output..."})
+        output_path = retrieve_comfyui_output(prompt_id)
+
+        generation_status[task_id].update({
+            "status": "completed", "progress": 1.0,
+            "message": "Workflow completed!", "output_path": output_path,
+        })
+    except Exception as e:
+        logging.error(f"Workflow generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        generation_status[task_id].update({
+            "status": "failed", "progress": 0,
+            "message": str(e), "output_path": None,
+        })
+    finally:
+        gpu1_lock.release()
+        gpu0_lock.release()
+
+
+@app.post("/api/workflow/generate")
+async def start_workflow_generation(request: WorkflowGenerateRequest):
+    """Start ComfyUI workflow generation task."""
+    wf_config = WORKFLOW_REGISTRY.get(request.workflow_id)
+    if not wf_config:
+        raise HTTPException(400, f"Unknown workflow: {request.workflow_id}")
+
+    api_path = WORKFLOW_DIR / wf_config["api_json"]
+    if not api_path.exists():
+        raise HTTPException(503, f"Workflow API JSON not found: {wf_config['api_json']}")
+
+    task_id = str(uuid.uuid4())
+    generation_status[task_id] = {
+        "status": "pending", "progress": 0,
+        "message": "Workflow task queued", "output_path": None,
+    }
+    executor.submit(workflow_generate_task, task_id, request.dict())
+    return {"task_id": task_id}
+
+
+@app.get("/api/workflows")
+async def list_workflows():
+    """Return available workflow definitions for the frontend."""
+    result = []
+    for wf in WORKFLOW_REGISTRY.values():
+        api_path = WORKFLOW_DIR / wf["api_json"]
+        if api_path.exists():
+            result.append({
+                "id": wf["id"],
+                "display_name": wf["display_name"],
+                "description": wf["description"],
+                "inputs": wf["inputs"],
+            })
+    return {"workflows": result}
+
+
+@app.post("/api/workflow/prepare-images")
+async def prepare_workflow_images(request: dict):
+    """Copy selected gallery images to a temp folder for workflow use."""
+    import shutil
+    image_paths = request.get("image_paths", [])
+    if not image_paths:
+        raise HTTPException(400, "No image paths provided")
+    folder_name = str(uuid.uuid4())
+    folder_path = UPLOAD_DIR / "workflow_images" / folder_name
+    folder_path.mkdir(parents=True, exist_ok=True)
+    for i, src in enumerate(image_paths):
+        src_path = Path(src)
+        if src_path.exists():
+            ext = src_path.suffix
+            dst = folder_path / f"{i:04d}{ext}"
+            shutil.copy2(str(src_path), str(dst))
+    return {"folder_path": str(folder_path), "count": len(image_paths)}
+
+
+@app.get("/api/workflow/status")
+async def workflow_comfyui_status():
+    """Check if ComfyUI is available."""
+    available = False
+    try:
+        resp = http_requests.get(f"{COMFYUI_URL}/system_stats", timeout=3)
+        available = resp.status_code == 200
+    except Exception:
+        pass
+    available_workflows = [wf_id for wf_id, wf in WORKFLOW_REGISTRY.items()
+                           if (WORKFLOW_DIR / wf["api_json"]).exists()]
+    return {
+        "comfyui_available": available,
+        "comfyui_installed": COMFYUI_DIR.exists(),
+        "available_workflows": available_workflows,
+    }
+
+
+@app.post("/api/download-youtube")
+async def download_youtube(request: YouTubeDownloadRequest):
+    """Download a YouTube video for use as reference."""
+    try:
+        result = download_youtube_video(request.url)
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"YouTube download failed: {str(e)}")
+
+
+# ============================================================================
+# Video Studio: TTS + Gemini AI Chat
+# ============================================================================
+tts_model = None
+
+
+def get_tts_model():
+    """Lazy-load Qwen3-TTS model on first use."""
+    global tts_model
+    if tts_model is None:
+        from qwen_tts import Qwen3TTSModel
+        tts_gpu = 1 if torch.cuda.device_count() >= 2 else 0
+        logging.info(f"Loading Qwen3-TTS on cuda:{tts_gpu}...")
+        tts_model = Qwen3TTSModel.from_pretrained(
+            "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+            device_map=f"cuda:{tts_gpu}",
+            dtype=torch.bfloat16,
+        )
+        logging.info("Qwen3-TTS loaded!")
+    return tts_model
+
+
+class TTSRequest(BaseModel):
+    text: str
+    language: str = "Korean"
+    speaker: str = "Ryan"
+
+
+@app.post("/api/studio/tts")
+async def studio_tts(request: TTSRequest):
+    """Generate speech audio from text script using Qwen3-TTS."""
+    import soundfile as sf
+    try:
+        model = get_tts_model()
+        wavs, sr = model.generate_custom_voice(
+            text=request.text,
+            language=request.language,
+            speaker=request.speaker,
+        )
+        filename = f"tts_{uuid.uuid4().hex[:8]}.wav"
+        audio_dir = UPLOAD_DIR / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        audio_path = str(audio_dir / filename)
+        sf.write(audio_path, wavs[0], sr)
+        duration = len(wavs[0]) / sr
+        return {
+            "audio_path": audio_path,
+            "audio_url": f"/uploads/audio/{filename}",
+            "duration": round(duration, 2),
+            "frame_count": int(duration * 20),
+        }
+    except Exception as e:
+        logging.error(f"TTS generation failed: {e}")
+        raise HTTPException(500, f"TTS failed: {str(e)}")
+
+
+@app.get("/api/studio/tts-speakers")
+async def get_tts_speakers():
+    """Return available TTS speakers for CustomVoice model."""
+    return {
+        "speakers": ["Ryan", "Claire", "Laura", "Aidan", "Matt", "Aria",
+                      "Serena", "Leo", "Mei", "Luna"],
+        "languages": ["Korean", "English", "Chinese", "Japanese",
+                       "German", "French", "Russian", "Portuguese",
+                       "Spanish", "Italian"],
+    }
+
+
+# --- Gemini AI Chat for Video Studio ---
+STUDIO_TOOLS = [
+    {
+        "function_declarations": [
+            {
+                "name": "search_lora",
+                "description": "Search LoRA adapters by style, character type, or motion. Returns matching LoRAs with trigger words and recommended weights.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Natural language style description, e.g. 'sexy dance outfit' or 'cute pastel aesthetic'"},
+                        "category": {"type": "string", "enum": ["img", "mov"], "description": "img for image LoRAs, mov for video/motion LoRAs"},
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "generate_idol_image",
+                "description": "Generate an image using FLUX with specified LoRA and prompt. Use same seed for character consistency across frames.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {"type": "string"},
+                        "seed": {"type": "integer", "description": "Use same seed for consistent character across multiple images"},
+                        "aspect_ratio": {"type": "string", "enum": ["portrait", "landscape", "square"]},
+                        "lora_weights": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                    "weight": {"type": "number"},
+                                },
+                            },
+                        },
+                    },
+                    "required": ["prompt"],
+                },
+            },
+            {
+                "name": "create_video",
+                "description": "Create a video. Three modes: 'fflf' creates video from image sequence (dance/presentation); 'infinitalk' creates narration video from single image + audio (unlimited duration); 'change_character' replaces character in a reference video.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["fflf", "infinitalk", "change_character"]},
+                        "content_type": {"type": "string", "enum": ["dance", "narration", "presentation"]},
+                        "image_paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "For fflf: ordered image paths. For infinitalk/change_character: single image path.",
+                        },
+                        "segment_lengths": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "Frame count per segment (fflf only, 17-81). Defaults: dance=33, presentation=49",
+                        },
+                        "master_prompt": {"type": "string"},
+                        "seed": {"type": "integer"},
+                        "looping": {"type": "boolean"},
+                        "audio_path": {"type": "string", "description": "Audio file path (infinitalk mode, required)"},
+                        "ref_video_url": {"type": "string", "description": "YouTube URL or video path (change_character mode)"},
+                        "aspect_ratio": {"type": "string", "enum": ["portrait", "landscape", "square"]},
+                    },
+                    "required": ["mode", "image_paths"],
+                },
+            },
+            {
+                "name": "generate_tts",
+                "description": "Generate speech audio from text using Qwen3-TTS. Use for narration/presentation before create_video with infinitalk mode.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "The narration script to convert to speech"},
+                        "language": {"type": "string", "enum": ["Korean", "English", "Chinese", "Japanese"]},
+                        "speaker": {"type": "string", "description": "Speaker name, e.g. Ryan, Claire, Laura"},
+                    },
+                    "required": ["text", "language"],
+                },
+            },
+            {
+                "name": "list_gallery_images",
+                "description": "List available images from outputs (FLUX-generated) and uploads.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "enum": ["outputs", "uploads", "all"]},
+                    },
+                },
+            },
+        ],
+    },
+]
+
+STUDIO_SYSTEM_PROMPT = """You are IdolMotion, a versatile video creation assistant.
+You help users create high-quality videos across multiple content types:
+
+SUPPORTED CONTENT TYPES:
+1. Dance — K-Pop idol dance, choreography. FFLF looping (33f, portrait) or Change Character.
+2. Narration — Storytelling, lectures. InfiniTalk: single image + audio → unlimited video (landscape).
+3. Presentation — Product showcase, slides. FFLF (49f, landscape) or InfiniTalk.
+
+WORKFLOW:
+1. Identify content type from user's request
+2. Search and select appropriate LoRA adapters
+3. Generate consistent images using FLUX (same seed)
+4. For narration: generate TTS audio first, then InfiniTalk video
+5. Create video with appropriate mode
+
+RULES:
+- Same seed for all images (character consistency)
+- FFLF: 2-4 keyframe images. InfiniTalk: 1 image + audio. Change Character: 1 image + ref video.
+- Default aspect: dance=portrait, narration/presentation=landscape
+- Looping: dance=ON, others=OFF
+- InfiniTalk: 832×480, 20 FPS, frames = audio_duration × 20
+- For narration: ALWAYS generate_tts first, then create_video infinitalk
+- Respond in the user's language
+- Use trigger words from LoRA metadata"""
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list = []
+
+
+@app.post("/api/studio/chat")
+async def studio_chat(request: ChatRequest):
+    """Gemini function-calling chat for Video Studio AI assistant."""
+    import google.generativeai as genai
+
+    gemini_key = os.environ.get("GEMINI_KEY", "")
+    if not gemini_key:
+        raise HTTPException(503, "GEMINI_KEY not configured")
+
+    genai.configure(api_key=gemini_key)
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-pro",
+        tools=STUDIO_TOOLS,
+        system_instruction=STUDIO_SYSTEM_PROMPT,
+    )
+    chat = model.start_chat(history=request.history)
+    response = chat.send_message(request.message)
+
+    actions = []
+    tool_calls = []
+
+    # Function calling loop (multi-turn)
+    max_rounds = 10
+    for _ in range(max_rounds):
+        has_function_call = False
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'function_call') and part.function_call:
+                has_function_call = True
+                fc = part.function_call
+                tool_calls.append(fc.name)
+                result = await _execute_studio_tool(fc.name, dict(fc.args))
+                actions.append({"tool": fc.name, "result": result})
+                response = chat.send_message(
+                    genai.types.ContentDict(
+                        role="function",
+                        parts=[genai.types.PartDict(
+                            function_response=genai.types.FunctionResponseDict(
+                                name=fc.name, response=result,
+                            )
+                        )]
+                    )
+                )
+                break
+        if not has_function_call:
+            break
+
+    reply = ""
+    for part in response.candidates[0].content.parts:
+        if hasattr(part, 'text') and part.text:
+            reply += part.text
+
+    return {"reply": reply, "actions": actions, "tool_calls": tool_calls}
+
+
+async def _execute_studio_tool(name: str, args: dict) -> dict:
+    """Execute a Gemini function call tool."""
+    if name == "search_lora":
+        query = args["query"].lower()
+        category = args.get("category")
+        matches = []
+        for a in LORA_ADAPTERS:
+            if category and a.get("category") != category:
+                continue
+            searchable = " ".join([
+                a["name"].lower(), a.get("description", "").lower(),
+                " ".join(a.get("trigger_words", [])).lower(),
+                " ".join(a.get("semantic_tags", [])).lower(),
+            ])
+            if any(word in searchable for word in query.split()):
+                matches.append({
+                    "name": a["name"], "type": a["type"],
+                    "trigger_words": a.get("trigger_words", []),
+                    "recommended_weight": a.get("default_high_weight", 0.5),
+                    "description": a.get("description", ""),
+                })
+        return {"matches": matches, "count": len(matches)}
+
+    elif name == "generate_idol_image":
+        task_id = str(uuid.uuid4())
+        generation_status[task_id] = {
+            "status": "pending", "progress": 0,
+            "message": "Queued", "output_path": None,
+        }
+        executor.submit(generate_flux_task, task_id, {
+            "prompt": args["prompt"],
+            "seed": args.get("seed", -1),
+            "aspect_ratio": args.get("aspect_ratio", "portrait"),
+            "num_inference_steps": 4,
+            "guidance_scale": 1.0,
+            "upscale": False,
+            "lora_weights": args.get("lora_weights"),
+        })
+        # Wait for completion (max 120s)
+        for _ in range(60):
+            await asyncio.sleep(2)
+            status = generation_status.get(task_id, {})
+            if status.get("status") in ("completed", "failed"):
+                break
+        return generation_status.get(task_id, {})
+
+    elif name == "create_video":
+        mode = args.get("mode", "fflf")
+        content_type = args.get("content_type", "dance")
+        task_id = str(uuid.uuid4())
+        generation_status[task_id] = {
+            "status": "pending", "progress": 0,
+            "message": "Queued", "output_path": None,
+        }
+
+        CONTENT_DEFAULTS = {
+            "dance":        {"segment": 33, "looping": True,  "aspect": "portrait",  "prompt": "A beautiful idol dancing smoothly, dynamic lighting"},
+            "narration":    {"segment": 65, "looping": False, "aspect": "landscape", "prompt": "A person speaking naturally, clear expression, professional lighting"},
+            "presentation": {"segment": 49, "looping": False, "aspect": "landscape", "prompt": "Professional product showcase, smooth transition, clean background"},
+        }
+        defaults = CONTENT_DEFAULTS.get(content_type, CONTENT_DEFAULTS["dance"])
+
+        if mode == "fflf":
+            folder_result = await prepare_workflow_images({"image_paths": args["image_paths"]})
+            seg_default = [defaults["segment"]] * len(args["image_paths"])
+            segment_lengths = "\n".join(str(s) for s in args.get("segment_lengths", seg_default))
+            executor.submit(workflow_generate_task, task_id, {
+                "workflow_id": "fflf_auto_v2",
+                "inputs": {
+                    "images": folder_result["folder_path"],
+                    "positive_prompt": args.get("master_prompt", defaults["prompt"]),
+                    "segment_lengths": segment_lengths,
+                    "seed": args.get("seed", 138),
+                    "looping": args.get("looping", defaults["looping"]),
+                },
+            })
+        elif mode == "infinitalk":
+            audio_path = args.get("audio_path", "")
+            if not audio_path:
+                return {"error": "audio_path is required for infinitalk mode"}
+            try:
+                import librosa
+                duration = librosa.get_duration(filename=audio_path)
+                frame_count = int(duration * 20)
+            except Exception:
+                frame_count = 160
+            executor.submit(workflow_generate_task, task_id, {
+                "workflow_id": "wan_infinitalk",
+                "inputs": {
+                    "image": args["image_paths"][0],
+                    "audio": audio_path,
+                    "prompt": args.get("master_prompt", defaults["prompt"]),
+                    "length": frame_count,
+                },
+            })
+        elif mode == "change_character":
+            ref_video_path = args.get("ref_video_url", "")
+            if ref_video_path.startswith("http"):
+                dl_result = download_youtube_video(ref_video_path)
+                ref_video_path = dl_result["path"]
+            executor.submit(workflow_generate_task, task_id, {
+                "workflow_id": "change_character",
+                "inputs": {
+                    "ref_image": args["image_paths"][0],
+                    "ref_video": ref_video_path,
+                    "prompt": args.get("master_prompt", "The character is dancing"),
+                    "aspect_ratio": args.get("aspect_ratio", defaults["aspect"]),
+                },
+            })
+        return {"task_id": task_id, "status": "started", "mode": mode, "content_type": content_type}
+
+    elif name == "generate_tts":
+        import soundfile as sf
+        try:
+            model = get_tts_model()
+            wavs, sr = model.generate_custom_voice(
+                text=args["text"],
+                language=args.get("language", "Korean"),
+                speaker=args.get("speaker", "Ryan"),
+            )
+            filename = f"tts_{uuid.uuid4().hex[:8]}.wav"
+            audio_dir = UPLOAD_DIR / "audio"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = str(audio_dir / filename)
+            sf.write(audio_path, wavs[0], sr)
+            duration = len(wavs[0]) / sr
+            return {
+                "audio_path": audio_path,
+                "audio_url": f"/uploads/audio/{filename}",
+                "duration": round(duration, 2),
+                "frame_count": int(duration * 20),
+            }
+        except Exception as e:
+            return {"error": f"TTS failed: {str(e)}"}
+
+    elif name == "list_gallery_images":
+        result = await list_outputs()
+        images = [o for o in result["outputs"] if o["type"] == "image"]
+        return {"images": images[:20]}
+
+    return {"error": f"Unknown tool: {name}"}
+
+
+# ============================================================================
+# Catch-all: serve static files and SPA fallback (must be LAST route)
+# ============================================================================
+@app.get("/{filename:path}")
+async def serve_static(filename: str):
+    """Serve static files from frontend dist (logo, favicon, etc.)."""
+    file_path = FRONTEND_DIR / filename
+    if file_path.is_file() and FRONTEND_DIR in file_path.resolve().parents:
+        return FileResponse(file_path)
+    # SPA fallback: return index.html for client-side routing
+    index_file = FRONTEND_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+# ============================================================================
 # Main
 # ============================================================================
 if __name__ == "__main__":
@@ -1386,7 +2390,7 @@ if __name__ == "__main__":
 
     logging.info("Starting WanAvatar API Server...")
     logging.info(f"S2V checkpoint: {CHECKPOINT_DIR}")
-    logging.info(f"I2V checkpoint: {I2V_CHECKPOINT_DIR} (available={os.path.exists(I2V_CHECKPOINT_DIR)})")
+    logging.info(f"I2V GGUF: {I2V_GGUF_DIR} (high={os.path.exists(I2V_GGUF_HIGH)}, low={os.path.exists(I2V_GGUF_LOW)})")
     logging.info(f"Device: {DEVICE}, Dtype: {DTYPE}")
     logging.info(f"Sequence Parallel: {USE_SP}, World Size: {WORLD_SIZE}")
 

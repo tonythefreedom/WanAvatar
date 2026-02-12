@@ -1,0 +1,713 @@
+{
+  "345": {
+    "class_type": "EmptyImage",
+    "inputs": {
+      "width": [
+        "482",
+        2
+      ],
+      "height": [
+        "482",
+        3
+      ],
+      "batch_size": 1,
+      "color": 1
+    }
+  },
+  "395": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": [
+        "446",
+        0
+      ],
+      "shift": 8
+    }
+  },
+  "394": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": [
+        "451",
+        0
+      ],
+      "shift": 8
+    }
+  },
+  "424": {
+    "class_type": "easy cleanGpuUsed",
+    "inputs": {
+      "anything": [
+        "407",
+        2
+      ]
+    }
+  },
+  "422": {
+    "class_type": "GIMMVFI_interpolate",
+    "inputs": {
+      "gimmvfi_model": [
+        "419",
+        0
+      ],
+      "images": [
+        "424",
+        0
+      ],
+      "padding": 1,
+      "multiplier": 2,
+      "seed": 139,
+      "use_fast_mode": false
+    }
+  },
+  "448": {
+    "class_type": "PathchSageAttentionKJ",
+    "inputs": {
+      "model": [
+        "450",
+        0
+      ],
+      "attention_mode": "sageattn_qk_int8_pv_fp16_triton"
+    }
+  },
+  "449": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "i2v\\wan2.2_i2v_low_noise_14B_Q5_K_M.gguf"
+    }
+  },
+  "450": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "i2v\\wan2.2_i2v_high_noise_14B_Q5_K_M.gguf"
+    }
+  },
+  "437": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "422",
+        0
+      ],
+      "frame_rate": 32
+    }
+  },
+  "435": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": [
+        "278",
+        2
+      ],
+      "b": 1,
+      "operation": "subtract"
+    }
+  },
+  "442": {
+    "class_type": "PathchSageAttentionKJ",
+    "inputs": {
+      "model": [
+        "449",
+        0
+      ],
+      "attention_mode": "sageattn_qk_int8_pv_fp16_triton"
+    }
+  },
+  "434": {
+    "class_type": "easy ifElse",
+    "inputs": {
+      "on_true": [
+        "278",
+        2
+      ],
+      "on_false": [
+        "435",
+        0
+      ],
+      "boolean": true
+    }
+  },
+  "444": {
+    "class_type": "ModelPatchTorchSettings",
+    "inputs": {
+      "model": [
+        "442",
+        0
+      ],
+      "torch_compile": true
+    }
+  },
+  "229": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": [
+        "165",
+        0
+      ],
+      "frame_rate": 16,
+      "loop_count": 0,
+      "filename_prefix": "img/%date:yyyy-MM-dd%/wan",
+      "format": "video/h265-mp4",
+      "pix_fmt": "yuv420p10le",
+      "crf": 0,
+      "save_metadata": true,
+      "pingpong": false,
+      "save_output": true
+    }
+  },
+  "405": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    }
+  },
+  "165": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "409",
+        0
+      ],
+      "vae": [
+        "168",
+        0
+      ]
+    }
+  },
+  "142": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "405",
+        0
+      ],
+      "text": [
+        "469",
+        0
+      ]
+    }
+  },
+  "445": {
+    "class_type": "ModelPatchTorchSettings",
+    "inputs": {
+      "model": [
+        "448",
+        0
+      ],
+      "torch_compile": true
+    }
+  },
+  "452": {
+    "class_type": "easy showAnything",
+    "inputs": {
+      "anything": [
+        "434",
+        0
+      ]
+    }
+  },
+  "347": {
+    "class_type": "ImageBatch",
+    "inputs": {
+      "image1": [
+        "277",
+        2
+      ],
+      "image2": [
+        "406",
+        2
+      ]
+    }
+  },
+  "311": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "278",
+        0
+      ]
+    }
+  },
+  "451": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "445",
+        0
+      ],
+      "lora_name": "wan\\speed\\Wan_2_2_I2V_A14B_HIGH_lightx2v_4step_lora_v1030_rank_64_bf16.safetensors",
+      "strength_model": 1
+    }
+  },
+  "480": {
+    "class_type": "LatentUpscaleWithVAE",
+    "inputs": {
+      "latent": [
+        "408",
+        0
+      ],
+      "vae": [
+        "168",
+        0
+      ],
+      "width": [
+        "482",
+        2
+      ],
+      "height": [
+        "482",
+        3
+      ]
+    }
+  },
+  "443": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "444",
+        0
+      ],
+      "lora_name": "wan\\speed\\wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
+      "strength_model": 1
+    }
+  },
+  "446": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "443",
+        0
+      ],
+      "lora_name": "wan\\22\\misc\\Wan2.2-Fun-A14B-InP-low-noise-HPS2.1.safetensors",
+      "strength_model": 0.75
+    }
+  },
+  "502": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": [
+        "501",
+        0
+      ],
+      "b": [
+        "500",
+        1
+      ],
+      "operation": "multiply"
+    }
+  },
+  "504": {
+    "class_type": "Display Any (rgthree)",
+    "inputs": {
+      "source": [
+        "503",
+        0
+      ]
+    }
+  },
+  "407": {
+    "class_type": "VHS_SplitImages",
+    "inputs": {
+      "images": [
+        "282",
+        0
+      ],
+      "split_index": 1
+    }
+  },
+  "419": {
+    "class_type": "DownloadAndLoadGIMMVFIModel",
+    "inputs": {
+      "model_name": "gimmvfi_r_arb_lpips_fp32.safetensors",
+      "precision": "fp32",
+      "use_compile": false
+    }
+  },
+  "158": {
+    "class_type": "WanVideoNAG",
+    "inputs": {
+      "model": [
+        "395",
+        0
+      ],
+      "conditioning": [
+        "518",
+        1
+      ],
+      "nag_scale": 11,
+      "nag_start": 0.25,
+      "nag_end": 2.5000000000000004,
+      "rescale": "default"
+    }
+  },
+  "518": {
+    "class_type": "WanFirstLastFrameToVideo",
+    "inputs": {
+      "positive": [
+        "142",
+        0
+      ],
+      "negative": [
+        "170",
+        0
+      ],
+      "vae": [
+        "168",
+        0
+      ],
+      "start_image": [
+        "429",
+        0
+      ],
+      "end_image": [
+        "429",
+        1
+      ],
+      "width": [
+        "482",
+        2
+      ],
+      "height": [
+        "482",
+        3
+      ],
+      "length": [
+        "431",
+        0
+      ],
+      "batch_size": 1
+    }
+  },
+  "168": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
+  },
+  "429": {
+    "class_type": "7580885d-77c2-42ad-b2c6-6ef0133a5462",
+    "inputs": {
+      "image": [
+        "278",
+        0
+      ],
+      "a": [
+        "277",
+        1
+      ]
+    }
+  },
+  "500": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "474",
+        0
+      ]
+    }
+  },
+  "474": {
+    "class_type": "ImageFromBatch",
+    "inputs": {
+      "image": [
+        "278",
+        0
+      ],
+      "batch_index": 0,
+      "length": 1
+    }
+  },
+  "406": {
+    "class_type": "VHS_SplitImages",
+    "inputs": {
+      "images": [
+        "165",
+        0
+      ],
+      "split_index": 1
+    }
+  },
+  "282": {
+    "class_type": "easy forLoopEnd",
+    "inputs": {
+      "flow": [
+        "277",
+        0
+      ],
+      "initial_value1": [
+        "347",
+        0
+      ]
+    }
+  },
+  "431": {
+    "class_type": "easy convertAnything",
+    "inputs": {
+      "*": [
+        "490",
+        0
+      ],
+      "anything": "int"
+    }
+  },
+  "277": {
+    "class_type": "easy forLoopStart",
+    "inputs": {
+      "initial_value1": [
+        "345",
+        0
+      ],
+      "total": [
+        "434",
+        0
+      ]
+    }
+  },
+  "519": {
+    "class_type": "Reroute",
+    "inputs": {
+      "": [
+        "277",
+        1
+      ]
+    }
+  },
+  "469": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_b": [
+        "491",
+        0
+      ],
+      "string_a": "This scene is based on the 24fps, accelerated, fast-motion, Best quality, futuristic 8k, 4k UHD, Realistic delicacy, vibrant.\nA beautiful videoclip of a dynamic lovely photomodel. She poses with exaggerated provocative movements.\nTracking Shot. Transition shake blur screen.",
+      "delimiter": ""
+    }
+  },
+  "517": {
+    "class_type": "WanFirstLastFrameToVideo",
+    "inputs": {
+      "positive": [
+        "142",
+        0
+      ],
+      "negative": [
+        "170",
+        0
+      ],
+      "vae": [
+        "168",
+        0
+      ],
+      "start_image": [
+        "429",
+        0
+      ],
+      "end_image": [
+        "429",
+        1
+      ],
+      "width": [
+        "482",
+        0
+      ],
+      "height": [
+        "482",
+        1
+      ],
+      "length": [
+        "431",
+        0
+      ],
+      "batch_size": 1
+    }
+  },
+  "310": {
+    "class_type": "WanVideoNAG",
+    "inputs": {
+      "model": [
+        "394",
+        0
+      ],
+      "conditioning": [
+        "517",
+        1
+      ],
+      "nag_scale": 11,
+      "nag_start": 0.25,
+      "nag_end": 2.5000000000000004,
+      "rescale": "default"
+    }
+  },
+  "490": {
+    "class_type": "easy promptLine",
+    "inputs": {
+      "start_index": [
+        "519",
+        0
+      ],
+      "prompt": "33\n37\n33\n33",
+      "max_rows": 1,
+      "encode_mode": ""
+    }
+  },
+  "501": {
+    "class_type": "easy int",
+    "inputs": {
+      "value": 288
+    }
+  },
+  "438": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "437",
+        0
+      ],
+      "prefix": "vid/wan",
+      "codec": "mp4",
+      "crf": "h264"
+    }
+  },
+  "503": {
+    "class_type": "easy mathInt",
+    "inputs": {
+      "a": [
+        "502",
+        0
+      ],
+      "b": [
+        "500",
+        0
+      ],
+      "operation": "divide"
+    }
+  },
+  "516": {
+    "class_type": "fd68fd16-4ba8-4488-ab07-1135d6c79315",
+    "inputs": {
+      "a": [
+        "482",
+        0
+      ],
+      "a_1": [
+        "482",
+        1
+      ],
+      "a_2": [
+        "482",
+        2
+      ],
+      "a_3": [
+        "482",
+        3
+      ]
+    }
+  },
+  "170": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "405",
+        0
+      ],
+      "text": "slow motion, gaudy, overexposed, blurred details, captions, style, artwork, painting, still, overall gray, low quality, JPEG compression residue, mutilated, poorly drawn faces, deformed, disfigured, malformed limbs, still image, 3d rendering, video games,\nlowres, censored, draft, slowly, mediocre, cartoon, inhumain, mutant, beast, surnaturel, static, immobile, bad anatomy, camera, flickering, hard cut, flash, aliasing"
+    }
+  },
+  "408": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "model": [
+        "310",
+        0
+      ],
+      "positive": [
+        "517",
+        0
+      ],
+      "negative": [
+        "517",
+        1
+      ],
+      "latent_image": [
+        "517",
+        2
+      ],
+      "add_noise": "enable",
+      "noise_seed": 138,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "beta",
+      "start_at_step": 0,
+      "end_at_step": 4,
+      "return_with_leftover_noise": "disable"
+    }
+  },
+  "409": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "model": [
+        "158",
+        0
+      ],
+      "positive": [
+        "518",
+        0
+      ],
+      "negative": [
+        "518",
+        1
+      ],
+      "latent_image": [
+        "480",
+        0
+      ],
+      "add_noise": "enable",
+      "noise_seed": 138,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "beta",
+      "start_at_step": 4,
+      "end_at_step": 100,
+      "return_with_leftover_noise": "disable"
+    }
+  },
+  "278": {
+    "class_type": "LoadImagesFromFolderKJ",
+    "inputs": {
+      "folder_path": "C:\\User\\path-to-images-folder",
+      "start_index": -1,
+      "end_index": -1,
+      "crop": "crop",
+      "max_images": 20,
+      "skip_n": 0,
+      "recursive": false
+    }
+  },
+  "482": {
+    "class_type": "SetImageSizeWithScale",
+    "inputs": {
+      "width": [
+        "501",
+        0
+      ],
+      "height": [
+        "503",
+        0
+      ],
+      "scale_factor": 2.5
+    }
+  },
+  "515": {
+    "class_type": "easy showAnything",
+    "inputs": {
+      "anything": [
+        "516",
+        0
+      ]
+    }
+  }
+}

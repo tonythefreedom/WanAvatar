@@ -1671,6 +1671,123 @@ def _set_nested(workflow: dict, node_id: str, field_path: str, value):
     obj[parts[-1]] = value
 
 
+def resolve_set_get_nodes(workflow: dict) -> dict:
+    """
+    Resolve SetNode/GetNode virtual nodes into direct connections.
+
+    SetNode/GetNode are frontend-only JavaScript nodes in KJNodes with NO Python
+    backend. They cannot be executed via ComfyUI's API. This function rewires all
+    connections to bypass them and removes non-executable nodes.
+    """
+    # Class type display-name → registered-name fixes
+    CLASS_TYPE_FIXES = {"Int": "easy int"}
+
+    name_to_source = {}
+    setnode_ids = set()
+    getnode_ids = set()
+    remove_ids = set()
+
+    # Phase 1: Collect SetNode/GetNode/Note nodes
+    for node_id, node in workflow.items():
+        ct = node.get("class_type", "")
+        if ct == "SetNode":
+            setnode_ids.add(node_id)
+            remove_ids.add(node_id)
+            name = node["inputs"].get("value", "")
+            for key, val in node["inputs"].items():
+                if key != "value" and isinstance(val, list) and len(val) == 2:
+                    name_to_source[name] = val
+                    break
+        elif ct == "GetNode":
+            getnode_ids.add(node_id)
+            remove_ids.add(node_id)
+        elif ct in ("Note", "Fast Groups Bypasser (rgthree)"):
+            remove_ids.add(node_id)
+
+    if not setnode_ids and not getnode_ids:
+        return workflow  # Nothing to resolve
+
+    # Phase 2: Map GetNode → source, SetNode → source
+    getnode_to_source = {}
+    for nid in getnode_ids:
+        name = workflow[nid]["inputs"].get("value", "")
+        if name in name_to_source:
+            getnode_to_source[nid] = name_to_source[name]
+
+    setnode_to_source = {}
+    for nid in setnode_ids:
+        name = workflow[nid]["inputs"].get("value", "")
+        if name in name_to_source:
+            setnode_to_source[nid] = name_to_source[name]
+
+    # Phase 3: Rewire all references
+    for node_id, node in workflow.items():
+        if node_id in remove_ids:
+            continue
+        for key, val in node.get("inputs", {}).items():
+            if isinstance(val, list) and len(val) == 2:
+                ref_id = str(val[0])
+                if ref_id in getnode_to_source:
+                    node["inputs"][key] = getnode_to_source[ref_id]
+                elif ref_id in setnode_to_source:
+                    node["inputs"][key] = setnode_to_source[ref_id]
+
+    # Phase 4: Fix class_type mismatches
+    for node_id, node in workflow.items():
+        if node_id in remove_ids:
+            continue
+        ct = node.get("class_type", "")
+        if ct in CLASS_TYPE_FIXES:
+            node["class_type"] = CLASS_TYPE_FIXES[ct]
+
+    # Phase 5: Remove virtual nodes
+    for node_id in remove_ids:
+        del workflow[node_id]
+
+    logging.info(f"Resolved {len(setnode_ids)} SetNodes, {len(getnode_ids)} GetNodes, "
+                 f"{len(remove_ids)} nodes removed")
+    return workflow
+
+
+def merge_audio_to_video(video_path: str, audio_source_path: str) -> str:
+    """
+    Extract audio from audio_source_path and merge it into video_path using ffmpeg.
+    Returns path to the merged video, or original video_path if merge fails.
+    """
+    import subprocess
+
+    output_path = video_path.replace(".mp4", "_audio.mp4")
+
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", audio_source_path,
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-shortest",
+            output_path,
+        ], capture_output=True, timeout=120)
+
+        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            logging.info(f"Audio merged successfully: {output_path}")
+            # Replace original with merged version
+            os.replace(output_path, video_path)
+            return video_path
+        else:
+            logging.warning(f"ffmpeg audio merge failed: {result.stderr.decode()[:500]}")
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            return video_path
+    except Exception as e:
+        logging.warning(f"Audio merge error: {e}")
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return video_path
+
+
 def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
     """Load API-format workflow and inject user parameters using the registry."""
     import json as json_mod
@@ -1681,6 +1798,9 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
     api_path = WORKFLOW_DIR / wf_config["api_json"]
     with open(api_path) as f:
         workflow = json_mod.load(f)
+
+    # Resolve SetNode/GetNode virtual nodes (frontend-only, no Python backend)
+    workflow = resolve_set_get_nodes(workflow)
 
     for input_def in wf_config["inputs"]:
         key = input_def["key"]
@@ -1785,7 +1905,8 @@ def download_youtube_video(url: str) -> dict:
     filepath = UPLOAD_DIR / filename
 
     ydl_opts = {
-        'format': 'best[ext=mp4]/best',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best',
+        'merge_output_format': 'mp4',
         'outtmpl': str(filepath),
         'quiet': True,
         'no_warnings': True,
@@ -1865,8 +1986,18 @@ def workflow_generate_task(task_id: str, params: dict):
         monitor_comfyui_progress(task_id, prompt_id, client_id)
 
         # Step 7: Retrieve output
-        generation_status[task_id].update({"progress": 0.95, "message": "Retrieving output..."})
+        generation_status[task_id].update({"progress": 0.92, "message": "Retrieving output..."})
         output_path = retrieve_comfyui_output(prompt_id)
+
+        # Step 8: Post-processing — merge audio from reference video
+        # For change_character workflow, extract audio from the reference video
+        # and overlay it onto the generated output video
+        ref_video_original = params.get("_ref_video_original")
+        if ref_video_original and os.path.exists(ref_video_original):
+            generation_status[task_id].update({"progress": 0.95, "message": "Merging audio from reference video..."})
+            abs_output = str(OUTPUT_DIR / os.path.basename(output_path))
+            merge_audio_to_video(abs_output, ref_video_original)
+            logging.info(f"Audio merged from reference video: {ref_video_original}")
 
         generation_status[task_id].update({
             "status": "completed", "progress": 1.0,
@@ -1901,7 +2032,23 @@ async def start_workflow_generation(request: WorkflowGenerateRequest):
         "status": "pending", "progress": 0,
         "message": "Workflow task queued", "output_path": None,
     }
-    executor.submit(workflow_generate_task, task_id, request.dict())
+
+    params = request.dict()
+
+    # Save original reference video path for audio extraction post-processing
+    # (before upload_to_comfyui changes the filename)
+    for input_def in wf_config["inputs"]:
+        if input_def["type"] == "video" and input_def["key"] in (params.get("inputs") or {}):
+            ref_path = params["inputs"][input_def["key"]]
+            if ref_path:
+                # Resolve to absolute path
+                abs_ref = ref_path
+                if not os.path.isabs(ref_path):
+                    abs_ref = str(Path(ref_path).resolve())
+                params["_ref_video_original"] = abs_ref
+                break
+
+    executor.submit(workflow_generate_task, task_id, params)
     return {"task_id": task_id}
 
 

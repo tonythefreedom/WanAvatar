@@ -366,11 +366,22 @@
       "title": "WanVideoVAELoader"
     }
   },
+  "207": {
+    "class_type": "WanVideoBlockSwap",
+    "inputs": {
+      "blocks_to_swap": 12,
+      "offload_img_emb": false,
+      "offload_txt_emb": false
+    },
+    "_meta": {
+      "title": "WanVideoBlockSwap"
+    }
+  },
   "205": {
     "class_type": "WanVideoModelLoader",
     "inputs": {
       "model": "Wan22Animate/wan2.2_animate_14B_bf16.safetensors",
-      "base_precision": "fp16_fast",
+      "base_precision": "bf16",
       "quantization": "disabled",
       "load_device": "offload_device",
       "attention_mode": "sageattn",
@@ -914,7 +925,7 @@
       "filename_prefix": "AnimateDiff",
       "format": "video/h264-mp4",
       "pix_fmt": "yuv420p",
-      "crf": 19,
+      "crf": 15,
       "save_metadata": true,
       "trim_to_audio": false,
       "pingpong": false,

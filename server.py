@@ -1898,14 +1898,25 @@ def retrieve_comfyui_output(prompt_id: str) -> str:
 
 
 def download_youtube_video(url: str) -> dict:
-    """Download a YouTube video using yt-dlp and return the file path."""
+    """Download a YouTube video using yt-dlp and return the file path.
+
+    Prefers H.264 (avc1) for OpenCV/ComfyUI compatibility.
+    Falls back to any codec + ffmpeg re-encode if H.264 unavailable.
+    Limits resolution to 1080p (max 1920 on either dimension).
+    """
     import yt_dlp
 
     filename = f"{uuid.uuid4()}.mp4"
     filepath = UPLOAD_DIR / filename
 
+    # Prefer H.264 (avc1) for ComfyUI/OpenCV compatibility, limit to 1080p
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best',
+        'format': (
+            'bestvideo[height<=1920][width<=1920][vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/'
+            'bestvideo[height<=1920][width<=1920][ext=mp4]+bestaudio[ext=m4a]/'
+            'bestvideo[height<=1920][width<=1920]+bestaudio/'
+            'best[ext=mp4]/best'
+        ),
         'merge_output_format': 'mp4',
         'outtmpl': str(filepath),
         'quiet': True,
@@ -1916,6 +1927,7 @@ def download_youtube_video(url: str) -> dict:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         title = info.get('title', 'Unknown')
+        vcodec = info.get('vcodec', '')
 
     # yt-dlp may add extensions; find the actual file
     actual_path = filepath
@@ -1923,6 +1935,30 @@ def download_youtube_video(url: str) -> dict:
         for f in UPLOAD_DIR.glob(f"{filepath.stem}*"):
             actual_path = f
             break
+
+    # Re-encode to H.264 if downloaded codec is not avc1 (OpenCV compatibility)
+    if vcodec and not vcodec.startswith('avc1'):
+        logging.info(f"Re-encoding {vcodec} → H.264 for OpenCV compatibility...")
+        h264_path = UPLOAD_DIR / f"{filepath.stem}_h264.mp4"
+        try:
+            result = subprocess.run([
+                'ffmpeg', '-y', '-i', str(actual_path),
+                '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
+                '-c:a', 'aac', '-b:a', '192k',
+                str(h264_path),
+            ], capture_output=True, timeout=120)
+            if result.returncode == 0 and h264_path.exists() and h264_path.stat().st_size > 0:
+                actual_path.unlink()
+                h264_path.rename(actual_path)
+                logging.info(f"Re-encode complete: {actual_path}")
+            else:
+                logging.warning(f"Re-encode failed: {result.stderr.decode()[:200]}")
+                if h264_path.exists():
+                    h264_path.unlink()
+        except Exception as e:
+            logging.warning(f"Re-encode error: {e}")
+            if h264_path.exists():
+                h264_path.unlink()
 
     return {
         "path": str(actual_path),

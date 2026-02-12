@@ -2066,7 +2066,7 @@ function App() {
                   {workflows.map(wf => (
                     <button key={wf.id}
                       className={`workflow-tab${activeWorkflowId === wf.id ? ' active' : ''}`}
-                      onClick={() => setActiveWorkflowId(wf.id)}>
+                      onClick={() => { setActiveWorkflowId(wf.id); document.querySelector('.main-content')?.scrollTo(0, 0); }}>
                       {wf.display_name[lang] || wf.display_name.en}
                     </button>
                   ))}

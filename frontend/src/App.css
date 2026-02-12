@@ -1247,6 +1247,10 @@ video.picker-thumb {
   border-radius: var(--radius-sm);
   overflow: hidden;
   margin-bottom: 20px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--background);
 }
 
 .workflow-tab {

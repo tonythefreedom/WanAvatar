@@ -1,17 +1,18 @@
-# WanAvatar
+# CineSynth AI
 
-AI 아바타 비디오 생성 파이프라인 — 텍스트, 이미지, 음성에서 립싱크 아바타 비디오를 생성하는 3단계 워크플로우.
+AI 비디오 프로덕션 스튜디오 — 텍스트, 이미지, 음성에서 다양한 유형의 고퀄리티 영상을 생성하는 통합 파이프라인.
 
-## 3단계 파이프라인
+![Architecture](assets/figures/architecture.png)
+
+## 파이프라인
 
 ```
 텍스트 프롬프트 ──→ [FLUX.2-klein-9B] ──→ 이미지 ──→ [Real-ESRGAN x2] ──→ 업스케일 이미지
-                                                                                │
-                                                                                ▼
-음성/오디오 ──────────────────────────────────────────────────→ [Wan2.2-I2V-14B] ──→ 비디오
-                                                                                │
-                                                                                ▼
-                                                                  [Wan2.2-S2V-14B] ──→ 립싱크 비디오
+                                             │
+                    ┌────────────────────────┼───────────────────────────┐
+                    ▼                        ▼                          ▼
+            [Wan2.2-I2V-14B]        [ComfyUI Workflows]        [Wan2.2-S2V-14B]
+             이미지→비디오         FFLF / ChangeChar / InfiniTalk      립싱크 비디오
 ```
 
 | 단계 | 모델 | 설명 |
@@ -19,25 +20,32 @@ AI 아바타 비디오 생성 파이프라인 — 텍스트, 이미지, 음성�
 | **Image Gen** | FLUX.2-klein-9B (9B) | 텍스트→이미지, 4스텝 고속 생성 |
 | **Upscale** | Real-ESRGAN x2 | 720x1280 → 1440x2560 업스케일링 |
 | **Video Gen** | Wan2.2-I2V-14B-A (14B) | 이미지→비디오 + 모션 LoRA |
-| **Voice Lipsync** | Wan2.2-S2V-14B (14B) | 음성→비디오 립싱크 생성 |
+| **Video Studio** | ComfyUI Workflows | FFLF 루프, Change Character, InfiniTalk |
+| **Workflow** | ComfyUI Integration | 워크플로우별 동적 UI + 실시간 진행률 |
 
 ## 주요 기능
 
-- **3단계 파이프라인**: Image Gen → Video Gen → Voice Lipsync
+### UI 메뉴 구조
+- **Video Studio**: 수동 모드 (Step 1-2-3) + AI 어시스턴트 (Solar-Banya-100b 채팅)
+- **Image Gen**: FLUX.2-klein-9B 이미지 생성 + Real-ESRGAN x2 업스케일
+- **Video Gen**: Wan2.2-I2V-14B 이미지→비디오 + Multi-LoRA MoE
+- **Workflow**: ComfyUI 워크플로우 (Change Character, FFLF, InfiniTalk)
+- **Gallery**: 이미지/비디오 탭 분리, 삭제 기능, 워크플로우용 다중 선택
+
+### 핵심 기능
 - **FLUX.2-klein-9B**: 9B 텍스트→이미지 모델, 4스텝 고속 생성 (guidance_scale=1.0)
 - **Real-ESRGAN x2**: 생성 이미지 2배 업스케일링 (RRDBNet, tile=512)
 - **Multi-LoRA 시스템**: 여러 LoRA 어댑터 동시 적용, 어댑터별 가중치 조절
 - **High/Low Noise MoE**: 디퓨전 스텝별 다른 LoRA 가중치 (고노이즈 vs 저노이즈)
 - **LoRA 카테고리**: `img/` (이미지 생성), `mov/` (비디오 생성) 자동 분류
 - **Wan2.2-I2V-14B-A**: 이미지→비디오 생성 (SVI 2.0 Pro)
-- **Wan2.2-S2V-14B**: 14B 파라미터 Speech-to-Video 립싱크 모델
 - **Sequence Parallel (SP)**: 2+ GPU에서 torchrun 기반 DeepSpeed Ulysses SP로 DiT 어텐션 병렬화
-- **자동 분할 생성**: 긴 오디오를 자동으로 ~5초 세그먼트로 분할, Auto-Regressive 방식으로 연결
-- **GPU 모델 스왑**: 3개 모델(S2V, I2V, FLUX)이 GPU VRAM 공유, 자동 CPU 오프로드
+- **GPU 모델 스왑**: 4개 모델(S2V, I2V, FLUX, TTS)이 GPU VRAM 공유, 자동 CPU 오프로드
 - **속도 최적화**: UniPC 솔버 (25 steps) + infer_frames 80 + TeaCache (0.15 threshold)
-- **ComfyUI 워크플로우**: 외부 ComfyUI 서버와 연동, 워크플로우별 동적 UI 자동 생성
-- **YouTube 다운로드**: 워크플로우 입력용 YouTube 비디오 자동 다운로드
-- **갤러리**: 이미지/비디오 탭 분리, 삭제 기능, 워크플로우용 다중 선택
+- **ComfyUI 워크플로우**: Change Character V1.1, FFLF Auto Loop V2, InfiniTalk
+- **YouTube 다운로드**: 고해상도(1080p) YouTube 비디오 자동 다운로드 (bestvideo+bestaudio)
+- **Qwen3-TTS**: 텍스트 대본 → 음성 합성 (10개 언어, CustomVoice)
+- **Studio AI**: Solar-Banya-100b function calling으로 자동 비디오 생성
 - **FastAPI 서버**: REST API 기반 생성 서버 + React 프론트엔드
 - **다국어 UI**: 한국어, 영어, 중국어 지원
 - **LoRA 파인튜닝**: 특정 인물에 대한 립싱크 품질 향상
@@ -365,7 +373,7 @@ WanAvatar/
 ├── vocal_seperator.py        # 보컬 분리
 ├── frontend/                 # React 프론트엔드
 │   ├── src/
-│   │   ├── App.jsx           # 4페이지 UI (Video Gen, Lipsync, Workflow, Gallery)
+│   │   ├── App.jsx           # 5페이지 UI (Studio, Image Gen, Video Gen, Workflow, Gallery)
 │   │   ├── App.css
 │   │   └── api.js            # API 클라이언트
 │   └── vite.config.js

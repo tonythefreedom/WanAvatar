@@ -1245,7 +1245,6 @@ video.picker-thumb {
   display: flex;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  overflow: hidden;
   margin-bottom: 20px;
   position: sticky;
   top: 0;
@@ -1263,6 +1262,14 @@ video.picker-thumb {
   font-size: 1rem;
   font-weight: 500;
   transition: all 0.2s;
+}
+
+.workflow-tab:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.workflow-tab:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .workflow-tab.active {
@@ -1375,6 +1382,665 @@ video.picker-thumb {
   border-color: var(--primary);
 }
 
+/* ============ Video Editor - Enhanced Timeline UI ============ */
+
+/* 2-column layout */
+.video-editor-layout {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 16px;
+  margin-top: 12px;
+}
+@media (max-width: 900px) {
+  .video-editor-layout { grid-template-columns: 1fr; }
+}
+
+.video-editor-viewer {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.video-drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  overflow: hidden;
+  background: #000;
+  transition: border-color 0.2s;
+}
+.video-drop-zone:hover { border-color: var(--primary); }
+.video-drop-zone p { color: var(--text-light); padding: 2rem; text-align: center; }
+
+.video-editor-player {
+  max-height: 400px;
+  width: 100%;
+  display: block;
+}
+
+/* Right controls panel */
+.video-editor-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.video-edit-section {
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.video-edit-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+.trim-duration {
+  font-size: 0.82rem;
+  color: var(--text-light);
+  margin-bottom: 8px;
+}
+
+.trim-controls-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trim-controls-vertical label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: var(--text-light);
+}
+
+.trim-input {
+  width: 68px;
+  padding: 5px 6px;
+  text-align: center;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--text);
+  outline: none;
+}
+.trim-input:focus { border-color: var(--primary); }
+
+.trim-unit {
+  font-size: 0.82rem;
+  color: var(--text-light);
+}
+
+.trim-selection-info {
+  font-size: 0.78rem;
+  color: var(--primary);
+  font-weight: 600;
+  margin: 8px 0;
+  padding: 5px 8px;
+  background: rgba(99, 102, 241, 0.06);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.trim-btn-row {
+  display: flex;
+  gap: 8px;
+}
+.trim-btn-row .btn {
+  flex: 1;
+}
+
+.trim-btn {
+  padding: 6px 14px !important;
+  font-size: 0.85rem !important;
+  text-align: center;
+  text-decoration: none;
+}
+
+/* ============ Timeline ============ */
+.video-timeline-container {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  user-select: none;
+}
+
+/* Ruler */
+.video-timeline-ruler {
+  position: relative;
+  height: 28px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: pointer;
+  overflow: visible;
+}
+
+.ruler-tick {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.ruler-tick-line {
+  width: 1px;
+  height: 10px;
+  background: var(--text-light);
+  opacity: 0.5;
+}
+.ruler-tick-label {
+  font-size: 0.6rem;
+  color: var(--text-light);
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+/* Playhead */
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: calc(100% + 41px);
+  background: #ef4444;
+  transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: none;
+  transition: left 0.05s linear;
+}
+.timeline-playhead::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid #ef4444;
+}
+
+/* Track */
+.video-timeline-track {
+  position: relative;
+  height: 40px;
+  background: var(--surface);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  border: 1px solid var(--border);
+  border-top: none;
+  overflow: visible;
+}
+
+.timeline-region-dimmed {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 1;
+  pointer-events: none;
+}
+.timeline-region-active {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
+  border-top: 2px solid var(--primary);
+  border-bottom: 2px solid var(--primary);
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Handles */
+.timeline-handle {
+  position: absolute;
+  top: -1px;
+  width: 14px;
+  height: calc(100% + 2px);
+  cursor: ew-resize;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateX(-50%);
+  transition: background 0.15s;
+}
+.timeline-handle-left {
+  border-radius: 4px 0 0 4px;
+  background: var(--primary);
+}
+.timeline-handle-right {
+  border-radius: 0 4px 4px 0;
+  background: var(--primary);
+}
+.timeline-handle:hover, .timeline-handle:active {
+  background: #4338ca;
+}
+.handle-grip {
+  width: 4px;
+  height: 16px;
+  border-left: 1px solid rgba(255,255,255,0.6);
+  border-right: 1px solid rgba(255,255,255,0.6);
+}
+
+/* ============ Workflow - Avatar Gallery ============ */
+.avatar-viewer {
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.avatar-viewer img {
+  max-height: 280px;
+  width: 100%;
+  object-fit: contain;
+}
+
+.avatar-selector {
+  margin-bottom: 10px;
+}
+.avatar-dropdown {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+  cursor: pointer;
+  outline: none;
+  text-transform: capitalize;
+}
+.avatar-dropdown:focus { border-color: var(--primary); }
+
+.avatar-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 8px;
+}
+.avatar-thumb-item {
+  cursor: pointer;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color 0.2s, transform 0.15s;
+  text-align: center;
+}
+.avatar-thumb-item:hover { border-color: var(--primary); transform: scale(1.03); }
+.avatar-thumb-item.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3); }
+.avatar-thumb-item img {
+  width: 100%;
+  height: 80px;
+  object-fit: cover;
+  display: block;
+}
+.avatar-thumb-name {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-light);
+  padding: 3px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============ Workflow - Background Gallery ============ */
+.bg-selected-preview {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface);
+  text-align: center;
+}
+
+.bg-gallery-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.bg-gallery-actions .btn {
+  flex: 1;
+}
+
+.bg-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.bg-gallery-item {
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color 0.2s, transform 0.15s;
+  background: var(--background);
+}
+
+.bg-gallery-item:hover {
+  border-color: var(--primary);
+  transform: scale(1.03);
+}
+
+.bg-gallery-item.selected {
+  border-color: var(--primary);
+}
+
+.bg-gallery-item img {
+  width: 100%;
+  height: 80px;
+  object-fit: cover;
+  display: block;
+}
+
+.bg-gallery-name {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-light);
+  padding: 3px 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bg-gallery-empty {
+  font-size: 0.85rem;
+  color: var(--text-light);
+  text-align: center;
+  padding: 16px;
+  grid-column: 1 / -1;
+}
+
+/* ============ Workflow - Button Row ============ */
+.wf-btn-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.cancel-btn {
+  background: var(--danger, #ef4444) !important;
+  color: #fff !important;
+  border: none !important;
+}
+.cancel-btn:hover {
+  background: #dc2626 !important;
+}
+
+/* ============ YouTube Metadata ============ */
+.yt-meta-card {
+  background: var(--surface);
+}
+.yt-meta-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.yt-meta-label {
+  font-size: 0.82rem;
+  color: var(--text-light);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.yt-meta-input {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.85rem;
+  outline: none;
+}
+.yt-meta-input:focus { border-color: var(--primary); }
+.yt-meta-textarea {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.85rem;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+}
+.yt-meta-textarea:focus { border-color: var(--primary); }
+
+/* ============ Fashion Style Selector ============ */
+.fashion-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+.fashion-cat-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--background);
+  color: var(--text-light);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.fashion-cat-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.fashion-cat-btn.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.fashion-random-btn {
+  margin-left: auto;
+  font-size: 0.78rem;
+  padding: 4px 14px;
+}
+.fashion-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.fashion-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.fashion-item:hover {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.05);
+}
+.fashion-item.selected {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.1);
+}
+.fashion-item-cat {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-light);
+  white-space: nowrap;
+  min-width: 52px;
+  text-align: center;
+}
+.fashion-item.selected .fashion-item-cat {
+  background: var(--primary);
+  color: #fff;
+}
+.fashion-item-text {
+  font-size: 0.82rem;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+/* ============ Workflow - Queue Panel ============ */
+.queue-card {
+  margin-top: 12px;
+}
+
+.queue-empty {
+  font-size: 0.85rem;
+  color: var(--text-light);
+  text-align: center;
+  padding: 20px;
+}
+
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.queue-item--running {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+
+.queue-item--completed {
+  opacity: 0.75;
+}
+
+.queue-item--failed {
+  border-color: #e74c3c;
+}
+
+.queue-item-status {
+  flex-shrink: 0;
+  font-size: 0.9rem;
+}
+
+.queue-item-label {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.queue-item-progress {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.queue-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.queue-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.queue-progress-text {
+  font-size: 0.75rem;
+  color: var(--text-light);
+  min-width: 32px;
+  text-align: right;
+}
+
+.queue-item-pending {
+  font-size: 0.78rem;
+  color: var(--text-light);
+  margin-left: auto;
+}
+
+.queue-item-dl {
+  font-size: 0.75rem;
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.queue-item-error {
+  font-size: 0.75rem;
+  color: #e74c3c;
+  margin-left: auto;
+}
+
+.queue-item-remove {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-light);
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.queue-item-remove:hover {
+  opacity: 1;
+  color: #e74c3c;
+}
+
+.queue-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.queue-actions .btn {
+  flex: 1;
+}
+
 /* ============ Workflow - Aspect Ratio Buttons ============ */
 .aspect-ratio-btns {
   display: flex;
@@ -1470,3 +2136,358 @@ video.picker-thumb {
   align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { background: var(--surface); border-radius: var(--radius); padding: 24px;
   max-width: 800px; max-height: 80vh; overflow-y: auto; width: 90%; }
+
+/* ============ Login Page ============ */
+.login-page {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.login-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 2.5rem;
+  width: 380px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.login-card .logo-img {
+  height: 56px;
+  margin-bottom: 1.5rem;
+}
+
+.login-card h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 1.5rem;
+  color: var(--text);
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 1.25rem 0;
+  color: var(--text-light);
+  font-size: 0.85rem;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.login-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+  font-family: inherit;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.login-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.remember-email-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: #64748b;
+  cursor: pointer;
+  margin: -0.25rem 0 0.25rem;
+}
+
+.remember-email-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+
+.login-btn {
+  width: 100%;
+  padding: 0.75rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+  color: white;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.login-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.login-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.login-error {
+  color: var(--error);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.google-signin-btn {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.google-signin-btn:hover {
+  background: var(--background);
+  border-color: var(--primary);
+}
+
+.google-signin-btn img {
+  width: 20px;
+  height: 20px;
+}
+
+/* ============ Pending Approval Page ============ */
+.pending-page {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.pending-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 2.5rem;
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.pending-card h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+.pending-card p {
+  color: var(--text-light);
+  font-size: 0.95rem;
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+}
+
+/* ============ Header User Area ============ */
+.header-user-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border);
+}
+
+.header-user-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header-logout-btn {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-light);
+  transition: all 0.2s;
+}
+
+.header-logout-btn:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+/* ============ Admin Panel ============ */
+.admin-table-wrapper {
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.admin-table th {
+  text-align: left;
+  padding: 0.75rem 0.75rem;
+  background: var(--background);
+  color: var(--text-light);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid var(--border);
+}
+
+.admin-table td {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.admin-table tr:hover td {
+  background: rgba(99, 102, 241, 0.03);
+}
+
+.admin-user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-user-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.badge-superadmin { background: #ede9fe; color: #6d28d9; }
+.badge-user { background: #e0e7ff; color: #3730a3; }
+.badge-pending { background: #fef3c7; color: #92400e; }
+.badge-approved { background: #d1fae5; color: #065f46; }
+.badge-suspended { background: #fee2e2; color: #991b1b; }
+
+.admin-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.admin-actions .btn {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  width: auto;
+}
+
+.btn.success {
+  background: var(--success);
+  color: white;
+}
+
+.btn.success:hover:not(:disabled) {
+  background: #16a34a;
+}
+
+.btn.warning {
+  background: #f59e0b;
+  color: white;
+}
+
+.btn.warning:hover:not(:disabled) {
+  background: #d97706;
+}
+
+/* ============ Loading Spinner ============ */
+.loading-page {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background);
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============ Generate Button Green (Change Character) ============ */
+.generate-btn-green {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+}
+
+.generate-btn-green:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(34, 197, 94, 0.4) !important;
+}

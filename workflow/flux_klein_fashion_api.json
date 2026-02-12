@@ -1,0 +1,449 @@
+{
+  "200": {
+    "inputs": {
+      "model_name": "sam_vit_h_4b8939.pth"
+    },
+    "class_type": "SAMModelLoader (segment anything)",
+    "_meta": {
+      "title": "SAM Model Loader"
+    }
+  },
+  "201": {
+    "inputs": {
+      "model_name": "GroundingDINO_SwinT_OGC (694MB)"
+    },
+    "class_type": "GroundingDinoModelLoader (segment anything)",
+    "_meta": {
+      "title": "GroundingDINO Model Loader"
+    }
+  },
+  "76": {
+    "inputs": {
+      "image": "avatar_placeholder.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Avatar Image"
+    }
+  },
+  "105": {
+    "inputs": {
+      "image": "clothing_ref_placeholder.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Clothing Reference Image"
+    }
+  },
+  "202": {
+    "inputs": {
+      "sam_model": [
+        "200",
+        0
+      ],
+      "grounding_dino_model": [
+        "201",
+        0
+      ],
+      "image": [
+        "76",
+        0
+      ],
+      "prompt": "clothing, garment, dress, top, bottom, shirt, skirt, pants",
+      "threshold": 0.3
+    },
+    "class_type": "GroundingDinoSAMSegment (segment anything)",
+    "_meta": {
+      "title": "Auto-Segment Clothing"
+    }
+  },
+  "106:88": {
+    "inputs": {
+      "downscale_algorithm": "bilinear",
+      "upscale_algorithm": "bicubic",
+      "preresize": false,
+      "preresize_mode": "ensure minimum and maximum resolution",
+      "preresize_min_width": 1024,
+      "preresize_min_height": 1024,
+      "preresize_max_width": 1024,
+      "preresize_max_height": 1024,
+      "mask_fill_holes": true,
+      "mask_expand_pixels": 10,
+      "mask_invert": false,
+      "mask_blend_pixels": 64,
+      "mask_hipass_filter": 0.1,
+      "extend_for_outpainting": false,
+      "extend_up_factor": 1.0,
+      "extend_down_factor": 1.0,
+      "extend_left_factor": 1.0,
+      "extend_right_factor": 1.0,
+      "context_from_mask_extend_factor": 1.2,
+      "output_resize_to_target_size": true,
+      "output_target_width": 1024,
+      "output_target_height": 1024,
+      "output_padding": "32",
+      "device_mode": "gpu (much faster)",
+      "image": [
+        "76",
+        0
+      ],
+      "mask": [
+        "202",
+        1
+      ]
+    },
+    "class_type": "InpaintCropImproved",
+    "_meta": {
+      "title": "Inpaint Crop"
+    }
+  },
+  "106:70": {
+    "inputs": {
+      "unet_name": "flux-2-klein-base-9b.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "106:71": {
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "106:72": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "106:74": {
+    "inputs": {
+      "text": "The person is wearing a stylish new outfit",
+      "clip": [
+        "106:71",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "106:87": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "106:71",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "106:79:78": {
+    "inputs": {
+      "pixels": [
+        "106:88",
+        1
+      ],
+      "vae": [
+        "106:72",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode (Cropped Image)"
+    }
+  },
+  "106:79:77": {
+    "inputs": {
+      "conditioning": [
+        "106:74",
+        0
+      ],
+      "latent": [
+        "106:79:78",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent (Positive + Cropped)"
+    }
+  },
+  "106:79:76": {
+    "inputs": {
+      "conditioning": [
+        "106:87",
+        0
+      ],
+      "latent": [
+        "106:79:78",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent (Negative + Cropped)"
+    }
+  },
+  "106:90": {
+    "inputs": {
+      "noise_mask": true,
+      "positive": [
+        "106:79:77",
+        0
+      ],
+      "negative": [
+        "106:79:76",
+        0
+      ],
+      "vae": [
+        "106:72",
+        0
+      ],
+      "pixels": [
+        "106:88",
+        1
+      ],
+      "mask": [
+        "106:88",
+        2
+      ]
+    },
+    "class_type": "InpaintModelConditioning",
+    "_meta": {
+      "title": "InpaintModelConditioning"
+    }
+  },
+  "106:85": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 1.0,
+      "resolution_steps": 1,
+      "image": [
+        "105",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "ImageScaleToTotalPixels (Clothing Ref)"
+    }
+  },
+  "106:84:78": {
+    "inputs": {
+      "pixels": [
+        "106:85",
+        0
+      ],
+      "vae": [
+        "106:72",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode (Clothing Ref)"
+    }
+  },
+  "106:84:77": {
+    "inputs": {
+      "conditioning": [
+        "106:90",
+        0
+      ],
+      "latent": [
+        "106:84:78",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent (Positive + Clothing)"
+    }
+  },
+  "106:84:76": {
+    "inputs": {
+      "conditioning": [
+        "106:90",
+        1
+      ],
+      "latent": [
+        "106:84:78",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent (Negative + Clothing)"
+    }
+  },
+  "106:81": {
+    "inputs": {
+      "image": [
+        "106:88",
+        1
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "106:62": {
+    "inputs": {
+      "steps": 4,
+      "width": [
+        "106:81",
+        0
+      ],
+      "height": [
+        "106:81",
+        1
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2Scheduler"
+    }
+  },
+  "106:61": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "113": {
+    "inputs": {
+      "value": 42
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Seed"
+    }
+  },
+  "106:73": {
+    "inputs": {
+      "noise_seed": [
+        "113",
+        0
+      ]
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "106:63": {
+    "inputs": {
+      "cfg": 1.0,
+      "model": [
+        "106:70",
+        0
+      ],
+      "positive": [
+        "106:84:77",
+        0
+      ],
+      "negative": [
+        "106:84:76",
+        0
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFGGuider"
+    }
+  },
+  "106:64": {
+    "inputs": {
+      "noise": [
+        "106:73",
+        0
+      ],
+      "guider": [
+        "106:63",
+        0
+      ],
+      "sampler": [
+        "106:61",
+        0
+      ],
+      "sigmas": [
+        "106:62",
+        0
+      ],
+      "latent_image": [
+        "106:90",
+        2
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "106:65": {
+    "inputs": {
+      "samples": [
+        "106:64",
+        0
+      ],
+      "vae": [
+        "106:72",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "106:89": {
+    "inputs": {
+      "stitcher": [
+        "106:88",
+        0
+      ],
+      "inpainted_image": [
+        "106:65",
+        0
+      ]
+    },
+    "class_type": "InpaintStitchImproved",
+    "_meta": {
+      "title": "Inpaint Stitch"
+    }
+  },
+  "104": {
+    "inputs": {
+      "filename_prefix": "FashionChange",
+      "images": [
+        "106:89",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

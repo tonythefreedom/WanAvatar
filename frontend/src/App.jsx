@@ -20,6 +20,21 @@ import {
   generateTTS,
   getTTSSpeakers,
   sendStudioChat,
+  trimVideo,
+  uploadBackground,
+  listBackgrounds,
+  listAvatarGroups,
+  listAvatarImages,
+  getFashionStyles,
+  cancelGeneration,
+  authLogin,
+  authGoogle,
+  authMe,
+  adminListUsers,
+  adminApproveUser,
+  adminSuspendUser,
+  adminActivateUser,
+  adminDeleteUser,
 } from './api';
 import './App.css';
 
@@ -111,12 +126,43 @@ const translations = {
     menuWorkflow: 'Workflow',
     wfGenerateBtn: 'Run Workflow',
     wfGenerating: 'Running...',
+    wfCancelBtn: 'Cancel',
+    wfCancelled: 'Cancelled',
     wfVideoUpload: 'File Upload',
     wfVideoYoutube: 'YouTube URL',
     wfDownloadBtn: 'Download',
     wfDownloading: 'Downloading...',
     wfSelectImages: 'Select Images',
     wfSelectedCount: 'selected',
+    wfVideoEdit: 'Video Edit',
+    wfTrimStart: 'Start',
+    wfTrimEnd: 'End',
+    wfTrimApply: 'Apply Trim',
+    wfDuration: 'Duration',
+    wfReplaceAudio: 'Replace Audio',
+    wfTrimming: 'Trimming...',
+    wfRemoveAudio: 'Remove',
+    wfBgGallery: 'Select from Stages',
+    wfBgUpload: 'Upload New',
+    wfBgGalleryEmpty: 'No backgrounds saved yet',
+    wfAddToQueue: 'Add to Queue',
+    wfQueue: 'Queue',
+    wfStartQueue: 'Start Queue',
+    wfClearQueue: 'Clear Completed',
+    wfQueueEmpty: 'Queue is empty',
+    wfQueueRunning: 'Processing queue...',
+    wfQueuePending: 'Pending',
+    ytMeta: 'YouTube Shorts',
+    ytTitle: 'Title',
+    ytDescription: 'Description',
+    ytHashtags: 'Hashtags',
+    ytTitlePlaceholder: 'Auto: {avatar} - date',
+    ytDescPlaceholder: 'Video description...',
+    ytHashPlaceholder: '#Shorts #AI #dance',
+    fashionStyle: 'Fashion Style',
+    fashionAll: 'All',
+    fashionApply: 'Apply',
+    fashionRandom: 'Random',
     output: 'Output',
     download: 'Download',
     noOutputYet: 'No output yet',
@@ -168,6 +214,34 @@ const translations = {
     studioNeedRefVideo: 'Upload a reference video first',
     studioTotalFrames: 'Total Frames',
     studioEstDuration: 'Est. Duration',
+    // Auth
+    loginTitle: 'Sign In',
+    loginEmail: 'Email',
+    loginPassword: 'Password',
+    loginSignIn: 'Sign In',
+    loginGoogleBtn: 'Sign in with Google',
+    loginPending: 'Your account is pending approval. An administrator will review your registration.',
+    loginError: 'Login failed',
+    rememberEmail: 'Remember ID',
+    logoutBtn: 'Logout',
+    // Admin
+    menuAdmin: 'Users',
+    adminTitle: 'User Management',
+    adminEmail: 'Email',
+    adminName: 'Name',
+    adminRole: 'Role',
+    adminStatus: 'Status',
+    adminCreated: 'Joined',
+    adminLastLogin: 'Last Login',
+    adminActions: 'Actions',
+    adminApprove: 'Approve',
+    adminSuspend: 'Suspend',
+    adminActivate: 'Activate',
+    adminDelete: 'Delete',
+    adminDeleteConfirm: 'Delete this user?',
+    adminPending: 'pending',
+    adminApproved: 'approved',
+    adminSuspended: 'suspended',
   },
   ko: {
     title: 'WanAvatar',
@@ -251,12 +325,43 @@ const translations = {
     menuWorkflow: '워크플로우',
     wfGenerateBtn: '워크플로우 실행',
     wfGenerating: '실행 중...',
+    wfCancelBtn: '취소',
+    wfCancelled: '취소됨',
     wfVideoUpload: '파일 업로드',
     wfVideoYoutube: 'YouTube URL',
     wfDownloadBtn: '다운로드',
     wfDownloading: '다운로드 중...',
     wfSelectImages: '이미지 선택',
     wfSelectedCount: '선택됨',
+    wfVideoEdit: '비디오 편집',
+    wfTrimStart: '시작',
+    wfTrimEnd: '종료',
+    wfTrimApply: '트림 적용',
+    wfDuration: '길이',
+    wfReplaceAudio: '오디오 교체',
+    wfTrimming: '트리밍 중...',
+    wfRemoveAudio: '제거',
+    wfBgGallery: '스테이지에서 선택',
+    wfBgUpload: '새로 업로드',
+    wfBgGalleryEmpty: '저장된 배경이 없습니다',
+    wfAddToQueue: '큐에 추가',
+    wfQueue: '큐',
+    wfStartQueue: '큐 시작',
+    wfClearQueue: '완료 항목 정리',
+    wfQueueEmpty: '큐가 비어있습니다',
+    wfQueueRunning: '큐 처리 중...',
+    wfQueuePending: '대기 중',
+    ytMeta: 'YouTube Shorts',
+    ytTitle: '제목',
+    ytDescription: '설명',
+    ytHashtags: '해시태그',
+    ytTitlePlaceholder: '자동: {아바타명} - 날짜',
+    ytDescPlaceholder: '영상 설명...',
+    ytHashPlaceholder: '#Shorts #AI #dance',
+    fashionStyle: '패션 스타일',
+    fashionAll: '전체',
+    fashionApply: '적용',
+    fashionRandom: '랜덤',
     output: '출력',
     download: '다운로드',
     noOutputYet: '아직 출력이 없습니다',
@@ -308,6 +413,34 @@ const translations = {
     studioNeedRefVideo: '참조 비디오를 업로드하세요',
     studioTotalFrames: '총 프레임',
     studioEstDuration: '예상 시간',
+    // Auth
+    loginTitle: '로그인',
+    loginEmail: '이메일',
+    loginPassword: '비밀번호',
+    loginSignIn: '로그인',
+    loginGoogleBtn: 'Google로 로그인',
+    loginPending: '계정 승인 대기 중입니다. 관리자가 가입을 검토할 예정입니다.',
+    loginError: '로그인 실패',
+    rememberEmail: 'ID 저장',
+    logoutBtn: '로그아웃',
+    // Admin
+    menuAdmin: '사용자 관리',
+    adminTitle: '사용자 관리',
+    adminEmail: '이메일',
+    adminName: '이름',
+    adminRole: '역할',
+    adminStatus: '상태',
+    adminCreated: '가입일',
+    adminLastLogin: '마지막 로그인',
+    adminActions: '관리',
+    adminApprove: '승인',
+    adminSuspend: '정지',
+    adminActivate: '활성화',
+    adminDelete: '삭제',
+    adminDeleteConfirm: '이 사용자를 삭제하시겠습니까?',
+    adminPending: '대기',
+    adminApproved: '승인됨',
+    adminSuspended: '정지됨',
   },
   zh: {
     title: 'WanAvatar',
@@ -391,12 +524,43 @@ const translations = {
     menuWorkflow: '工作流',
     wfGenerateBtn: '运行工作流',
     wfGenerating: '运行中...',
+    wfCancelBtn: '取消',
+    wfCancelled: '已取消',
     wfVideoUpload: '文件上传',
     wfVideoYoutube: 'YouTube链接',
     wfDownloadBtn: '下载',
     wfDownloading: '下载中...',
     wfSelectImages: '选择图片',
     wfSelectedCount: '已选择',
+    wfVideoEdit: '视频编辑',
+    wfTrimStart: '开始',
+    wfTrimEnd: '结束',
+    wfTrimApply: '应用裁剪',
+    wfDuration: '时长',
+    wfReplaceAudio: '替换音频',
+    wfTrimming: '裁剪中...',
+    wfRemoveAudio: '删除',
+    wfBgGallery: '从舞台选择',
+    wfBgUpload: '上传新背景',
+    wfBgGalleryEmpty: '暂无保存的背景',
+    wfAddToQueue: '添加到队列',
+    wfQueue: '队列',
+    wfStartQueue: '开始队列',
+    wfClearQueue: '清除已完成',
+    wfQueueEmpty: '队列为空',
+    wfQueueRunning: '队列处理中...',
+    wfQueuePending: '等待中',
+    ytMeta: 'YouTube Shorts',
+    ytTitle: '标题',
+    ytDescription: '描述',
+    ytHashtags: '标签',
+    ytTitlePlaceholder: '自动: {角色名} - 日期',
+    ytDescPlaceholder: '视频描述...',
+    ytHashPlaceholder: '#Shorts #AI #dance',
+    fashionStyle: '时尚风格',
+    fashionAll: '全部',
+    fashionApply: '应用',
+    fashionRandom: '随机',
     output: '输出',
     download: '下载',
     noOutputYet: '暂无输出',
@@ -448,6 +612,34 @@ const translations = {
     studioNeedRefVideo: '请上传参考视频',
     studioTotalFrames: '总帧数',
     studioEstDuration: '预计时长',
+    // Auth
+    loginTitle: '登录',
+    loginEmail: '邮箱',
+    loginPassword: '密码',
+    loginSignIn: '登录',
+    loginGoogleBtn: '使用Google登录',
+    loginPending: '您的账户正在等待审批。管理员将审核您的注册。',
+    loginError: '登录失败',
+    rememberEmail: '记住ID',
+    logoutBtn: '退出',
+    // Admin
+    menuAdmin: '用户管理',
+    adminTitle: '用户管理',
+    adminEmail: '邮箱',
+    adminName: '姓名',
+    adminRole: '角色',
+    adminStatus: '状态',
+    adminCreated: '注册时间',
+    adminLastLogin: '最近登录',
+    adminActions: '操作',
+    adminApprove: '批准',
+    adminSuspend: '暂停',
+    adminActivate: '激活',
+    adminDelete: '删除',
+    adminDeleteConfirm: '确定删除此用户？',
+    adminPending: '待审批',
+    adminApproved: '已批准',
+    adminSuspended: '已暂停',
   },
 };
 
@@ -455,6 +647,19 @@ function App() {
   const [lang, setLang] = useState('en');
   const [activeMenu, setActiveMenu] = useState('studio');
   const [config, setConfig] = useState(null);
+
+  // Auth state
+  const [authUser, setAuthUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [isPendingApproval, setIsPendingApproval] = useState(false);
+  const [loginEmail, setLoginEmail] = useState(() => localStorage.getItem('saved_login_email') || '');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [rememberEmail, setRememberEmail] = useState(() => !!localStorage.getItem('saved_login_email'));
+  // Admin state
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
 
   // Gallery state
   const [videos, setVideos] = useState([]);
@@ -524,6 +729,10 @@ function App() {
   const [workflows, setWorkflows] = useState([]);
   const [activeWorkflowId, setActiveWorkflowId] = useState(null);
   const [workflowStates, setWorkflowStates] = useState({});
+  const [wfQueue, setWfQueue] = useState({});
+  const wfQueueRef = useRef({});
+  const videoRefsMap = useRef({});
+  const timelineRefsMap = useRef({});
 
   // ============ Studio state ============
   const [studioMode, setStudioMode] = useState('manual'); // 'manual' | 'auto'
@@ -599,6 +808,118 @@ function App() {
 
   const t = useCallback((key) => translations[lang][key] || key, [lang]);
 
+  // ─── Auth: check session on mount ───
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) { setAuthLoading(false); return; }
+    authMe()
+      .then(data => {
+        setAuthUser(data);
+        setIsPendingApproval(false);
+        setAuthLoading(false);
+      })
+      .catch(err => {
+        if (err.response?.status === 403 && err.response?.data?.detail?.includes('pending')) {
+          setIsPendingApproval(true);
+        } else {
+          localStorage.removeItem('auth_token');
+        }
+        setAuthLoading(false);
+      });
+    const onLogout = () => { setAuthUser(null); setIsPendingApproval(false); };
+    window.addEventListener('auth-logout', onLogout);
+    return () => window.removeEventListener('auth-logout', onLogout);
+  }, []);
+
+  // ─── Auth handlers ───
+  const handleEmailLogin = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setLoginLoading(true);
+    // Save or clear remembered email
+    if (rememberEmail) {
+      localStorage.setItem('saved_login_email', loginEmail);
+    } else {
+      localStorage.removeItem('saved_login_email');
+    }
+    try {
+      const data = await authLogin(loginEmail, loginPassword);
+      localStorage.setItem('auth_token', data.token);
+      const me = await authMe();
+      setAuthUser(me);
+      setIsPendingApproval(false);
+    } catch (err) {
+      setLoginError(err.response?.data?.detail || t('loginError'));
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = useCallback(() => {
+    if (!window.google?.accounts?.id) return;
+    window.google.accounts.id.initialize({
+      client_id: config?.google_client_id || '',
+      callback: async (response) => {
+        setLoginError('');
+        setLoginLoading(true);
+        try {
+          const data = await authGoogle(response.credential);
+          localStorage.setItem('auth_token', data.token);
+          if (data.status === 'pending') {
+            setIsPendingApproval(true);
+          } else {
+            const me = await authMe();
+            setAuthUser(me);
+            setIsPendingApproval(false);
+          }
+        } catch (err) {
+          if (err.response?.status === 403 && err.response?.data?.detail?.includes('pending')) {
+            setIsPendingApproval(true);
+          } else {
+            setLoginError(err.response?.data?.detail || t('loginError'));
+          }
+        } finally {
+          setLoginLoading(false);
+        }
+      },
+    });
+    window.google.accounts.id.prompt();
+  }, [config, t]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('auth_token');
+    setAuthUser(null);
+    setIsPendingApproval(false);
+  };
+
+  // ─── Admin handlers ───
+  const fetchAdminUsers = useCallback(async () => {
+    setAdminLoading(true);
+    try {
+      const data = await adminListUsers();
+      setAdminUsers(data.users || []);
+    } catch {} finally { setAdminLoading(false); }
+  }, []);
+
+  const handleAdminAction = async (userId, action) => {
+    try {
+      if (action === 'approve') await adminApproveUser(userId);
+      else if (action === 'suspend') await adminSuspendUser(userId);
+      else if (action === 'activate') await adminActivateUser(userId);
+      else if (action === 'delete') {
+        if (!confirm(t('adminDeleteConfirm'))) return;
+        await adminDeleteUser(userId);
+      }
+      fetchAdminUsers();
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Error');
+    }
+  };
+
+  useEffect(() => {
+    if (activeMenu === 'admin' && authUser?.role === 'superadmin') fetchAdminUsers();
+  }, [activeMenu, authUser, fetchAdminUsers]);
+
   // Load config & LoRA adapters
   useEffect(() => {
     getConfig().then(res => setConfig(res.data)).catch(console.error);
@@ -649,12 +970,21 @@ function App() {
       wfs.forEach(wf => {
         initStates[wf.id] = {
           inputs: {}, filePaths: {}, previews: {},
-          isGenerating: false, progress: 0, status: '', outputVideo: null,
+          isGenerating: false, progress: 0, status: '', outputVideo: null, currentTaskId: null,
           videoInputMode: {}, youtubeUrl: {}, youtubeDownloading: {},
           galleryOpen: {}, gallerySelected: {},
+          videoDuration: {}, trimStart: {}, trimEnd: {}, trimming: {}, playheadPosition: {},
+          bgGalleryOpen: {}, bgGalleryImages: [],
+          avatarGroups: [], avatarSelectedGroup: {}, avatarImages: {},
+          ytTitle: '', ytDescription: '', ytHashtags: '',
+          fashionStyles: [], fashionCategories: [], fashionFilterCat: 'All',
         };
         wf.inputs.forEach(inp => {
           if (inp.default !== undefined) initStates[wf.id].inputs[inp.key] = inp.default;
+          if (inp.default_path) {
+            initStates[wf.id].filePaths[inp.key] = inp.default_path;
+            if (inp.default_preview) initStates[wf.id].previews[inp.key] = inp.default_preview;
+          }
           if (inp.type === 'video') {
             initStates[wf.id].videoInputMode[inp.key] = 'upload';
             initStates[wf.id].youtubeUrl[inp.key] = '';
@@ -1171,6 +1501,93 @@ function App() {
     }
   };
 
+  const handleWfBgImageUpload = async (wfId, key, e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    updateWfPreview(wfId, key, URL.createObjectURL(file));
+    try {
+      const data = await uploadBackground(file);
+      updateWfFilePath(wfId, key, data.path);
+    } catch (err) {
+      updateWfState(wfId, { status: `Upload error: ${err.message}` });
+    }
+  };
+
+  const handleWfBgGalleryToggle = async (wfId, key) => {
+    const wfState = workflowStates[wfId];
+    if (!wfState.bgGalleryOpen[key]) {
+      try {
+        const data = await listBackgrounds();
+        updateWfState(wfId, { bgGalleryImages: data.backgrounds || [] });
+      } catch {}
+    }
+    updateWfState(wfId, {
+      bgGalleryOpen: { ...wfState.bgGalleryOpen, [key]: !wfState.bgGalleryOpen[key] },
+    });
+  };
+
+  const handleWfAvatarInit = async (wfId) => {
+    const wfState = workflowStates[wfId];
+    if (wfState?.avatarGroups?.length > 0) return;
+    try {
+      const data = await listAvatarGroups();
+      const groups = data.groups || [];
+      updateWfState(wfId, { avatarGroups: groups });
+      if (groups.length > 0) {
+        handleWfAvatarSelect(wfId, groups[0]);
+      }
+    } catch {}
+  };
+
+  const handleWfAvatarSelect = async (wfId, group) => {
+    setWorkflowStates(prev => ({
+      ...prev, [wfId]: {
+        ...prev[wfId],
+        avatarSelectedGroup: { ...prev[wfId].avatarSelectedGroup, _current: group },
+      },
+    }));
+    try {
+      const data = await listAvatarImages(group);
+      setWorkflowStates(prev => ({
+        ...prev, [wfId]: {
+          ...prev[wfId],
+          avatarImages: { ...prev[wfId].avatarImages, [group]: data.images || [] },
+        },
+      }));
+    } catch {}
+  };
+
+  const handleWfFashionInit = async (wfId) => {
+    const wfState = workflowStates[wfId];
+    if (wfState?.fashionStyles?.length > 0) return;
+    try {
+      const data = await getFashionStyles();
+      updateWfState(wfId, {
+        fashionStyles: data.styles || [],
+        fashionCategories: data.categories || [],
+      });
+    } catch {}
+  };
+
+  const handleWfFashionApply = (wfId, prompt) => {
+    setWorkflowStates(prev => ({
+      ...prev, [wfId]: {
+        ...prev[wfId],
+        inputs: { ...prev[wfId].inputs, fashion_prompt: prompt },
+      },
+    }));
+  };
+
+  const handleWfFashionRandom = (wfId) => {
+    const wfState = workflowStates[wfId];
+    const styles = wfState?.fashionStyles || [];
+    const cat = wfState?.fashionFilterCat || 'All';
+    const filtered = cat === 'All' ? styles : styles.filter(s => s.category === cat);
+    if (filtered.length === 0) return;
+    const pick = filtered[Math.floor(Math.random() * filtered.length)];
+    handleWfFashionApply(wfId, pick.prompt);
+  };
+
   const handleWfVideoUpload = async (wfId, key, e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1215,6 +1632,136 @@ function App() {
         ...prev, [wfId]: {
           ...prev[wfId],
           youtubeDownloading: { ...prev[wfId].youtubeDownloading, [key]: false },
+        },
+      }));
+    }
+  };
+
+  // ---- Timeline helpers ----
+  const generateRulerTicks = (duration) => {
+    if (!duration || duration <= 0) return [];
+    let interval;
+    if (duration <= 10) interval = 1;
+    else if (duration <= 30) interval = 2;
+    else if (duration <= 60) interval = 5;
+    else if (duration <= 300) interval = 10;
+    else interval = 30;
+    const ticks = [];
+    for (let t = 0; t <= duration; t += interval) ticks.push(t);
+    if (ticks[ticks.length - 1] !== Math.floor(duration)) ticks.push(duration);
+    return ticks;
+  };
+
+  const formatTime = (seconds) => {
+    if (seconds == null || isNaN(seconds)) return '0s';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.round((seconds % 1) * 10);
+    return m > 0 ? `${m}:${String(s).padStart(2, '0')}.${ms}` : `${s}.${ms}s`;
+  };
+
+  const handleTimelineDragStart = useCallback((wfId, key, handleType, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const timelineEl = timelineRefsMap.current[`${wfId}-${key}`];
+    if (!timelineEl) return;
+
+    const onMouseMove = (moveEvent) => {
+      const rect = timelineEl.getBoundingClientRect();
+      const x = Math.max(0, Math.min(moveEvent.clientX - rect.left, rect.width));
+      setWorkflowStates(prev => {
+        const wf = prev[wfId];
+        const duration = wf.videoDuration?.[key] || 0;
+        if (!duration) return prev;
+        const time = Math.round(((x / rect.width) * duration) * 100) / 100;
+        const currentStart = parseFloat(wf.trimStart?.[key]) || 0;
+        const currentEnd = parseFloat(wf.trimEnd?.[key]) || duration;
+        let newStart = currentStart, newEnd = currentEnd;
+        if (handleType === 'start') {
+          newStart = Math.max(0, Math.min(time, currentEnd - 0.1));
+        } else {
+          newEnd = Math.min(duration, Math.max(time, currentStart + 0.1));
+        }
+        const videoEl = videoRefsMap.current[`${wfId}-${key}`];
+        if (videoEl) videoEl.currentTime = handleType === 'start' ? newStart : newEnd;
+        return {
+          ...prev, [wfId]: {
+            ...wf,
+            trimStart: { ...wf.trimStart, [key]: newStart },
+            trimEnd: { ...wf.trimEnd, [key]: newEnd },
+            playheadPosition: { ...wf.playheadPosition, [key]: handleType === 'start' ? newStart : newEnd },
+          },
+        };
+      });
+    };
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, []);
+
+  const handleRulerClick = useCallback((wfId, key, e) => {
+    const timelineEl = timelineRefsMap.current[`${wfId}-${key}`];
+    if (!timelineEl) return;
+    const rect = timelineEl.getBoundingClientRect();
+    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    setWorkflowStates(prev => {
+      const wf = prev[wfId];
+      const duration = wf.videoDuration?.[key] || 0;
+      if (!duration) return prev;
+      const time = Math.round(((x / rect.width) * duration) * 100) / 100;
+      const videoEl = videoRefsMap.current[`${wfId}-${key}`];
+      if (videoEl) videoEl.currentTime = time;
+      return {
+        ...prev, [wfId]: {
+          ...wf,
+          playheadPosition: { ...wf.playheadPosition, [key]: time },
+        },
+      };
+    });
+  }, []);
+
+  const handleVideoTimeUpdate = useCallback((wfId, key, e) => {
+    const currentTime = Math.round(e.target.currentTime * 100) / 100;
+    setWorkflowStates(prev => ({
+      ...prev, [wfId]: {
+        ...prev[wfId],
+        playheadPosition: { ...prev[wfId].playheadPosition, [key]: currentTime },
+      },
+    }));
+  }, []);
+
+  const handleWfVideoTrim = async (wfId, key) => {
+    const wfState = workflowStates[wfId];
+    if (!wfState?.filePaths[key]) return;
+    const start = parseFloat(wfState.trimStart?.[key]) || 0;
+    const end = parseFloat(wfState.trimEnd?.[key]) || wfState.videoDuration?.[key] || 0;
+    if (end <= start) return;
+    setWorkflowStates(prev => ({
+      ...prev, [wfId]: { ...prev[wfId], trimming: { ...prev[wfId].trimming, [key]: true } },
+    }));
+    try {
+      const result = await trimVideo(wfState.filePaths[key], start, end);
+      updateWfFilePath(wfId, key, result.path);
+      updateWfPreview(wfId, key, result.url);
+      setWorkflowStates(prev => ({
+        ...prev, [wfId]: {
+          ...prev[wfId],
+          videoDuration: { ...prev[wfId].videoDuration, [key]: result.duration },
+          trimStart: { ...prev[wfId].trimStart, [key]: 0 },
+          trimEnd: { ...prev[wfId].trimEnd, [key]: result.duration },
+          trimming: { ...prev[wfId].trimming, [key]: false },
+          status: '',
+        },
+      }));
+    } catch (err) {
+      setWorkflowStates(prev => ({
+        ...prev, [wfId]: {
+          ...prev[wfId],
+          trimming: { ...prev[wfId].trimming, [key]: false },
+          status: `Trim error: ${err.message}`,
         },
       }));
     }
@@ -1305,8 +1852,14 @@ function App() {
     }
 
     try {
-      const data = await startWorkflowGeneration({ workflow_id: wfId, inputs: payload });
+      const data = await startWorkflowGeneration({
+        workflow_id: wfId, inputs: payload,
+        yt_title: wfState.ytTitle || '',
+        yt_description: wfState.ytDescription || '',
+        yt_hashtags: wfState.ytHashtags || '',
+      });
       const taskId = data.task_id;
+      updateWfState(wfId, { currentTaskId: taskId });
       const poll = setInterval(async () => {
         try {
           const s = await getTaskStatus(taskId);
@@ -1316,19 +1869,197 @@ function App() {
           });
           if (s.status === 'completed') {
             clearInterval(poll);
-            updateWfState(wfId, { isGenerating: false, progress: 100, outputVideo: s.output_url });
+            updateWfState(wfId, { isGenerating: false, progress: 100, outputVideo: s.output_url, currentTaskId: null });
           } else if (s.status === 'failed') {
             clearInterval(poll);
-            updateWfState(wfId, { isGenerating: false, status: `Error: ${s.error || 'Failed'}` });
+            updateWfState(wfId, { isGenerating: false, status: `Error: ${s.error || 'Failed'}`, currentTaskId: null });
+          } else if (s.status === 'cancelled') {
+            clearInterval(poll);
+            updateWfState(wfId, { isGenerating: false, status: t('wfCancelled'), currentTaskId: null });
           }
         } catch (err) {
           clearInterval(poll);
-          updateWfState(wfId, { isGenerating: false, status: `Polling error: ${err.message}` });
+          updateWfState(wfId, { isGenerating: false, status: `Polling error: ${err.message}`, currentTaskId: null });
         }
       }, 3000);
     } catch (err) {
       updateWfState(wfId, { isGenerating: false, status: `Error: ${err.message}` });
     }
+  };
+
+  const handleWfCancel = async (wfId) => {
+    const wfState = workflowStates[wfId];
+    const taskId = wfState?.currentTaskId;
+    if (!taskId) return;
+    try {
+      await cancelGeneration(taskId);
+    } catch {}
+    updateWfState(wfId, { isGenerating: false, status: t('wfCancelled'), currentTaskId: null });
+  };
+
+  // ─── Queue handlers ───
+  // Keep ref in sync for use inside async loops
+  useEffect(() => { wfQueueRef.current = wfQueue; }, [wfQueue]);
+
+  const updateQueueItem = useCallback((wfId, itemId, updates) => {
+    setWfQueue(prev => {
+      const q = prev[wfId];
+      if (!q) return prev;
+      return {
+        ...prev,
+        [wfId]: {
+          ...q,
+          items: q.items.map(it => it.id === itemId ? { ...it, ...updates } : it),
+        },
+      };
+    });
+  }, []);
+
+  const handleWfQueueAdd = (wfId) => {
+    const wfState = workflowStates[wfId];
+    const wfDef = workflows.find(w => w.id === wfId);
+    if (!wfDef || !wfState) return;
+
+    // Validate required inputs
+    for (const inp of wfDef.inputs) {
+      if (inp.required) {
+        const val = (inp.type === 'image' || inp.type === 'video')
+          ? wfState.filePaths[inp.key]
+          : inp.type === 'gallery_select'
+            ? (wfState.gallerySelected[inp.key]?.length > 0)
+            : wfState.inputs[inp.key];
+        if (!val) {
+          updateWfState(wfId, { status: `Required: ${inp.label[lang] || inp.key}` });
+          return;
+        }
+      }
+    }
+
+    const item = {
+      id: crypto.randomUUID(),
+      label: `Job ${(wfQueue[wfId]?.items?.length || 0) + 1}`,
+      inputs: { ...wfState.inputs },
+      filePaths: { ...wfState.filePaths },
+      previews: { ...wfState.previews },
+      gallerySelected: { ...wfState.gallerySelected },
+      ytTitle: wfState.ytTitle || '',
+      ytDescription: wfState.ytDescription || '',
+      ytHashtags: wfState.ytHashtags || '',
+      status: 'pending',
+      progress: 0,
+      outputVideo: null,
+      error: null,
+    };
+
+    setWfQueue(prev => ({
+      ...prev,
+      [wfId]: {
+        ...prev[wfId],
+        items: [...(prev[wfId]?.items || []), item],
+        isProcessing: prev[wfId]?.isProcessing || false,
+      },
+    }));
+    updateWfState(wfId, { status: `Added: ${item.label}` });
+  };
+
+  const handleWfQueueStart = async (wfId) => {
+    const queue = wfQueue[wfId];
+    if (!queue?.items?.length || queue.isProcessing) return;
+
+    setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: true } }));
+
+    const wfDef = workflows.find(w => w.id === wfId);
+    // Get pending items from current state snapshot
+    const pendingIds = queue.items.filter(i => i.status === 'pending').map(i => i.id);
+
+    for (const itemId of pendingIds) {
+      // Read latest item from ref
+      const currentItem = wfQueueRef.current[wfId]?.items?.find(i => i.id === itemId);
+      if (!currentItem || currentItem.status !== 'pending') continue;
+
+      updateQueueItem(wfId, itemId, { status: 'running', progress: 0 });
+
+      try {
+        // Build payload
+        const payload = { ...currentItem.inputs };
+        for (const [key, path] of Object.entries(currentItem.filePaths)) {
+          if (!Array.isArray(path)) payload[key] = path;
+        }
+        for (const inp of wfDef.inputs) {
+          if (inp.type === 'gallery_select') {
+            const sel = (currentItem.gallerySelected[inp.key] || []).map(i => i.path);
+            if (sel.length > 0) {
+              const result = await prepareWorkflowImages(sel);
+              payload[inp.key] = result.folder_path;
+            }
+          }
+        }
+
+        const data = await startWorkflowGeneration({
+          workflow_id: wfId, inputs: payload,
+          yt_title: currentItem.ytTitle || '',
+          yt_description: currentItem.ytDescription || '',
+          yt_hashtags: currentItem.ytHashtags || '',
+        });
+        const taskId = data.task_id;
+
+        // Poll until done
+        await new Promise((resolve) => {
+          const poll = setInterval(async () => {
+            try {
+              const s = await getTaskStatus(taskId);
+              updateQueueItem(wfId, itemId, {
+                progress: Math.round((s.progress || 0) * 100),
+              });
+              if (s.status === 'completed') {
+                clearInterval(poll);
+                updateQueueItem(wfId, itemId, {
+                  status: 'completed', progress: 100,
+                  outputVideo: s.output_url || s.output_path,
+                });
+                resolve();
+              } else if (s.status === 'failed') {
+                clearInterval(poll);
+                updateQueueItem(wfId, itemId, {
+                  status: 'failed', error: s.message || 'Failed',
+                });
+                resolve();
+              } else if (s.status === 'cancelled') {
+                clearInterval(poll);
+                updateQueueItem(wfId, itemId, {
+                  status: 'failed', error: 'Cancelled',
+                });
+                resolve();
+              }
+            } catch (err) {
+              clearInterval(poll);
+              updateQueueItem(wfId, itemId, { status: 'failed', error: err.message });
+              resolve();
+            }
+          }, 3000);
+        });
+      } catch (err) {
+        updateQueueItem(wfId, itemId, { status: 'failed', error: err.message });
+      }
+    }
+
+    setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: false } }));
+  };
+
+  const handleWfQueueRemove = (wfId, itemId) => {
+    setWfQueue(prev => {
+      const q = prev[wfId];
+      if (!q) return prev;
+      return { ...prev, [wfId]: { ...q, items: q.items.filter(i => i.id !== itemId || i.status === 'running') } };
+    });
+  };
+
+  const handleWfQueueClear = (wfId) => {
+    setWfQueue(prev => {
+      const q = prev[wfId];
+      if (!q) return prev;
+      return { ...prev, [wfId]: { ...q, items: q.items.filter(i => i.status === 'pending' || i.status === 'running') } };
+    });
   };
 
   // ─── Dynamic form renderer ───
@@ -1340,6 +2071,78 @@ function App() {
 
     switch (inputDef.type) {
       case 'image': {
+        if (inputDef.avatar_gallery) {
+          const groups = wfState.avatarGroups || [];
+          const currentGroup = wfState.avatarSelectedGroup?._current || '';
+          const avatarImgs = wfState.avatarImages?.[currentGroup] || [];
+          if (groups.length === 0) handleWfAvatarInit(wfId);
+          return (
+            <div className="card" key={inputDef.key}>
+              <h3>{label}</h3>
+              {wfState.previews[inputDef.key] && (
+                <div className="avatar-viewer">
+                  <img src={wfState.previews[inputDef.key]} alt="" />
+                </div>
+              )}
+              <div className="avatar-selector">
+                <select className="avatar-dropdown" value={currentGroup}
+                  onChange={e => handleWfAvatarSelect(wfId, e.target.value)}>
+                  {groups.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </div>
+              {avatarImgs.length > 0 && (
+                <div className="avatar-thumbs">
+                  {avatarImgs.map((img, i) => (
+                    <div key={i} className={`avatar-thumb-item${wfState.filePaths[inputDef.key] === img.path ? ' selected' : ''}`}
+                      onClick={() => {
+                        updateWfFilePath(wfId, inputDef.key, img.path);
+                        updateWfPreview(wfId, inputDef.key, img.url);
+                      }}>
+                      <img src={img.url} alt={img.filename} />
+                      <span className="avatar-thumb-name">{img.filename.replace(/\.[^.]+$/, '')}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        }
+        if (inputDef.background_gallery) {
+          return (
+            <div className="card" key={inputDef.key}>
+              <h3>{label}</h3>
+              <div className="drop-zone" onClick={() => document.getElementById(inputIdBase)?.click()}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById(inputIdBase); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); } }}>
+                {wfState.previews[inputDef.key]
+                  ? <img src={wfState.previews[inputDef.key]} alt="" style={{ maxHeight: 200, objectFit: 'contain' }} />
+                  : <p>{t('dropImageHere')}</p>}
+              </div>
+              <input id={inputIdBase} type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={e => handleWfBgImageUpload(wfId, inputDef.key, e)} />
+              <button className="btn secondary" style={{ marginTop: 8 }} onClick={() => handleWfBgGalleryToggle(wfId, inputDef.key)}>
+                {t('wfBgGallery')}
+              </button>
+              {wfState.bgGalleryOpen[inputDef.key] && (
+                <div className="bg-gallery-grid">
+                  {(wfState.bgGalleryImages || []).length === 0 && (
+                    <p className="bg-gallery-empty">{t('wfBgGalleryEmpty')}</p>
+                  )}
+                  {(wfState.bgGalleryImages || []).map((img, i) => (
+                    <div key={i} className={`bg-gallery-item${wfState.filePaths[inputDef.key] === img.path ? ' selected' : ''}`}
+                      onClick={() => {
+                        updateWfFilePath(wfId, inputDef.key, img.path);
+                        updateWfPreview(wfId, inputDef.key, img.url);
+                      }}>
+                      <img src={img.url} alt={img.filename} />
+                      <span className="bg-gallery-name">{img.filename}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        }
         return (
           <div className="card" key={inputDef.key}>
             <h3>{label}</h3>
@@ -1381,8 +2184,30 @@ function App() {
 
       case 'video': {
         const videoMode = wfState.videoInputMode?.[inputDef.key] || 'upload';
+        const hasVideo = !!wfState.filePaths[inputDef.key];
+        const duration = wfState.videoDuration?.[inputDef.key];
+        const isTrimming = wfState.trimming?.[inputDef.key];
+        const trimStartVal = parseFloat(wfState.trimStart?.[inputDef.key]) || 0;
+        const trimEndVal = parseFloat(wfState.trimEnd?.[inputDef.key]) || duration || 0;
+        const playhead = wfState.playheadPosition?.[inputDef.key] || 0;
+        const refKey = `${wfId}-${inputDef.key}`;
+
+        const videoMetaHandler = (e) => {
+          const dur = e.target.duration;
+          if (dur && isFinite(dur)) {
+            setWorkflowStates(prev => ({
+              ...prev, [wfId]: {
+                ...prev[wfId],
+                videoDuration: { ...prev[wfId].videoDuration, [inputDef.key]: Math.round(dur * 100) / 100 },
+                trimStart: { ...prev[wfId].trimStart, [inputDef.key]: prev[wfId].trimStart?.[inputDef.key] ?? 0 },
+                trimEnd: { ...prev[wfId].trimEnd, [inputDef.key]: prev[wfId].trimEnd?.[inputDef.key] ?? Math.round(dur * 100) / 100 },
+              },
+            }));
+          }
+        };
+
         return (
-          <div className="card" key={inputDef.key}>
+          <div className="card video-editor-card" key={inputDef.key}>
             <h3>{label}</h3>
             {inputDef.allow_youtube && (
               <div className="video-input-tabs">
@@ -1396,33 +2221,133 @@ function App() {
                 </button>
               </div>
             )}
-            {videoMode === 'upload' && (
-              <>
-                <div className="drop-zone" onClick={() => document.getElementById(inputIdBase)?.click()}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById(inputIdBase); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); } }}>
-                  {wfState.previews[inputDef.key]
-                    ? <video src={wfState.previews[inputDef.key]} style={{ maxHeight: 200, width: '100%' }} controls muted />
-                    : <p>{t('dropVideoHere')}</p>}
-                </div>
-                <input id={inputIdBase} type="file" accept="video/*" style={{ display: 'none' }} onChange={e => handleWfVideoUpload(wfId, inputDef.key, e)} />
-              </>
-            )}
-            {videoMode === 'youtube' && (
-              <div className="youtube-input">
-                <input type="text" placeholder="YouTube URL"
-                  value={wfState.youtubeUrl?.[inputDef.key] || ''}
-                  onChange={e => updateWfState(wfId, { youtubeUrl: { ...wfState.youtubeUrl, [inputDef.key]: e.target.value } })}
-                  disabled={wfState.youtubeDownloading?.[inputDef.key]} />
-                <button className="btn secondary" onClick={() => handleWfYoutubeDownload(wfId, inputDef.key)}
-                  disabled={wfState.youtubeDownloading?.[inputDef.key] || !wfState.youtubeUrl?.[inputDef.key]?.trim()}>
-                  {wfState.youtubeDownloading?.[inputDef.key] ? t('wfDownloading') : t('wfDownloadBtn')}
-                </button>
-                {wfState.previews[inputDef.key] && videoMode === 'youtube' && (
-                  <video src={wfState.previews[inputDef.key]} style={{ maxHeight: 200, width: '100%', marginTop: 8 }} controls muted />
+
+            <div className="video-editor-layout">
+              {/* LEFT: Video Viewer + Timeline */}
+              <div className="video-editor-viewer">
+                {videoMode === 'upload' && (
+                  <>
+                    <div className="drop-zone video-drop-zone" onClick={() => document.getElementById(inputIdBase)?.click()}
+                      onDragOver={e => e.preventDefault()}
+                      onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById(inputIdBase); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); } }}>
+                      {wfState.previews[inputDef.key]
+                        ? <video ref={el => { videoRefsMap.current[refKey] = el; }}
+                            src={wfState.previews[inputDef.key]} className="video-editor-player" controls muted
+                            onLoadedMetadata={videoMetaHandler}
+                            onTimeUpdate={e => handleVideoTimeUpdate(wfId, inputDef.key, e)} />
+                        : <p>{t('dropVideoHere')}</p>}
+                    </div>
+                    <input id={inputIdBase} type="file" accept="video/*" style={{ display: 'none' }} onChange={e => handleWfVideoUpload(wfId, inputDef.key, e)} />
+                  </>
+                )}
+                {videoMode === 'youtube' && (
+                  <div className="youtube-input">
+                    <input type="text" placeholder="YouTube URL"
+                      value={wfState.youtubeUrl?.[inputDef.key] || ''}
+                      onChange={e => updateWfState(wfId, { youtubeUrl: { ...wfState.youtubeUrl, [inputDef.key]: e.target.value } })}
+                      disabled={wfState.youtubeDownloading?.[inputDef.key]} />
+                    <button className="btn secondary" onClick={() => handleWfYoutubeDownload(wfId, inputDef.key)}
+                      disabled={wfState.youtubeDownloading?.[inputDef.key] || !wfState.youtubeUrl?.[inputDef.key]?.trim()}>
+                      {wfState.youtubeDownloading?.[inputDef.key] ? t('wfDownloading') : t('wfDownloadBtn')}
+                    </button>
+                    {wfState.previews[inputDef.key] && videoMode === 'youtube' && (
+                      <video ref={el => { videoRefsMap.current[refKey] = el; }}
+                        src={wfState.previews[inputDef.key]} className="video-editor-player" style={{ marginTop: 8 }} controls muted
+                        onLoadedMetadata={videoMetaHandler}
+                        onTimeUpdate={e => handleVideoTimeUpdate(wfId, inputDef.key, e)} />
+                    )}
+                  </div>
+                )}
+
+                {/* Timeline */}
+                {hasVideo && duration > 0 && (
+                  <div className="video-timeline-container">
+                    {/* Ruler with ticks */}
+                    <div className="video-timeline-ruler"
+                      ref={el => { timelineRefsMap.current[refKey] = el; }}
+                      onClick={e => handleRulerClick(wfId, inputDef.key, e)}>
+                      {generateRulerTicks(duration).map(tick => (
+                        <div key={tick} className="ruler-tick" style={{ left: `${(tick / duration) * 100}%` }}>
+                          <div className="ruler-tick-line" />
+                          <span className="ruler-tick-label">{formatTime(tick)}</span>
+                        </div>
+                      ))}
+                      <div className="timeline-playhead" style={{ left: `${(playhead / duration) * 100}%` }} />
+                    </div>
+                    {/* Track with handles */}
+                    <div className="video-timeline-track">
+                      <div className="timeline-region-dimmed" style={{ left: 0, width: `${(trimStartVal / duration) * 100}%` }} />
+                      <div className="timeline-region-active" style={{ left: `${(trimStartVal / duration) * 100}%`, width: `${((trimEndVal - trimStartVal) / duration) * 100}%` }} />
+                      <div className="timeline-region-dimmed" style={{ left: `${(trimEndVal / duration) * 100}%`, width: `${((duration - trimEndVal) / duration) * 100}%` }} />
+                      <div className="timeline-handle timeline-handle-left" style={{ left: `${(trimStartVal / duration) * 100}%` }}
+                        onMouseDown={e => handleTimelineDragStart(wfId, inputDef.key, 'start', e)}>
+                        <div className="handle-grip" />
+                      </div>
+                      <div className="timeline-handle timeline-handle-right" style={{ left: `${(trimEndVal / duration) * 100}%` }}
+                        onMouseDown={e => handleTimelineDragStart(wfId, inputDef.key, 'end', e)}>
+                        <div className="handle-grip" />
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
-            )}
+
+              {/* RIGHT: Controls Panel */}
+              {hasVideo && duration > 0 && (
+                <div className="video-editor-controls">
+                  <div className="video-edit-section">
+                    <div className="video-edit-title">{t('wfVideoEdit')}</div>
+                    <div className="trim-duration">{t('wfDuration')}: {formatTime(duration)}</div>
+                    <div className="trim-controls-vertical">
+                      <label>{t('wfTrimStart')}:
+                        <input type="number" className="trim-input" min={0} max={duration} step={0.1}
+                          value={trimStartVal}
+                          onChange={e => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setWorkflowStates(prev => ({
+                              ...prev, [wfId]: { ...prev[wfId],
+                                trimStart: { ...prev[wfId].trimStart, [inputDef.key]: val },
+                                playheadPosition: { ...prev[wfId].playheadPosition, [inputDef.key]: val },
+                              },
+                            }));
+                            const videoEl = videoRefsMap.current[refKey];
+                            if (videoEl) videoEl.currentTime = val;
+                          }} />
+                        <span className="trim-unit">s</span>
+                      </label>
+                      <label>{t('wfTrimEnd')}:
+                        <input type="number" className="trim-input" min={0} max={duration} step={0.1}
+                          value={trimEndVal}
+                          onChange={e => {
+                            const val = parseFloat(e.target.value) || duration;
+                            setWorkflowStates(prev => ({
+                              ...prev, [wfId]: { ...prev[wfId],
+                                trimEnd: { ...prev[wfId].trimEnd, [inputDef.key]: val },
+                                playheadPosition: { ...prev[wfId].playheadPosition, [inputDef.key]: val },
+                              },
+                            }));
+                            const videoEl = videoRefsMap.current[refKey];
+                            if (videoEl) videoEl.currentTime = val;
+                          }} />
+                        <span className="trim-unit">s</span>
+                      </label>
+                    </div>
+                    <div className="trim-selection-info">
+                      {formatTime(trimStartVal)} - {formatTime(trimEndVal)} ({formatTime(trimEndVal - trimStartVal)})
+                    </div>
+                    <div className="trim-btn-row">
+                      <button className="btn secondary trim-btn" onClick={() => handleWfVideoTrim(wfId, inputDef.key)}
+                        disabled={isTrimming}>
+                        {isTrimming ? t('wfTrimming') : t('wfTrimApply')}
+                      </button>
+                      <a href={wfState.previews[inputDef.key]} download className="btn secondary trim-btn">
+                        {t('download')}
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         );
       }
@@ -1480,6 +2405,45 @@ function App() {
         );
       }
 
+      case 'fashion_select': {
+        if (!wfState.fashionStyles || wfState.fashionStyles.length === 0) {
+          handleWfFashionInit(wfId);
+        }
+        const styles = wfState.fashionStyles || [];
+        const categories = wfState.fashionCategories || [];
+        const filterCat = wfState.fashionFilterCat || 'All';
+        const filtered = filterCat === 'All' ? styles : styles.filter(s => s.category === filterCat);
+        return (
+          <div className="card" key={inputDef.key}>
+            <h3>{t('fashionStyle')}</h3>
+            <div className="fashion-filter-row">
+              <button className={`fashion-cat-btn${filterCat === 'All' ? ' active' : ''}`}
+                onClick={() => updateWfState(wfId, { fashionFilterCat: 'All' })}>
+                {t('fashionAll')}
+              </button>
+              {categories.map(cat => (
+                <button key={cat} className={`fashion-cat-btn${filterCat === cat ? ' active' : ''}`}
+                  onClick={() => updateWfState(wfId, { fashionFilterCat: cat })}>
+                  {cat}
+                </button>
+              ))}
+              <button className="btn secondary fashion-random-btn" onClick={() => handleWfFashionRandom(wfId)}>
+                {t('fashionRandom')}
+              </button>
+            </div>
+            <div className="fashion-grid">
+              {filtered.map(style => (
+                <div key={style.id} className={`fashion-item${wfState.inputs?.fashion_prompt === style.prompt ? ' selected' : ''}`}
+                  onClick={() => handleWfFashionApply(wfId, style.prompt)}>
+                  <span className="fashion-item-cat">{style.category}</span>
+                  <span className="fashion-item-text">{style.prompt}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
       case 'gallery_select': {
         const selected = wfState.gallerySelected?.[inputDef.key] || [];
         return (
@@ -1514,15 +2478,100 @@ function App() {
     }
   };
 
+  // ─── Auth gate: loading ───
+  if (authLoading) {
+    return <div className="loading-page"><div className="loading-spinner" /></div>;
+  }
+
+  // ─── Auth gate: pending approval ───
+  if (isPendingApproval) {
+    return (
+      <div className="pending-page">
+        <div className="pending-card">
+          <img src="/logo.png" alt="Logo" className="logo-img" />
+          <h2>{t('loginTitle')}</h2>
+          <p>{t('loginPending')}</p>
+          <button className="login-btn" onClick={handleLogout}>{t('logoutBtn')}</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Auth gate: login page ───
+  if (!authUser) {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <img src="/logo.png" alt="Logo" className="logo-img" />
+          <h2>{t('loginTitle')}</h2>
+
+          <button className="google-signin-btn" onClick={handleGoogleLogin} disabled={loginLoading}>
+            <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+            {t('loginGoogleBtn')}
+          </button>
+
+          <div className="login-divider">OR</div>
+
+          <form className="login-form" onSubmit={handleEmailLogin}>
+            <input
+              className="login-input"
+              type="email"
+              placeholder={t('loginEmail')}
+              value={loginEmail}
+              onChange={e => setLoginEmail(e.target.value)}
+              required
+            />
+            <input
+              className="login-input"
+              type="password"
+              placeholder={t('loginPassword')}
+              value={loginPassword}
+              onChange={e => setLoginPassword(e.target.value)}
+              required
+            />
+            <label className="remember-email-label">
+              <input
+                type="checkbox"
+                checked={rememberEmail}
+                onChange={e => setRememberEmail(e.target.checked)}
+              />
+              {t('rememberEmail')}
+            </label>
+            <button className="login-btn" type="submit" disabled={loginLoading}>
+              {loginLoading ? '...' : t('loginSignIn')}
+            </button>
+          </form>
+
+          {loginError && <p className="login-error">{loginError}</p>}
+
+          <div style={{ marginTop: '1rem' }}>
+            <div className="language-selector" style={{ justifyContent: 'center' }}>
+              <button className={lang === 'en' ? 'active' : ''} onClick={() => setLang('en')}>EN</button>
+              <button className={lang === 'ko' ? 'active' : ''} onClick={() => setLang('ko')}>KO</button>
+              <button className={lang === 'zh' ? 'active' : ''} onClick={() => setLang('zh')}>ZH</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-layout">
       {/* Top Header */}
       <header className="top-header">
         <h1 className="logo"><img src="/logo.png" alt="Logo" className="logo-img" /></h1>
-        <div className="language-selector">
-          <button className={lang === 'en' ? 'active' : ''} onClick={() => setLang('en')}>EN</button>
-          <button className={lang === 'ko' ? 'active' : ''} onClick={() => setLang('ko')}>KO</button>
-          <button className={lang === 'zh' ? 'active' : ''} onClick={() => setLang('zh')}>ZH</button>
+        <div className="header-user-area">
+          <div className="language-selector">
+            <button className={lang === 'en' ? 'active' : ''} onClick={() => setLang('en')}>EN</button>
+            <button className={lang === 'ko' ? 'active' : ''} onClick={() => setLang('ko')}>KO</button>
+            <button className={lang === 'zh' ? 'active' : ''} onClick={() => setLang('zh')}>ZH</button>
+          </div>
+          <div className="header-user-info">
+            {authUser.picture && <img src={authUser.picture} alt="" className="header-user-avatar" referrerPolicy="no-referrer" />}
+            <span className="header-user-name">{authUser.name || authUser.email}</span>
+          </div>
+          <button className="header-logout-btn" onClick={handleLogout}>{t('logoutBtn')}</button>
         </div>
       </header>
 
@@ -1564,6 +2613,15 @@ function App() {
             <span className="sidebar-icon">&#128247;</span>
             {t('menuGallery')}
           </div>
+          {authUser.role === 'superadmin' && (
+            <div
+              className={`sidebar-item${activeMenu === 'admin' ? ' active' : ''}`}
+              onClick={() => setActiveMenu('admin')}
+            >
+              <span className="sidebar-icon">&#128100;</span>
+              {t('menuAdmin')}
+            </div>
+          )}
         </nav>
 
         {/* Main Content */}
@@ -2059,20 +3117,19 @@ function App() {
           )}
 
           {/* ============ WORKFLOW ============ */}
+          {activeMenu === 'workflow' && workflows.length > 1 && (
+            <div className="workflow-tabs">
+              {workflows.map(wf => (
+                <button key={wf.id}
+                  className={`workflow-tab${activeWorkflowId === wf.id ? ' active' : ''}`}
+                  onClick={() => { setActiveWorkflowId(wf.id); document.querySelector('.main-content')?.scrollTo(0, 0); }}>
+                  {wf.display_name[lang] || wf.display_name.en}
+                </button>
+              ))}
+            </div>
+          )}
           {activeMenu === 'workflow' && (
             <div className="page-content">
-              {workflows.length > 1 && (
-                <div className="workflow-tabs">
-                  {workflows.map(wf => (
-                    <button key={wf.id}
-                      className={`workflow-tab${activeWorkflowId === wf.id ? ' active' : ''}`}
-                      onClick={() => { setActiveWorkflowId(wf.id); document.querySelector('.main-content')?.scrollTo(0, 0); }}>
-                      {wf.display_name[lang] || wf.display_name.en}
-                    </button>
-                  ))}
-                </div>
-              )}
-
               {workflows.map(wf => {
                 if (wf.id !== activeWorkflowId) return null;
                 const wfState = workflowStates[wf.id];
@@ -2086,17 +3143,63 @@ function App() {
                       {/* Left: Dynamic Inputs */}
                       <div className="column">
                         {wf.inputs.map(inputDef => renderWorkflowInput(wf.id, inputDef))}
-                        <button
-                          className="btn generate-btn"
-                          onClick={() => handleWfGenerate(wf.id)}
-                          disabled={wfState.isGenerating}
-                          style={{ width: '100%', marginTop: 8 }}
-                        >
-                          {wfState.isGenerating ? t('wfGenerating') : t('wfGenerateBtn')}
-                        </button>
+
+                        {/* YouTube Shorts metadata */}
+                        <div className="card yt-meta-card">
+                          <h3>{t('ytMeta')}</h3>
+                          <div className="yt-meta-fields">
+                            <label className="yt-meta-label">{t('ytTitle')}
+                              <input type="text" className="yt-meta-input"
+                                placeholder={t('ytTitlePlaceholder')}
+                                value={wfState.ytTitle || ''}
+                                onChange={e => updateWfState(wf.id, { ytTitle: e.target.value })} />
+                            </label>
+                            <label className="yt-meta-label">{t('ytDescription')}
+                              <textarea className="yt-meta-textarea" rows={2}
+                                placeholder={t('ytDescPlaceholder')}
+                                value={wfState.ytDescription || ''}
+                                onChange={e => updateWfState(wf.id, { ytDescription: e.target.value })} />
+                            </label>
+                            <label className="yt-meta-label">{t('ytHashtags')}
+                              <input type="text" className="yt-meta-input"
+                                placeholder={t('ytHashPlaceholder')}
+                                value={wfState.ytHashtags || ''}
+                                onChange={e => updateWfState(wf.id, { ytHashtags: e.target.value })} />
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="wf-btn-row">
+                          {wfState.isGenerating ? (
+                            <button
+                              className="btn cancel-btn"
+                              onClick={() => handleWfCancel(wf.id)}
+                              style={{ flex: 1 }}
+                            >
+                              {t('wfCancelBtn')}
+                            </button>
+                          ) : (
+                            <button
+                              className={`btn ${wf.id === 'change_character' ? 'generate-btn-green' : 'generate-btn'}`}
+                              onClick={() => handleWfGenerate(wf.id)}
+                              disabled={wfQueue[wf.id]?.isProcessing}
+                              style={{ flex: 1 }}
+                            >
+                              {t('wfGenerateBtn')}
+                            </button>
+                          )}
+                          <button
+                            className="btn secondary"
+                            onClick={() => handleWfQueueAdd(wf.id)}
+                            disabled={wfQueue[wf.id]?.isProcessing}
+                            style={{ flex: 1 }}
+                          >
+                            {t('wfAddToQueue')}
+                          </button>
+                        </div>
                       </div>
 
-                      {/* Right: Output */}
+                      {/* Right: Output + Queue */}
                       <div className="column">
                         <div className="card">
                           <h3>{t('output')}</h3>
@@ -2123,6 +3226,64 @@ function App() {
                             </p>
                           )}
                         </div>
+
+                        {/* Queue Panel */}
+                        {(() => {
+                          const queue = wfQueue[wf.id];
+                          const items = queue?.items || [];
+                          const isProcessing = queue?.isProcessing || false;
+                          const pendingCount = items.filter(i => i.status === 'pending').length;
+                          return (
+                            <div className="card queue-card">
+                              <h3>{t('wfQueue')} {items.length > 0 && `(${items.length})`}</h3>
+                              {items.length === 0 && (
+                                <p className="queue-empty">{t('wfQueueEmpty')}</p>
+                              )}
+                              <div className="queue-list">
+                                {items.map(item => (
+                                  <div key={item.id} className={`queue-item queue-item--${item.status}`}>
+                                    <span className="queue-item-status">
+                                      {item.status === 'completed' ? '\u2705' : item.status === 'running' ? '\u23f3' : item.status === 'failed' ? '\u274c' : '\u23f8'}
+                                    </span>
+                                    <span className="queue-item-label">{item.label}</span>
+                                    {item.status === 'running' && (
+                                      <div className="queue-item-progress">
+                                        <div className="queue-progress-bar">
+                                          <div className="queue-progress-fill" style={{ width: `${item.progress}%` }} />
+                                        </div>
+                                        <span className="queue-progress-text">{item.progress}%</span>
+                                      </div>
+                                    )}
+                                    {item.status === 'pending' && (
+                                      <span className="queue-item-pending">{t('wfQueuePending')}</span>
+                                    )}
+                                    {item.status === 'completed' && item.outputVideo && (
+                                      <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
+                                    )}
+                                    {item.status === 'failed' && item.error && (
+                                      <span className="queue-item-error" title={item.error}>Error</span>
+                                    )}
+                                    {item.status !== 'running' && (
+                                      <button className="queue-item-remove" onClick={() => handleWfQueueRemove(wf.id, item.id)}>&times;</button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                              {items.length > 0 && (
+                                <div className="queue-actions">
+                                  <button className="btn" onClick={() => handleWfQueueStart(wf.id)}
+                                    disabled={isProcessing || pendingCount === 0}>
+                                    {isProcessing ? t('wfQueueRunning') : t('wfStartQueue')}
+                                  </button>
+                                  <button className="btn secondary" onClick={() => handleWfQueueClear(wf.id)}
+                                    disabled={isProcessing}>
+                                    {t('wfClearQueue')}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -2701,6 +3862,67 @@ function App() {
                     </div>
                   )
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* ============ ADMIN PANEL ============ */}
+          {activeMenu === 'admin' && authUser.role === 'superadmin' && (
+            <div className="page-content">
+              <h2 className="page-title">{t('adminTitle')}</h2>
+              <div className="card">
+                <div className="admin-table-wrapper">
+                  {adminLoading ? (
+                    <div style={{ textAlign: 'center', padding: '2rem' }}><div className="loading-spinner" style={{ margin: '0 auto' }} /></div>
+                  ) : (
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>{t('adminEmail')}</th>
+                          <th>{t('adminName')}</th>
+                          <th>{t('adminRole')}</th>
+                          <th>{t('adminStatus')}</th>
+                          <th>{t('adminCreated')}</th>
+                          <th>{t('adminLastLogin')}</th>
+                          <th>{t('adminActions')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminUsers.map(u => (
+                          <tr key={u.id}>
+                            <td>
+                              <div className="admin-user-info">
+                                {u.picture && <img src={u.picture} alt="" className="admin-user-avatar" referrerPolicy="no-referrer" />}
+                                {u.email}
+                              </div>
+                            </td>
+                            <td>{u.name || '-'}</td>
+                            <td><span className={`badge badge-${u.role}`}>{u.role}</span></td>
+                            <td><span className={`badge badge-${u.status}`}>{t(`admin${u.status.charAt(0).toUpperCase() + u.status.slice(1)}`)}</span></td>
+                            <td>{u.created_at ? new Date(u.created_at).toLocaleDateString() : '-'}</td>
+                            <td>{u.last_login ? new Date(u.last_login).toLocaleString() : '-'}</td>
+                            <td>
+                              <div className="admin-actions">
+                                {u.status === 'pending' && (
+                                  <button className="btn success small" onClick={() => handleAdminAction(u.id, 'approve')}>{t('adminApprove')}</button>
+                                )}
+                                {u.status === 'approved' && u.role !== 'superadmin' && (
+                                  <button className="btn warning small" onClick={() => handleAdminAction(u.id, 'suspend')}>{t('adminSuspend')}</button>
+                                )}
+                                {u.status === 'suspended' && (
+                                  <button className="btn success small" onClick={() => handleAdminAction(u.id, 'activate')}>{t('adminActivate')}</button>
+                                )}
+                                {u.role !== 'superadmin' && (
+                                  <button className="btn danger small" onClick={() => handleAdminAction(u.id, 'delete')}>{t('adminDelete')}</button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
             </div>
           )}

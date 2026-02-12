@@ -5,6 +5,67 @@ const api = axios.create({
   timeout: 300000, // 5 minutes timeout for long operations
 });
 
+// Attach JWT token to every request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('auth_token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+// Handle 401 responses (expired/invalid token)
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('auth_token');
+      window.dispatchEvent(new Event('auth-logout'));
+    }
+    return Promise.reject(err);
+  }
+);
+
+// ─── Auth API ───
+export const authLogin = async (email, password) => {
+  const response = await api.post('/auth/login', { email, password });
+  return response.data;
+};
+
+export const authGoogle = async (credential) => {
+  const response = await api.post('/auth/google', { credential });
+  return response.data;
+};
+
+export const authMe = async () => {
+  const response = await api.get('/auth/me');
+  return response.data;
+};
+
+// ─── Admin API ───
+export const adminListUsers = async () => {
+  const response = await api.get('/admin/users');
+  return response.data;
+};
+
+export const adminApproveUser = async (id) => {
+  const response = await api.post(`/admin/users/${id}/approve`);
+  return response.data;
+};
+
+export const adminSuspendUser = async (id) => {
+  const response = await api.post(`/admin/users/${id}/suspend`);
+  return response.data;
+};
+
+export const adminActivateUser = async (id) => {
+  const response = await api.post(`/admin/users/${id}/activate`);
+  return response.data;
+};
+
+export const adminDeleteUser = async (id) => {
+  const response = await api.delete(`/admin/users/${id}`);
+  return response.data;
+};
+
 export const healthCheck = () => api.get('/health');
 
 export const getConfig = () => api.get('/config');
@@ -49,6 +110,11 @@ export const startI2VGeneration = async (params) => {
 
 export const getTaskStatus = async (taskId) => {
   const response = await api.get(`/status/${taskId}`);
+  return response.data;
+};
+
+export const cancelGeneration = async (taskId) => {
+  const response = await api.post(`/cancel/${taskId}`);
   return response.data;
 };
 
@@ -114,6 +180,35 @@ export const downloadYoutube = async (url) => {
   return response.data;
 };
 
+export const trimVideo = async (videoPath, start, end) => {
+  const response = await api.post('/trim-video', { video_path: videoPath, start, end });
+  return response.data;
+};
+
+export const uploadBackground = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await api.post('/upload/background', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data;
+};
+
+export const listBackgrounds = async () => {
+  const response = await api.get('/backgrounds');
+  return response.data;
+};
+
+export const listAvatarGroups = async () => {
+  const response = await api.get('/avatars');
+  return response.data;
+};
+
+export const listAvatarImages = async (group) => {
+  const response = await api.get(`/avatars/${group}`);
+  return response.data;
+};
+
 export const getWorkflows = async () => {
   const response = await api.get('/workflows');
   return response.data;
@@ -136,6 +231,11 @@ export const getTTSSpeakers = async () => {
 
 export const sendStudioChat = async (message, history) => {
   const response = await api.post('/studio/chat', { message, history }, { timeout: 180000 });
+  return response.data;
+};
+
+export const getFashionStyles = async () => {
+  const response = await api.get('/fashion-styles');
   return response.data;
 };
 

@@ -717,6 +717,59 @@ output_lora_14B/checkpoint-50/
 
 ## Changelog
 
+### 2026-02-13: 로그인/회원가입 + 사용자 관리 + 계정별 데이터 관리
+
+**인증 시스템 (`server.py`, `App.jsx`, `api.js`):**
+
+- Google OAuth 2.0 회원가입 (Google Identity Services 팝업 모드)
+- Super Admin 이메일/비밀번호 로그인 (`.env`의 `SUPER_ADMIN` + `ADMIN_PASS`)
+- JWT 토큰 인증 (7일 만료, `Authorization: Bearer` 헤더)
+- SQLite DB (`wanavatardb.sqlite3`) — `users` + `user_files` 테이블
+- 신규 Google 가입자는 `pending` 상태 → 관리자 승인 필요
+
+**사용자 관리 Admin 패널:**
+
+- 전체 사용자 목록 (이메일, 이름, 역할, 상태, 가입일, 마지막 로그인)
+- 사용자 승인 (pending → approved), 정지 (→ suspended), 활성화 (→ approved), 삭제
+- Super Admin 사이드바에 "Users" 메뉴 표시
+
+**계정별 데이터 관리:**
+
+- 업로드(이미지/오디오/비디오), 배경, 아바타, 출력물 모두 계정별 분리
+- `user_files` DB 테이블에서 `user_id` 기반 소유권 관리
+- 최초 서버 시작 시 기존 파일 자동 마이그레이션 (Super Admin 계정으로)
+- 아바타 그룹: `metadata` JSON의 `json_extract(metadata, '$.group')`으로 관리
+
+**인증 API 엔드포인트:**
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/auth/login` | POST | 이메일+비밀번호 로그인 → JWT |
+| `/api/auth/google` | POST | Google ID 토큰 검증 → JWT |
+| `/api/auth/me` | GET | 현재 사용자 정보 |
+| `/api/admin/users` | GET | 전체 사용자 목록 (관리자) |
+| `/api/admin/users/{id}/approve` | POST | 사용자 승인 |
+| `/api/admin/users/{id}/suspend` | POST | 사용자 정지 |
+| `/api/admin/users/{id}/activate` | POST | 사용자 활성화 |
+| `/api/admin/users/{id}` | DELETE | 사용자 삭제 |
+
+**프론트엔드 UI:**
+
+- 로그인 페이지: Google Sign-In 버튼 + 이메일/비밀번호 폼 + ID 저장 체크박스
+- 승인 대기 페이지: `pending` 상태 사용자에게 안내 메시지 표시
+- 헤더: 프로필 아바타 + 이름 + 로그아웃 버튼
+- Admin 패널: 사용자 관리 테이블 (역할/상태 배지 컬러)
+- Change Character V1.1 생성 버튼 초록색으로 변경
+
+**환경 변수 (`.env`):**
+
+| 변수 | 설명 |
+|------|------|
+| `JWT_SECRET` | JWT 서명 키 |
+| `GOOGLE_CLIENT_ID` | Google OAuth 웹 클라이언트 ID |
+| `SUPER_ADMIN` | Super Admin 이메일 |
+| `ADMIN_PASS` | Super Admin 비밀번호 |
+
 ### 2026-02-12: ComfyUI 워크플로우 통합 + LoRA UI 개선
 
 **ComfyUI 워크플로우 시스템 (`server.py`, `App.jsx`):**

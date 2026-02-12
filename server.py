@@ -19,14 +19,22 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
+import json as _json
 import requests as http_requests
 import websocket as ws_client
+
+import jwt as pyjwt
+import aiosqlite
+import bcrypt as _bcrypt
 
 import pickle
 import torch
 import torch.distributed as dist
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -55,8 +63,10 @@ except ImportError:
 # ============================================================================
 OUTPUT_DIR = Path("outputs")
 UPLOAD_DIR = Path("uploads")
+BACKGROUNDS_DIR = Path("background/stages")
 OUTPUT_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
+BACKGROUNDS_DIR.mkdir(parents=True, exist_ok=True)
 
 CHECKPOINT_DIR = "/mnt/models/Wan2.2-S2V-14B"
 I2V_CHECKPOINT_DIR = "/mnt/models/Wan2.2-I2V-14B-A"
@@ -80,6 +90,21 @@ COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188")
 COMFYUI_WS_URL = os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws")
 WORKFLOW_DIR = Path(__file__).parent / "workflow"
 
+# YouTube / Slack configuration
+YOUTUBE_CLIENT_SECRET = Path("client_secret.json")
+YOUTUBE_TOKEN = Path("token.json")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
+SLACK_NOTIFY_EMAIL = os.environ.get("SLACK_NOTIFY_EMAIL")
+
+# Auth / DB configuration
+DB_PATH = Path("wanavatardb.sqlite3")
+JWT_SECRET = os.environ.get("JWT_SECRET", "fallback-dev-secret")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_HOURS = 168  # 7 days
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+SUPER_ADMIN_EMAIL = os.environ.get("SUPER_ADMIN", "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASS", "")
+
 # Workflow registry - defines available workflows and their input mappings
 WORKFLOW_REGISTRY = {
     "change_character": {
@@ -93,7 +118,7 @@ WORKFLOW_REGISTRY = {
         "api_json": "Change_character_V1.1_api.json",
         "inputs": [
             {"key": "ref_image", "type": "image", "node_id": "91", "field": "inputs.image",
-             "upload_to_comfyui": True, "required": True,
+             "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
              "label": {"en": "Reference Image (Character)", "ko": "참조 이미지 (캐릭터)", "zh": "参考图片（角色）"}},
             {"key": "ref_video", "type": "video", "node_id": "114", "field": "inputs.video",
              "upload_to_comfyui": True, "required": True, "allow_youtube": True,
@@ -111,6 +136,18 @@ WORKFLOW_REGISTRY = {
                  {"value": "landscape", "label": {"en": "Landscape (16:9)", "ko": "가로 (16:9)", "zh": "横屏 (16:9)"}, "params": {"width": 832, "height": 480}},
                  {"value": "square", "label": {"en": "Square (1:1)", "ko": "정사각 (1:1)", "zh": "正方形 (1:1)"}, "params": {"width": 640, "height": 640}},
              ]},
+            {"key": "bg_image", "type": "image", "node_id": "__custom_bg__",
+             "field": "inputs.image", "upload_to_comfyui": True, "required": False,
+             "background_gallery": True,
+             "default_path": str(BACKGROUNDS_DIR / "dance_stage_01.jpg"),
+             "default_preview": "/background/stages/dance_stage_01.jpg",
+             "label": {"en": "Background Image (Optional)", "ko": "배경 이미지 (선택)", "zh": "背景图片（可选）"}},
+            {"key": "bg_prompt", "type": "text", "node_id": "__bg_prompt__",
+             "field": "inputs.positive_prompt", "default": "", "rows": 3, "required": False,
+             "label": {"en": "Background Description (Optional)", "ko": "배경 설명 (선택)", "zh": "背景描述（可选）"}},
+            {"key": "custom_audio", "type": "audio", "node_id": "__custom_audio__",
+             "field": "inputs.audio", "required": False,
+             "label": {"en": "Replace Audio (Optional)", "ko": "오디오 교체 (선택)", "zh": "替换音频（可选）"}},
         ],
     },
     "wan_infinitalk": {
@@ -176,6 +213,35 @@ WORKFLOW_REGISTRY = {
             {"key": "looping", "type": "toggle", "node_id": "434", "field": "inputs.boolean",
              "default": True,
              "label": {"en": "Looping Video", "ko": "루프 비디오", "zh": "循环视频"}},
+        ],
+    },
+    "fashion_change": {
+        "id": "fashion_change",
+        "display_name": {"en": "Fashion Change", "ko": "패션 체인지", "zh": "时尚换装"},
+        "description": {
+            "en": "Change avatar clothing using FLUX Klein inpainting. Auto-masks clothing area and replaces with new fashion style.",
+            "ko": "FLUX Klein 인페인팅으로 아바타 의상을 변경합니다. 옷 영역을 자동 마스킹하고 새로운 패션 스타일로 교체합니다.",
+            "zh": "使用FLUX Klein修复功能更换角色服装。自动遮罩服装区域并替换为新的时尚风格。",
+        },
+        "api_json": "flux_klein_fashion_api.json",
+        "output_type": "image",
+        "inputs": [
+            {"key": "avatar_image", "type": "image", "node_id": "76", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
+             "label": {"en": "Avatar Image", "ko": "아바타 이미지", "zh": "角色图片"}},
+            {"key": "clothing_ref", "type": "image", "node_id": "105", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": False,
+             "label": {"en": "Clothing Reference (Optional)", "ko": "의류 참조 이미지 (선택)", "zh": "服装参考图片（可选）"}},
+            {"key": "fashion_prompt", "type": "text", "node_id": "106:74", "field": "inputs.text",
+             "default": "Oversized graphic t-shirt with biker shorts and chunky sneakers",
+             "rows": 3,
+             "label": {"en": "Fashion Description", "ko": "패션 설명", "zh": "时尚描述"}},
+            {"key": "fashion_style", "type": "fashion_select",
+             "csv_path": "settings/fashion/s1.csv",
+             "label": {"en": "Fashion Style Presets", "ko": "패션 스타일 프리셋", "zh": "时尚风格预设"}},
+            {"key": "seed", "type": "number", "node_id": "113", "field": "inputs.value",
+             "default": -1, "min": -1, "max": 2147483647, "step": 1,
+             "label": {"en": "Seed (-1 = random)", "ko": "시드 (-1 = 랜덤)", "zh": "种子 (-1 = 随机)"}},
         ],
     },
 }
@@ -365,11 +431,180 @@ app.add_middleware(
 # Static files
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/background", StaticFiles(directory="background"), name="background")
+
+AVATARS_DIR = Path("settings/avatars")
+AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=str(AVATARS_DIR)), name="avatars")
 
 # Serve React frontend (built static files)
 FRONTEND_DIR = Path(__file__).parent / "frontend" / "dist"
 if FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
+
+
+# ============================================================================
+# Database & Auth
+# ============================================================================
+
+async def init_db():
+    """Create tables and seed super admin."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                name TEXT,
+                picture TEXT,
+                password_hash TEXT,
+                role TEXT DEFAULT 'user',
+                status TEXT DEFAULT 'pending',
+                auth_provider TEXT DEFAULT 'google',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                file_type TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                original_name TEXT,
+                metadata TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_uf_user ON user_files(user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_uf_type ON user_files(user_id, file_type)")
+        await db.commit()
+
+        # Seed super admin
+        if SUPER_ADMIN_EMAIL:
+            cursor = await db.execute("SELECT id FROM users WHERE email = ?", (SUPER_ADMIN_EMAIL,))
+            if not await cursor.fetchone():
+                pw_hash = _bcrypt.hashpw(ADMIN_PASSWORD.encode('utf-8'), _bcrypt.gensalt()).decode('utf-8') if ADMIN_PASSWORD else None
+                await db.execute(
+                    "INSERT INTO users (email, name, password_hash, role, status, auth_provider) VALUES (?,?,?,?,?,?)",
+                    (SUPER_ADMIN_EMAIL, "Super Admin", pw_hash, "superadmin", "approved", "local"),
+                )
+                await db.commit()
+                logging.info(f"Created super admin: {SUPER_ADMIN_EMAIL}")
+
+
+async def migrate_existing_files():
+    """On first run, assign all existing files to the super admin account."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM user_files")
+        row = await cursor.fetchone()
+        if row[0] > 0:
+            return
+        cursor = await db.execute("SELECT id FROM users WHERE email = ?", (SUPER_ADMIN_EMAIL,))
+        admin = await cursor.fetchone()
+        if not admin:
+            return
+        admin_id = admin[0]
+        IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+        AUD_EXT = {".wav", ".mp3", ".ogg", ".flac"}
+        VID_EXT = {".mp4", ".avi", ".mov", ".webm"}
+
+        for f in UPLOAD_DIR.iterdir():
+            if f.is_file():
+                ext = f.suffix.lower()
+                ft = "upload_image" if ext in IMG_EXT else "upload_audio" if ext in AUD_EXT else "upload_video" if ext in VID_EXT else None
+                if ft:
+                    await db.execute(
+                        "INSERT INTO user_files (user_id, file_type, filename, file_path, original_name) VALUES (?,?,?,?,?)",
+                        (admin_id, ft, f.name, str(f), f.name),
+                    )
+        for f in OUTPUT_DIR.iterdir():
+            if f.is_file() and f.suffix.lower() in (IMG_EXT | VID_EXT):
+                await db.execute(
+                    "INSERT INTO user_files (user_id, file_type, filename, file_path, original_name) VALUES (?,?,?,?,?)",
+                    (admin_id, "output", f.name, str(f), f.name),
+                )
+        for f in BACKGROUNDS_DIR.iterdir():
+            if f.is_file() and f.suffix.lower() in IMG_EXT:
+                await db.execute(
+                    "INSERT INTO user_files (user_id, file_type, filename, file_path, original_name) VALUES (?,?,?,?,?)",
+                    (admin_id, "background", f.name, str(f), f.name),
+                )
+        # Migrate avatar files from settings/avatars/<group>/
+        if AVATARS_DIR.exists():
+            for group_dir in sorted(AVATARS_DIR.iterdir()):
+                if group_dir.is_dir():
+                    for f in sorted(group_dir.iterdir()):
+                        if f.is_file() and f.suffix.lower() in IMG_EXT:
+                            meta = _json.dumps({"group": group_dir.name})
+                            await db.execute(
+                                "INSERT INTO user_files (user_id, file_type, filename, file_path, original_name, metadata) VALUES (?,?,?,?,?,?)",
+                                (admin_id, "avatar", f.name, str(f), f.name, meta),
+                            )
+        await db.commit()
+        logging.info("Migrated existing files to super admin account")
+
+
+@app.on_event("startup")
+async def on_startup():
+    await init_db()
+    await migrate_existing_files()
+
+
+# --- JWT helpers ---
+
+def create_jwt_token(user_id: int, email: str, role: str) -> str:
+    return pyjwt.encode(
+        {"sub": user_id, "email": email, "role": role,
+         "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=JWT_EXPIRY_HOURS)},
+        JWT_SECRET, algorithm=JWT_ALGORITHM,
+    )
+
+
+def decode_jwt_token(token: str) -> dict:
+    try:
+        return pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(401, "Token expired")
+    except pyjwt.InvalidTokenError:
+        raise HTTPException(401, "Invalid token")
+
+
+# --- Auth dependencies ---
+
+async def get_current_user(request: Request):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Not authenticated")
+    payload = decode_jwt_token(auth_header[7:])
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM users WHERE id = ?", (payload["sub"],))
+        row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(401, "User not found")
+    user = dict(row)
+    if user["status"] == "pending":
+        raise HTTPException(403, "Account pending approval")
+    if user["status"] == "suspended":
+        raise HTTPException(403, "Account suspended")
+    return user
+
+
+async def get_admin_user(user=Depends(get_current_user)):
+    if user["role"] != "superadmin":
+        raise HTTPException(403, "Admin access required")
+    return user
+
+
+async def record_user_file(user_id: int, file_type: str, filename: str, file_path: str, original_name: str = None, metadata: str = None):
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute(
+            "INSERT INTO user_files (user_id, file_type, filename, file_path, original_name, metadata) VALUES (?,?,?,?,?,?)",
+            (user_id, file_type, filename, file_path, original_name, metadata),
+        )
+        await db.commit()
 
 
 # ============================================================================
@@ -886,6 +1121,16 @@ def generate_video_task(task_id: str, params: dict):
         gc.collect()
         torch.cuda.empty_cache()
 
+        _uid = params.get("_user_id")
+        if _uid and final_path:
+            import asyncio as _aio
+            try:
+                loop = _aio.new_event_loop()
+                loop.run_until_complete(record_user_file(_uid, "output", os.path.basename(final_path), final_path, os.path.basename(final_path)))
+                loop.close()
+            except Exception:
+                pass
+
         generation_status[task_id] = {
             "status": "completed",
             "progress": 1.0,
@@ -1037,6 +1282,16 @@ def generate_i2v_task(task_id: str, params: dict):
         gc.collect()
         torch.cuda.empty_cache()
 
+        _uid = params.get("_user_id")
+        if _uid and final_path:
+            import asyncio as _aio
+            try:
+                loop = _aio.new_event_loop()
+                loop.run_until_complete(record_user_file(_uid, "output", os.path.basename(final_path), final_path, os.path.basename(final_path)))
+                loop.close()
+            except Exception:
+                pass
+
         generation_status[task_id] = {
             "status": "completed",
             "progress": 1.0,
@@ -1150,6 +1405,16 @@ def generate_flux_task(task_id: str, params: dict):
         gc.collect()
         torch.cuda.empty_cache()
 
+        _uid = params.get("_user_id")
+        if _uid and image_path:
+            import asyncio as _aio
+            try:
+                loop = _aio.new_event_loop()
+                loop.run_until_complete(record_user_file(_uid, "output", os.path.basename(image_path), image_path, os.path.basename(image_path)))
+                loop.close()
+            except Exception:
+                pass
+
         generation_status[task_id] = {
             "status": "completed",
             "progress": 1.0,
@@ -1226,11 +1491,13 @@ async def get_config():
         "i2v_default_shift": 5.0,
         # LoRA info
         "lora_adapters_available": any(os.path.exists(a["path"]) for a in LORA_ADAPTERS),
+        # Auth
+        "google_client_id": GOOGLE_CLIENT_ID,
     }
 
 
 @app.get("/api/lora-adapters")
-async def get_lora_adapters(category: Optional[str] = None):
+async def get_lora_adapters(category: Optional[str] = None, user=Depends(get_current_user)):
     """List available LoRA adapters with metadata, optionally filtered by category."""
     adapters = []
     for a in LORA_ADAPTERS:
@@ -1253,8 +1520,138 @@ async def get_lora_adapters(category: Optional[str] = None):
     return {"adapters": adapters}
 
 
+# ============================================================================
+# Auth Endpoints
+# ============================================================================
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+
+@app.post("/api/auth/login")
+async def auth_login(req: LoginRequest):
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM users WHERE email = ? AND auth_provider = 'local'", (req.email,))
+        row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(401, "Invalid credentials")
+    user = dict(row)
+    if not user["password_hash"] or not _bcrypt.checkpw(req.password.encode('utf-8'), user["password_hash"].encode('utf-8')):
+        raise HTTPException(401, "Invalid credentials")
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?", (user["id"],))
+        await db.commit()
+    token = create_jwt_token(user["id"], user["email"], user["role"])
+    return {"token": token, "user": {"id": user["id"], "email": user["email"], "name": user["name"],
+            "role": user["role"], "status": user["status"], "picture": user.get("picture")}}
+
+
+@app.post("/api/auth/google")
+async def auth_google(req: GoogleAuthRequest):
+    from google.oauth2 import id_token
+    from google.auth.transport import requests as google_requests
+    try:
+        idinfo = id_token.verify_oauth2_token(req.credential, google_requests.Request(), GOOGLE_CLIENT_ID)
+    except ValueError:
+        raise HTTPException(401, "Invalid Google token")
+    email = idinfo.get("email")
+    name = idinfo.get("name", "")
+    picture = idinfo.get("picture", "")
+    if not email:
+        raise HTTPException(400, "No email in Google token")
+
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM users WHERE email = ?", (email,))
+        row = await cursor.fetchone()
+        if row:
+            user = dict(row)
+            await db.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP, name = ?, picture = ? WHERE id = ?",
+                             (name, picture, user["id"]))
+            await db.commit()
+        else:
+            status = "approved" if email == SUPER_ADMIN_EMAIL else "pending"
+            role = "superadmin" if email == SUPER_ADMIN_EMAIL else "user"
+            cursor = await db.execute(
+                "INSERT INTO users (email, name, picture, role, status, auth_provider, last_login) VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)",
+                (email, name, picture, role, status, "google"),
+            )
+            await db.commit()
+            user = {"id": cursor.lastrowid, "email": email, "name": name, "picture": picture,
+                    "role": role, "status": status}
+
+    token = create_jwt_token(user["id"], user["email"], user["role"])
+    return {"token": token, "user": {"id": user["id"], "email": user["email"], "name": user["name"],
+            "role": user["role"], "status": user["status"], "picture": user.get("picture")}}
+
+
+@app.get("/api/auth/me")
+async def auth_me(user=Depends(get_current_user)):
+    return {"user": {"id": user["id"], "email": user["email"], "name": user["name"],
+            "role": user["role"], "status": user["status"], "picture": user.get("picture")}}
+
+
+# ============================================================================
+# Admin Endpoints
+# ============================================================================
+
+@app.get("/api/admin/users")
+async def admin_list_users(user=Depends(get_admin_user)):
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, email, name, picture, role, status, auth_provider, created_at, last_login FROM users ORDER BY created_at DESC")
+        users = [dict(r) for r in await cursor.fetchall()]
+    return {"users": users}
+
+
+@app.post("/api/admin/users/{user_id}/approve")
+async def admin_approve_user(user_id: int, user=Depends(get_admin_user)):
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute("UPDATE users SET status = 'approved' WHERE id = ? AND status = 'pending'", (user_id,))
+        await db.commit()
+    return {"message": "User approved"}
+
+
+@app.post("/api/admin/users/{user_id}/suspend")
+async def admin_suspend_user(user_id: int, user=Depends(get_admin_user)):
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute("UPDATE users SET status = 'suspended' WHERE id = ? AND id != ?", (user_id, user["id"]))
+        await db.commit()
+    return {"message": "User suspended"}
+
+
+@app.post("/api/admin/users/{user_id}/activate")
+async def admin_activate_user(user_id: int, user=Depends(get_admin_user)):
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute("UPDATE users SET status = 'approved' WHERE id = ? AND status = 'suspended'", (user_id,))
+        await db.commit()
+    return {"message": "User activated"}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: int, user=Depends(get_admin_user)):
+    if user_id == user["id"]:
+        raise HTTPException(400, "Cannot delete yourself")
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute("DELETE FROM user_files WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        await db.commit()
+    return {"message": "User deleted"}
+
+
+# ============================================================================
+# Upload / File Endpoints
+# ============================================================================
+
 @app.post("/api/upload/image")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...), user=Depends(get_current_user)):
     """Upload reference image."""
     try:
         ext = Path(file.filename).suffix.lower()
@@ -1272,6 +1669,9 @@ async def upload_image(file: UploadFile = File(...)):
         with Image.open(filepath) as img:
             width, height = img.size
 
+        await record_user_file(user["id"], "upload_image", filename, str(filepath),
+                               file.filename, _json.dumps({"width": width, "height": height}))
+
         return {
             "path": str(filepath),
             "url": f"/uploads/{filename}",
@@ -1283,7 +1683,7 @@ async def upload_image(file: UploadFile = File(...)):
 
 
 @app.post("/api/upload/audio")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), user=Depends(get_current_user)):
     """Upload driving audio."""
     try:
         ext = Path(file.filename).suffix.lower()
@@ -1297,13 +1697,15 @@ async def upload_audio(file: UploadFile = File(...)):
             content = await file.read()
             f.write(content)
 
+        await record_user_file(user["id"], "upload_audio", filename, str(filepath), file.filename)
+
         return {"path": str(filepath), "url": f"/uploads/{filename}"}
     except Exception as e:
         raise HTTPException(500, str(e))
 
 
 @app.post("/api/upload/video")
-async def upload_video(file: UploadFile = File(...)):
+async def upload_video(file: UploadFile = File(...), user=Depends(get_current_user)):
     """Upload video for audio extraction."""
     try:
         ext = Path(file.filename).suffix.lower()
@@ -1317,13 +1719,130 @@ async def upload_video(file: UploadFile = File(...)):
             content = await file.read()
             f.write(content)
 
+        await record_user_file(user["id"], "upload_video", filename, str(filepath), file.filename)
+
         return {"path": str(filepath), "url": f"/uploads/{filename}"}
     except Exception as e:
         raise HTTPException(500, str(e))
 
 
+@app.post("/api/upload/background")
+async def upload_background(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Upload background image and save to backgrounds/stages/."""
+    try:
+        ext = Path(file.filename).suffix.lower()
+        if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+            raise HTTPException(400, "Invalid image format")
+
+        # Use original filename (sanitized) to keep it recognizable
+        safe_name = "".join(c for c in Path(file.filename).stem if c.isalnum() or c in "-_ ").strip()
+        if not safe_name:
+            safe_name = str(uuid.uuid4())
+        filename = f"{safe_name}{ext}"
+        # Avoid overwriting: append uuid if exists
+        filepath = BACKGROUNDS_DIR / filename
+        if filepath.exists():
+            filename = f"{safe_name}_{uuid.uuid4().hex[:8]}{ext}"
+            filepath = BACKGROUNDS_DIR / filename
+
+        with open(filepath, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        with Image.open(filepath) as img:
+            width, height = img.size
+
+        await record_user_file(user["id"], "background", filename, str(filepath),
+                               file.filename, _json.dumps({"width": width, "height": height}))
+
+        return {
+            "path": str(filepath),
+            "url": f"/background/stages/{filename}",
+            "width": width,
+            "height": height,
+            "filename": filename,
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/backgrounds")
+async def list_backgrounds(user=Depends(get_current_user)):
+    """List background images owned by current user."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM user_files WHERE user_id = ? AND file_type = 'background' ORDER BY created_at DESC",
+            (user["id"],))
+        rows = [dict(r) for r in await cursor.fetchall()]
+    images = []
+    for r in rows:
+        fp = Path(r["file_path"])
+        if fp.exists():
+            meta = _json.loads(r["metadata"]) if r["metadata"] else {}
+            images.append({
+                "filename": r["filename"], "url": f"/background/stages/{r['filename']}",
+                "path": r["file_path"], "width": meta.get("width", 0), "height": meta.get("height", 0),
+            })
+    return {"backgrounds": images, "total": len(images)}
+
+
+@app.get("/api/avatars")
+async def list_avatar_groups(user=Depends(get_current_user)):
+    """List avatar groups owned by current user."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute(
+            "SELECT DISTINCT json_extract(metadata, '$.group') as grp FROM user_files WHERE user_id = ? AND file_type = 'avatar' AND metadata IS NOT NULL ORDER BY grp",
+            (user["id"],))
+        rows = await cursor.fetchall()
+    groups = [r[0] for r in rows if r[0]]
+    return {"groups": groups}
+
+
+@app.get("/api/avatars/{group}")
+async def list_avatar_images(group: str, user=Depends(get_current_user)):
+    """List avatar images in a specific group owned by current user."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM user_files WHERE user_id = ? AND file_type = 'avatar' AND json_extract(metadata, '$.group') = ? ORDER BY filename",
+            (user["id"], group))
+        rows = [dict(r) for r in await cursor.fetchall()]
+    images = []
+    for r in rows:
+        fp = Path(r["file_path"])
+        if fp.exists():
+            images.append({
+                "filename": r["filename"],
+                "url": f"/avatars/{group}/{r['filename']}",
+                "path": r["file_path"],
+            })
+    return {"images": images, "group": group}
+
+
+@app.get("/api/fashion-styles")
+async def get_fashion_styles(user=Depends(get_current_user)):
+    """Load fashion styles from CSV."""
+    import csv
+    csv_path = Path("settings/fashion/s1.csv")
+    if not csv_path.exists():
+        return {"styles": [], "categories": []}
+    styles = []
+    categories = set()
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            styles.append({
+                "id": int(row.get("ID", 0)),
+                "category": row.get("Style_Keyword", ""),
+                "prompt": row.get("English_Prompt", ""),
+            })
+            categories.add(row.get("Style_Keyword", ""))
+    return {"styles": styles, "categories": sorted(categories)}
+
+
 @app.post("/api/generate")
-async def generate_video(request: GenerateRequest):
+async def generate_video(request: GenerateRequest, user=Depends(get_current_user)):
     """Start S2V video generation task."""
     task_id = str(uuid.uuid4())
 
@@ -1334,13 +1853,15 @@ async def generate_video(request: GenerateRequest):
         "output_path": None,
     }
 
-    executor.submit(generate_video_task, task_id, request.dict())
+    params = request.dict()
+    params["_user_id"] = user["id"]
+    executor.submit(generate_video_task, task_id, params)
 
     return {"task_id": task_id}
 
 
 @app.post("/api/generate-i2v")
-async def generate_i2v(request: I2VGenerateRequest):
+async def generate_i2v(request: I2VGenerateRequest, user=Depends(get_current_user)):
     """Start I2V video generation task."""
     if not os.path.exists(I2V_GGUF_HIGH) or not os.path.exists(I2V_GGUF_LOW):
         raise HTTPException(503, "I2V GGUF models not available. Download Q4_K_M GGUF files first.")
@@ -1354,13 +1875,15 @@ async def generate_i2v(request: I2VGenerateRequest):
         "output_path": None,
     }
 
-    executor.submit(generate_i2v_task, task_id, request.dict())
+    params = request.dict()
+    params["_user_id"] = user["id"]
+    executor.submit(generate_i2v_task, task_id, params)
 
     return {"task_id": task_id}
 
 
 @app.get("/api/status/{task_id}")
-async def get_status(task_id: str):
+async def get_status(task_id: str, user=Depends(get_current_user)):
     """Get generation task status."""
     if task_id not in generation_status:
         raise HTTPException(404, "Task not found")
@@ -1368,8 +1891,29 @@ async def get_status(task_id: str):
     return generation_status[task_id]
 
 
+@app.post("/api/cancel/{task_id}")
+async def cancel_task(task_id: str, user=Depends(get_current_user)):
+    """Cancel a running generation task."""
+    if task_id not in generation_status:
+        raise HTTPException(404, "Task not found")
+    status = generation_status[task_id]
+    if status["status"] in ("completed", "failed", "cancelled"):
+        return {"ok": True, "message": "Task already finished"}
+    # Interrupt ComfyUI and clear queue
+    try:
+        http_requests.post(f"{COMFYUI_URL}/interrupt", timeout=5)
+        http_requests.post(f"{COMFYUI_URL}/queue", json={"clear": True}, timeout=5)
+    except Exception:
+        pass
+    generation_status[task_id].update({
+        "status": "cancelled",
+        "message": "Cancelled by user",
+    })
+    return {"ok": True, "message": "Task cancelled"}
+
+
 @app.post("/api/extract-audio")
-async def extract_audio(video_path: str = Form(...)):
+async def extract_audio(video_path: str = Form(...), user=Depends(get_current_user)):
     """Extract audio from video."""
     if not HAS_MOVIEPY:
         raise HTTPException(500, "moviepy not installed")
@@ -1391,7 +1935,7 @@ async def extract_audio(video_path: str = Form(...)):
 
 
 @app.post("/api/separate-vocals")
-async def separate_vocals(audio_path: str = Form(...)):
+async def separate_vocals(audio_path: str = Form(...), user=Depends(get_current_user)):
     """Separate vocals from audio."""
     if not HAS_AUDIO_SEPARATOR:
         raise HTTPException(500, "audio-separator not installed")
@@ -1422,67 +1966,116 @@ async def separate_vocals(audio_path: str = Form(...)):
         raise HTTPException(500, str(e))
 
 
+class TrimVideoRequest(BaseModel):
+    video_path: str
+    start: float
+    end: float
+
+@app.post("/api/trim-video")
+async def trim_video(request: TrimVideoRequest, user=Depends(get_current_user)):
+    """Trim video to specified start/end times using ffmpeg."""
+    if not os.path.exists(request.video_path):
+        raise HTTPException(404, f"Video not found: {request.video_path}")
+    if request.start < 0 or request.end <= request.start:
+        raise HTTPException(400, "Invalid start/end times")
+
+    trimmed_path = str(UPLOAD_DIR / f"{uuid.uuid4()}.mp4")
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-y",
+            "-ss", str(request.start),
+            "-to", str(request.end),
+            "-i", request.video_path,
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+            "-c:a", "aac", "-b:a", "192k",
+            trimmed_path,
+        ], capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise Exception(f"ffmpeg failed: {result.stderr[:500]}")
+
+        # Get duration of trimmed video
+        probe = subprocess.run([
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", trimmed_path,
+        ], capture_output=True, text=True, timeout=30)
+        duration = float(probe.stdout.strip()) if probe.returncode == 0 else (request.end - request.start)
+
+        filename = os.path.basename(trimmed_path)
+        return {
+            "path": trimmed_path,
+            "url": f"/uploads/{filename}",
+            "duration": round(duration, 2),
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Trim operation timed out")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.get("/api/uploads/images")
-async def list_uploaded_images():
-    """List all uploaded images."""
-    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+async def list_uploaded_images(user=Depends(get_current_user)):
+    """List uploaded images owned by current user."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM user_files WHERE user_id = ? AND file_type = 'upload_image' ORDER BY created_at DESC",
+            (user["id"],))
+        rows = [dict(r) for r in await cursor.fetchall()]
     images = []
-    for f in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.suffix.lower() in IMAGE_EXTS:
-            stat = f.stat()
-            try:
-                with Image.open(f) as img:
-                    width, height = img.size
-            except Exception:
-                width, height = 0, 0
+    for r in rows:
+        fp = Path(r["file_path"])
+        if fp.exists():
+            meta = _json.loads(r["metadata"]) if r["metadata"] else {}
             images.append({
-                "filename": f.name,
-                "url": f"/uploads/{f.name}",
-                "path": str(f),
-                "width": width,
-                "height": height,
-                "size": stat.st_size,
-                "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "filename": r["filename"], "url": f"/uploads/{r['filename']}",
+                "path": r["file_path"], "width": meta.get("width", 0), "height": meta.get("height", 0),
+                "size": fp.stat().st_size, "created_at": r["created_at"],
             })
     return {"images": images, "total": len(images)}
 
 
 @app.get("/api/uploads/audio")
-async def list_uploaded_audio():
+async def list_uploaded_audio(user=Depends(get_current_user)):
     """List all uploaded audio files."""
-    AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".flac"}
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM user_files WHERE user_id = ? AND file_type = 'upload_audio' ORDER BY created_at DESC",
+            (user["id"],))
+        rows = [dict(r) for r in await cursor.fetchall()]
     audio_files = []
-    for f in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.suffix.lower() in AUDIO_EXTS:
-            stat = f.stat()
+    for r in rows:
+        fp = Path(r["file_path"])
+        if fp.exists():
             audio_files.append({
-                "filename": f.name,
-                "url": f"/uploads/{f.name}",
-                "path": str(f),
-                "size": stat.st_size,
-                "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "filename": r["filename"], "url": f"/uploads/{r['filename']}",
+                "path": r["file_path"], "size": fp.stat().st_size, "created_at": r["created_at"],
             })
     return {"audio": audio_files, "total": len(audio_files)}
 
 
 @app.get("/api/videos")
-async def list_videos():
-    """List all generated videos with metadata."""
+async def list_videos(user=Depends(get_current_user)):
+    """List generated videos owned by current user."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM user_files WHERE user_id = ? AND file_type = 'output' AND filename LIKE '%.mp4' ORDER BY created_at DESC",
+            (user["id"],))
+        rows = [dict(r) for r in await cursor.fetchall()]
     videos = []
-    for f in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.suffix == ".mp4":
-            stat = f.stat()
+    for r in rows:
+        fp = Path(r["file_path"])
+        if fp.exists():
             videos.append({
-                "filename": f.name,
-                "url": f"/outputs/{f.name}",
-                "size": stat.st_size,
-                "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "filename": r["filename"], "url": f"/outputs/{r['filename']}",
+                "size": fp.stat().st_size, "created_at": r["created_at"],
             })
     return {"videos": videos, "total": len(videos)}
 
 
 @app.delete("/api/videos/{filename}")
-async def delete_video(filename: str):
+async def delete_video(filename: str, user=Depends(get_current_user)):
     """Delete a generated video."""
     filepath = OUTPUT_DIR / filename
     if not filepath.exists():
@@ -1497,7 +2090,7 @@ async def delete_video(filename: str):
 
 
 @app.get("/api/t2i-status")
-async def t2i_status():
+async def t2i_status(user=Depends(get_current_user)):
     """Check if T2I (FLUX) model is available."""
     return {
         "available": True,
@@ -1508,7 +2101,7 @@ async def t2i_status():
 
 
 @app.post("/api/generate-flux")
-async def generate_flux(request: FluxGenerateRequest):
+async def generate_flux(request: FluxGenerateRequest, user=Depends(get_current_user)):
     """Start FLUX image generation task."""
     task_id = str(uuid.uuid4())
 
@@ -1519,13 +2112,15 @@ async def generate_flux(request: FluxGenerateRequest):
         "output_path": None,
     }
 
-    executor.submit(generate_flux_task, task_id, request.dict())
+    params = request.dict()
+    params["_user_id"] = user["id"]
+    executor.submit(generate_flux_task, task_id, params)
 
     return {"task_id": task_id}
 
 
 @app.delete("/api/outputs/{filename}")
-async def delete_output(filename: str):
+async def delete_output(filename: str, user=Depends(get_current_user)):
     """Delete a generated output (image or video)."""
     filepath = OUTPUT_DIR / filename
     if not filepath.exists():
@@ -1537,7 +2132,7 @@ async def delete_output(filename: str):
 
 
 @app.post("/api/extract-frame")
-async def extract_first_frame(video_path: str = Form(...)):
+async def extract_first_frame(video_path: str = Form(...), user=Depends(get_current_user)):
     """Extract first frame from a video file and save as PNG."""
     import cv2
 
@@ -1568,32 +2163,32 @@ async def extract_first_frame(video_path: str = Form(...)):
 
 
 @app.get("/api/outputs")
-async def list_outputs():
-    """List all generated outputs (images and videos) for use as references."""
+async def list_outputs(user=Depends(get_current_user)):
+    """List generated outputs owned by current user."""
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
-    VIDEO_EXTS = {".mp4", ".avi", ".mov", ".webm"}
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM user_files WHERE user_id = ? AND file_type = 'output' ORDER BY created_at DESC",
+            (user["id"],))
+        rows = [dict(r) for r in await cursor.fetchall()]
     outputs = []
-
-    for f in sorted(OUTPUT_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        ext = f.suffix.lower()
-        if ext in IMAGE_EXTS or ext in VIDEO_EXTS:
-            stat = f.stat()
+    for r in rows:
+        fp = Path(r["file_path"])
+        if fp.exists():
+            ext = fp.suffix.lower()
             item = {
-                "filename": f.name,
-                "url": f"/outputs/{f.name}",
-                "path": str(f),
-                "type": "image" if ext in IMAGE_EXTS else "video",
-                "size": stat.st_size,
-                "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "filename": r["filename"], "url": f"/outputs/{r['filename']}",
+                "path": r["file_path"], "type": "image" if ext in IMAGE_EXTS else "video",
+                "size": fp.stat().st_size, "created_at": r["created_at"],
             }
             if ext in IMAGE_EXTS:
                 try:
-                    with Image.open(f) as img:
+                    with Image.open(fp) as img:
                         item["width"], item["height"] = img.size
                 except Exception:
                     item["width"], item["height"] = 0, 0
             outputs.append(item)
-
     return {"outputs": outputs, "total": len(outputs)}
 
 
@@ -1606,6 +2201,9 @@ comfyui_process = None
 class WorkflowGenerateRequest(BaseModel):
     workflow_id: str
     inputs: dict = {}  # {key: value} matching registry input definitions
+    yt_title: str = ""
+    yt_description: str = ""
+    yt_hashtags: str = ""
 
 
 class YouTubeDownloadRequest(BaseModel):
@@ -1788,6 +2386,85 @@ def merge_audio_to_video(video_path: str, audio_source_path: str) -> str:
         return video_path
 
 
+def upload_to_youtube(video_path: str, title: str, description: str = "",
+                      tags: list = None) -> Optional[str]:
+    """Upload video to YouTube as a Short. Returns video URL or None."""
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build as yt_build
+    from googleapiclient.http import MediaFileUpload
+
+    SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+    creds = None
+    if YOUTUBE_TOKEN.exists():
+        creds = Credentials.from_authorized_user_file(str(YOUTUBE_TOKEN), SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            if not YOUTUBE_CLIENT_SECRET.exists():
+                logging.warning("YouTube client_secret.json not found, skipping upload")
+                return None
+            flow = InstalledAppFlow.from_client_secrets_file(str(YOUTUBE_CLIENT_SECRET), SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(YOUTUBE_TOKEN, 'w') as f:
+            f.write(creds.to_json())
+
+    youtube = yt_build("youtube", "v3", credentials=creds)
+
+    if tags is None:
+        tags = ["Shorts", "AI", "dance", "korean"]
+    if "Shorts" not in tags:
+        tags.insert(0, "Shorts")
+
+    body = {
+        "snippet": {
+            "title": title[:100],
+            "description": description,
+            "tags": tags,
+            "categoryId": "22",
+        },
+        "status": {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+
+    media = MediaFileUpload(video_path, mimetype="video/mp4", resumable=True)
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+    response = request.execute()
+
+    video_id = response.get("id")
+    video_url = f"https://youtube.com/shorts/{video_id}" if video_id else None
+    logging.info(f"YouTube upload complete: {video_url}")
+    return video_url
+
+
+def notify_slack(message: str):
+    """Send Slack notification via bot DM."""
+    from slack_sdk import WebClient
+
+    if not SLACK_BOT_TOKEN:
+        logging.warning("SLACK_BOT_TOKEN not set, skipping notification")
+        return
+    if not SLACK_NOTIFY_EMAIL:
+        logging.warning("SLACK_NOTIFY_EMAIL not set, skipping notification")
+        return
+
+    client = WebClient(token=SLACK_BOT_TOKEN)
+    try:
+        user = client.users_lookupByEmail(email=SLACK_NOTIFY_EMAIL)
+        user_id = user["user"]["id"]
+        dm = client.conversations_open(users=[user_id])
+        channel_id = dm["channel"]["id"]
+        client.chat_postMessage(channel=channel_id, text=message)
+        logging.info(f"Slack notification sent to {SLACK_NOTIFY_EMAIL}")
+    except Exception as e:
+        logging.error(f"Slack notification failed: {e}")
+
+
 def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
     """Load API-format workflow and inject user parameters using the registry."""
     import json as json_mod
@@ -1808,6 +2485,11 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
         if value is None:
             continue
 
+        # Skip special marker node_ids (handled in post-processing below)
+        node_id = input_def.get("node_id", "")
+        if isinstance(node_id, str) and node_id.startswith("__"):
+            continue
+
         if input_def["type"] == "select_buttons":
             option = next((o for o in input_def["options"] if o["value"] == value), None)
             if option and "params" in option:
@@ -1818,6 +2500,75 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 _set_nested(workflow, nid, input_def["field"], value)
         else:
             _set_nested(workflow, input_def["node_id"], input_def["field"], value)
+
+    # --- Change Character: Custom Background ---
+    if workflow_id == "change_character":
+        bg_image = user_inputs.get("bg_image")
+        bg_prompt = user_inputs.get("bg_prompt", "").strip()
+
+        # Custom background image → route through masking pipeline
+        # Original flow: input_video(81) → DrawMaskOnImage(15) → bg_images(218)
+        # Custom flow:   LoadImage(300) → Resize(301) → Repeat(302) → DrawMaskOnImage(15) → bg_images(218)
+        # This ensures the character area is properly masked (blacked out) in the custom background
+        if bg_image:
+            workflow["300"] = {
+                "class_type": "LoadImage",
+                "inputs": {"image": bg_image, "upload": "image"},
+            }
+            workflow["301"] = {
+                "class_type": "ImageResizeKJv2",
+                "inputs": {
+                    "width": ["123", 0],
+                    "height": ["124", 0],
+                    "upscale_method": "lanczos",
+                    "keep_proportion": "pad",
+                    "pad_color": "0, 0, 0",
+                    "crop_position": "center",
+                    "divisible_by": 16,
+                    "device": "cpu",
+                    "image": ["300", 0],
+                },
+            }
+            workflow["302"] = {
+                "class_type": "RepeatImageBatch",
+                "inputs": {
+                    "image": ["301", 0],
+                    "amount": ["96", 1],
+                },
+            }
+            # Replace DrawMaskOnImage's image input with repeated custom bg
+            # Node 15 still applies the character mask, producing bg with character area blacked out
+            if "15" in workflow:
+                workflow["15"]["inputs"]["image"] = ["302", 0]
+                logging.info(f"Custom background image applied: {bg_image}")
+
+        # Background prompt → prepend to positive_prompt
+        if bg_prompt and "209" in workflow:
+            current = workflow["209"]["inputs"].get("positive_prompt", "")
+            workflow["209"]["inputs"]["positive_prompt"] = f"{bg_prompt}. {current}"
+            logging.info(f"Background prompt prepended: {bg_prompt}")
+
+    # --- Fashion Change: seed randomization + optional clothing ref ---
+    if workflow_id == "fashion_change":
+        # Random seed if -1
+        seed_val = workflow.get("113", {}).get("inputs", {}).get("value", -1)
+        if seed_val == -1:
+            workflow["113"]["inputs"]["value"] = random.randint(0, 2**53)
+
+        # If no clothing reference image provided, remove ref image nodes
+        # and simplify the pipeline to text-only inpainting
+        clothing_ref = user_inputs.get("clothing_ref", "")
+        if not clothing_ref:
+            # Remove clothing reference nodes
+            for nid in ["105", "106:85", "106:84:78", "106:84:77", "106:84:76"]:
+                workflow.pop(nid, None)
+            # CFGGuider now gets conditioning directly from InpaintModelConditioning
+            if "106:63" in workflow:
+                workflow["106:63"]["inputs"]["positive"] = ["106:90", 0]
+                workflow["106:63"]["inputs"]["negative"] = ["106:90", 1]
+            logging.info("Fashion change: text-only mode (no clothing reference image)")
+        else:
+            logging.info(f"Fashion change: reference mode with clothing image: {clothing_ref}")
 
     return workflow
 
@@ -1894,7 +2645,30 @@ def retrieve_comfyui_output(prompt_id: str) -> str:
 
                 return f"/outputs/{output_filename}"
 
-    raise Exception("No output video found in ComfyUI history")
+        # SaveImage outputs appear under 'images' key
+        if "images" in node_output:
+            for img in node_output["images"]:
+                filename = img["filename"]
+                subfolder = img.get("subfolder", "")
+                file_type = img.get("type", "output")
+
+                view_resp = http_requests.get(
+                    f"{COMFYUI_URL}/view",
+                    params={"filename": filename, "subfolder": subfolder, "type": file_type},
+                )
+                if view_resp.status_code != 200:
+                    continue
+
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                ext = os.path.splitext(filename)[1] or ".png"
+                output_filename = f"workflow_{timestamp}{ext}"
+                output_path = OUTPUT_DIR / output_filename
+                with open(output_path, 'wb') as f:
+                    f.write(view_resp.content)
+
+                return f"/outputs/{output_filename}"
+
+    raise Exception("No output found in ComfyUI history")
 
 
 def download_youtube_video(url: str) -> dict:
@@ -2025,15 +2799,81 @@ def workflow_generate_task(task_id: str, params: dict):
         generation_status[task_id].update({"progress": 0.92, "message": "Retrieving output..."})
         output_path = retrieve_comfyui_output(prompt_id)
 
-        # Step 8: Post-processing — merge audio from reference video
-        # For change_character workflow, extract audio from the reference video
-        # and overlay it onto the generated output video
+        # Step 8: Post-processing — merge audio
+        # Priority: custom_audio > reference video audio
+        custom_audio = params.get("_custom_audio_path")
         ref_video_original = params.get("_ref_video_original")
-        if ref_video_original and os.path.exists(ref_video_original):
+        abs_output = str(OUTPUT_DIR / os.path.basename(output_path))
+        if custom_audio and os.path.exists(custom_audio):
+            generation_status[task_id].update({"progress": 0.95, "message": "Merging custom audio..."})
+            merge_audio_to_video(abs_output, custom_audio)
+            logging.info(f"Custom audio merged: {custom_audio}")
+        elif ref_video_original and os.path.exists(ref_video_original):
             generation_status[task_id].update({"progress": 0.95, "message": "Merging audio from reference video..."})
-            abs_output = str(OUTPUT_DIR / os.path.basename(output_path))
             merge_audio_to_video(abs_output, ref_video_original)
             logging.info(f"Audio merged from reference video: {ref_video_original}")
+
+        # Step 9: Post-processing — YouTube upload + Slack notification
+        # Skip for image-only workflows (fashion_change)
+        output_type = wf_config.get("output_type", "video")
+        if output_type == "video" and os.path.exists(abs_output):
+            generation_status[task_id].update({"progress": 0.97, "message": "Uploading to YouTube..."})
+
+            yt_title = params.get("yt_title", "").strip()
+            yt_description = params.get("yt_description", "").strip()
+            yt_hashtags_raw = params.get("yt_hashtags", "").strip()
+
+            # Parse hashtags into tags list
+            yt_tags = None
+            if yt_hashtags_raw:
+                yt_tags = [t.strip().lstrip("#") for t in yt_hashtags_raw.replace(",", " ").split() if t.strip()]
+
+            # Auto-generate title if empty: "{avatar_name} - YYYY-MM-DD HH:MM"
+            if not yt_title:
+                import datetime as dt_mod
+                avatar_name = ""
+                ref_image_path = user_inputs.get("ref_image", "")
+                if ref_image_path and "settings/avatars/" in ref_image_path:
+                    parts = ref_image_path.split("settings/avatars/")
+                    if len(parts) > 1:
+                        avatar_name = parts[1].split("/")[0]
+                if not avatar_name:
+                    avatar_name = "AI Video"
+                now_str = dt_mod.datetime.now().strftime("%Y-%m-%d %H:%M")
+                yt_title = f"{avatar_name} - {now_str}"
+
+            # Append hashtags to description
+            if yt_tags:
+                hashtag_line = " ".join(f"#{t}" for t in yt_tags)
+                yt_description = f"{yt_description}\n\n{hashtag_line}".strip() if yt_description else hashtag_line
+
+            yt_url = None
+            try:
+                yt_url = upload_to_youtube(abs_output, yt_title, yt_description, yt_tags)
+            except Exception as e:
+                logging.error(f"YouTube upload failed: {e}")
+
+            try:
+                slack_msg = f"Video generation completed!\n"
+                if yt_url:
+                    slack_msg += f"YouTube: {yt_url}\n"
+                slack_msg += f"File: {os.path.basename(abs_output)}"
+                notify_slack(slack_msg)
+            except Exception as e:
+                logging.error(f"Slack notify failed: {e}")
+
+        # Record output file to user_files DB
+        _user_id = params.get("_user_id")
+        if _user_id and output_path:
+            out_fn = os.path.basename(output_path)
+            out_fp = str(OUTPUT_DIR / out_fn)
+            import asyncio as _aio
+            try:
+                loop = _aio.new_event_loop()
+                loop.run_until_complete(record_user_file(_user_id, "output", out_fn, out_fp, out_fn))
+                loop.close()
+            except Exception as db_err:
+                logging.error(f"Failed to record output to DB: {db_err}")
 
         generation_status[task_id].update({
             "status": "completed", "progress": 1.0,
@@ -2053,7 +2893,7 @@ def workflow_generate_task(task_id: str, params: dict):
 
 
 @app.post("/api/workflow/generate")
-async def start_workflow_generation(request: WorkflowGenerateRequest):
+async def start_workflow_generation(request: WorkflowGenerateRequest, user=Depends(get_current_user)):
     """Start ComfyUI workflow generation task."""
     wf_config = WORKFLOW_REGISTRY.get(request.workflow_id)
     if not wf_config:
@@ -2084,12 +2924,21 @@ async def start_workflow_generation(request: WorkflowGenerateRequest):
                 params["_ref_video_original"] = abs_ref
                 break
 
+    # Save custom audio path (for audio replacement in post-processing)
+    custom_audio = (params.get("inputs") or {}).get("custom_audio")
+    if custom_audio:
+        abs_audio = custom_audio
+        if not os.path.isabs(custom_audio):
+            abs_audio = str(Path(custom_audio).resolve())
+        params["_custom_audio_path"] = abs_audio
+
+    params["_user_id"] = user["id"]
     executor.submit(workflow_generate_task, task_id, params)
     return {"task_id": task_id}
 
 
 @app.get("/api/workflows")
-async def list_workflows():
+async def list_workflows(user=Depends(get_current_user)):
     """Return available workflow definitions for the frontend."""
     result = []
     for wf in WORKFLOW_REGISTRY.values():
@@ -2105,7 +2954,7 @@ async def list_workflows():
 
 
 @app.post("/api/workflow/prepare-images")
-async def prepare_workflow_images(request: dict):
+async def prepare_workflow_images(request: dict, user=Depends(get_current_user)):
     """Copy selected gallery images to a temp folder for workflow use."""
     import shutil
     image_paths = request.get("image_paths", [])
@@ -2124,7 +2973,7 @@ async def prepare_workflow_images(request: dict):
 
 
 @app.get("/api/workflow/status")
-async def workflow_comfyui_status():
+async def workflow_comfyui_status(user=Depends(get_current_user)):
     """Check if ComfyUI is available."""
     available = False
     try:
@@ -2142,7 +2991,7 @@ async def workflow_comfyui_status():
 
 
 @app.post("/api/download-youtube")
-async def download_youtube(request: YouTubeDownloadRequest):
+async def download_youtube(request: YouTubeDownloadRequest, user=Depends(get_current_user)):
     """Download a YouTube video for use as reference."""
     try:
         result = download_youtube_video(request.url)
@@ -2180,7 +3029,7 @@ class TTSRequest(BaseModel):
 
 
 @app.post("/api/studio/tts")
-async def studio_tts(request: TTSRequest):
+async def studio_tts(request: TTSRequest, user=Depends(get_current_user)):
     """Generate speech audio from text script using Qwen3-TTS."""
     import soundfile as sf
     try:
@@ -2208,7 +3057,7 @@ async def studio_tts(request: TTSRequest):
 
 
 @app.get("/api/studio/tts-speakers")
-async def get_tts_speakers():
+async def get_tts_speakers(user=Depends(get_current_user)):
     """Return available TTS speakers for CustomVoice model."""
     return {
         "speakers": ["Ryan", "Claire", "Laura", "Aidan", "Matt", "Aria",
@@ -2345,7 +3194,7 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/api/studio/chat")
-async def studio_chat(request: ChatRequest):
+async def studio_chat(request: ChatRequest, user=Depends(get_current_user)):
     """Gemini function-calling chat for Video Studio AI assistant."""
     import google.generativeai as genai
 

@@ -381,7 +381,7 @@
   "205": {
     "class_type": "WanVideoModelLoader",
     "inputs": {
-      "model": "Wan2.2-Animate-14B-Q4_K_M.gguf",
+      "model": "Wan22Animate/Wan22Animate_merged_loras-Q4_K_M.gguf",
       "base_precision": "bf16",
       "quantization": "disabled",
       "load_device": "offload_device",
@@ -389,10 +389,6 @@
       "rms_norm_function": "pytorch",
       "block_swap_args": [
         "207",
-        0
-      ],
-      "lora": [
-        "208",
         0
       ]
     },
@@ -414,7 +410,7 @@
       "lora_4": "WanAnimate_relight_lora_fp16.safetensors",
       "strength_4": 0.7000000000000002,
       "low_mem_load": false,
-      "merge_loras": false
+      "merge_loras": true
     },
     "_meta": {
       "title": "WanVideoLoraSelectMulti"

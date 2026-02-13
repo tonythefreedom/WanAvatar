@@ -3270,7 +3270,7 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
     # WanVideo processes at ~16fps internally. VHS_LoadVideo with format="Wan"
     # auto-converts to this rate. We compute: duration * 16fps, rounded to 4k+1.
     # Max 481 frames (~30s) to prevent RAM explosion (37s video used 174GB at cap=0).
-    MAX_FRAMES = 481  # 30 seconds at 16fps, 4k+1 aligned
+    MAX_FRAMES = 601  # ~37.5 seconds at 16fps, 4k+1 aligned
     if workflow_id == "change_character" and "114" in workflow:
         video_path = workflow["114"]["inputs"].get("video", "")
         frame_cap = MAX_FRAMES

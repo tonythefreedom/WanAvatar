@@ -749,17 +749,32 @@ output_lora_14B/checkpoint-50/
 
 ## Changelog
 
-### 2026-02-14: Change Character V1.1 GGUF 최적화 + 배경 자동 동기화 + 갤러리 업로드
+### 2026-02-14: LoRA 머지 GGUF + GGUF 로딩 버그 수정 + 배경 자동 동기화 + 갤러리 업로드
 
-**Change Character V1.1 속도 최적화 (`workflow/Change_character_V1.1_api.json`, `server.py`):**
+**5 LoRA 머지 Q4_K_M GGUF 모델 (`workflow/Change_character_V1.1_api.json`, `server.py`):**
 
-- **GGUF Q4_K_M 모델 전환**: bf16 (28GB) → Q4_K_M (11GB), VRAM 사용량 60% 절감
-  - 모델: `Wan2.2-Animate-14B-Q4_K_M.gguf` (QuantStack/Wan2.2-Animate-14B-GGUF)
-  - `quantization: disabled` (GGUF 자체 양자화), `merge_loras: false` (GGUF 미지원)
+- **LoRA 머지 파이프라인**: 5개 LoRA를 bf16 기본 모델에 머지 → BF16 GGUF 변환 → Q4_K_M 양자화
+  - 머지 LoRA: WanAnimate_style, WanAnimate_camera, WanAnimate_appearance, WanAnimate_motion, WanAnimate_relight
+  - 변환 도구: ComfyUI-GGUF convert.py (BF16 GGUF) + 패치된 llama-quantize (Q4_K_M)
+  - 5D 텐서 복구: fix_5d_tensors.py (patch_embedding.weight, pose_patch_embedding.weight)
+  - 최종 모델: `Wan22Animate_merged_loras-Q4_K_M.gguf` (11GB)
+- **런타임 LoRA 로딩 제거**: 모든 LoRA가 모델에 bake-in → 로딩 시간 단축, VRAM 절약
+- **MAX_FRAMES 확장**: 481 (30초) → 601 (~37.5초) — 더 긴 영상 지원
+- **VRAM 사용량**: ~32GB 피크 (Q4_K_M + block swap)
+
+**WanVideoWrapper GGUF 로딩 버그 수정 (`nodes_model_loading.py`, 업스트림 PR 대상):**
+
+- **GGUFParameter 바이트 shape 문제**: `load_gguf()`가 반환하는 GGUFParameter meta 텐서의 `.shape`가 논리적 shape이 아닌 바이트 shape 반환
+  - Q4_K [5120, 5120] → 바이트 shape [5120, 2880] (block_size=256, type_size=144)
+  - 모델 config 추론 시 `in_features=2880` 설정 → `normalized_shape=[2880]`으로 RMSNorm 오류
+  - 수정: `_shape()` 헬퍼 함수로 `quant_shape` 사용 (모든 sd shape 접근에 적용)
+- **motion_encoder Q4_K 비호환**: EqualConv2d/EqualLinear가 GGUFParameter의 `__torch_function__` 오버라이드와 충돌
+  - 수정: motion_encoder/face_encoder/face_adapter 양자화 가중치를 로딩 시 float32로 디퀀타이즈
+
+**Change Character V1.1 최적화:**
+
 - **TeaCache 통합**: `rel_l1_thresh: 0.3`, `use_coefficients: true` — 30-45% 샘플링 속도 향상
 - **동적 frame_load_cap**: 비디오 길이에서 자동 계산 (`ffprobe` → `duration × 16fps` → 4k+1 정렬)
-  - `MAX_FRAMES = 481` (30초@16fps), 최소 81프레임
-  - 하드코딩 제거 → 비디오 길이 기반 자동 조절
 - **rms_norm_function: pytorch**: cuDNN 대신 PyTorch native RMS norm 사용
 - **Block Swap**: `blocks_to_swap: 20`, `vace_blocks_to_swap: 0` (VRAM 절약)
 - **SageAttention**: `attention_mode: sageattn` (메모리 효율 어텐션)
@@ -769,7 +784,7 @@ output_lora_14B/checkpoint-50/
 | 최적화 | 상태 | 비고 |
 |--------|------|------|
 | TeaCache | ✅ 적용 | 30-45% 속도 향상, 독립 동작 |
-| GGUF Q4_K_M | ✅ 적용 | VRAM 60% 절감 (28GB → 11GB) |
+| LoRA 머지 GGUF Q4_K_M | ✅ 적용 | 5 LoRA bake-in, VRAM 60% 절감 |
 | FP8 e4m3fn | ❌ 제거 | A100 (compute 8.0) + torch.compile 시 triton fp8e4nv 미지원 |
 | torch.compile | ❌ 제거 | FP8 호환 불가, bf16에서는 OOM |
 | batched_cfg | ❌ 제거 | TeaCache와 `is_uncond` 파라미터 충돌 |

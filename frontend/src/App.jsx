@@ -25,6 +25,9 @@ import {
   listBackgrounds,
   listAvatarGroups,
   listAvatarImages,
+  deleteAvatarImage,
+  registerAvatar,
+  prepareAvatar,
   getFashionStyles,
   cancelGeneration,
   authLogin,
@@ -35,6 +38,7 @@ import {
   adminSuspendUser,
   adminActivateUser,
   adminDeleteUser,
+  uploadToYouTube,
 } from './api';
 import './App.css';
 
@@ -55,6 +59,13 @@ const translations = {
     gallerySize: 'Size',
     galleryDate: 'Created',
     galleryRefresh: 'Refresh',
+    galleryYtUpload: 'YouTube Upload',
+    galleryYtTitle: 'Title',
+    galleryYtDesc: 'Description',
+    galleryYtHashtags: 'Hashtags',
+    galleryYtUploading: 'Uploading...',
+    galleryYtSuccess: 'Uploaded!',
+    galleryYtCancel: 'Cancel',
     // File picker
     selectFromUploads: 'Select from uploads',
     noUploads: 'No uploaded files',
@@ -257,6 +268,13 @@ const translations = {
     gallerySize: '크기',
     galleryDate: '생성일',
     galleryRefresh: '새로고침',
+    galleryYtUpload: 'YouTube 업로드',
+    galleryYtTitle: '제목',
+    galleryYtDesc: '설명',
+    galleryYtHashtags: '해시태그',
+    galleryYtUploading: '업로드 중...',
+    galleryYtSuccess: '업로드 완료!',
+    galleryYtCancel: '취소',
     selectFromUploads: '업로드 파일에서 선택',
     noUploads: '업로드된 파일 없음',
     i2vTitle: '이미지-비디오 변환 (SVI 2.0 Pro)',
@@ -457,6 +475,13 @@ const translations = {
     gallerySize: '大小',
     galleryDate: '创建时间',
     galleryRefresh: '刷新',
+    galleryYtUpload: 'YouTube上传',
+    galleryYtTitle: '标题',
+    galleryYtDesc: '描述',
+    galleryYtHashtags: '标签',
+    galleryYtUploading: '上传中...',
+    galleryYtSuccess: '上传成功!',
+    galleryYtCancel: '取消',
     selectFromUploads: '从已上传文件中选择',
     noUploads: '没有已上传的文件',
     i2vTitle: '图生视频 (SVI 2.0 Pro)',
@@ -646,6 +671,36 @@ const translations = {
   },
 };
 
+// ─── localStorage helpers for persisting queue state across refresh ───
+const WF_QUEUE_KEY = 'cinesynth_wf_queue';
+const saveQueueToStorage = (queue) => {
+  try { localStorage.setItem(WF_QUEUE_KEY, JSON.stringify(queue)); } catch {}
+};
+const loadQueueFromStorage = () => {
+  try { return JSON.parse(localStorage.getItem(WF_QUEUE_KEY) || '{}'); } catch { return {}; }
+};
+
+// ─── localStorage helpers for persisting active generation tasks across refresh ───
+const ACTIVE_TASKS_KEY = 'cinesynth_active_tasks';
+const saveActiveTask = (wfId, taskId) => {
+  try {
+    const tasks = JSON.parse(localStorage.getItem(ACTIVE_TASKS_KEY) || '{}');
+    tasks[wfId] = taskId;
+    localStorage.setItem(ACTIVE_TASKS_KEY, JSON.stringify(tasks));
+  } catch {}
+};
+const removeActiveTask = (wfId) => {
+  try {
+    const tasks = JSON.parse(localStorage.getItem(ACTIVE_TASKS_KEY) || '{}');
+    delete tasks[wfId];
+    localStorage.setItem(ACTIVE_TASKS_KEY, JSON.stringify(tasks));
+  } catch {}
+};
+const getActiveTasks = () => {
+  try { return JSON.parse(localStorage.getItem(ACTIVE_TASKS_KEY) || '{}'); }
+  catch { return {}; }
+};
+
 function App() {
   const [lang, setLang] = useState('en');
   const [activeMenu, setActiveMenu] = useState('studio');
@@ -722,6 +777,14 @@ function App() {
   // Gallery tab state
   const [galleryTab, setGalleryTab] = useState('videos');
   const [galleryImages, setGalleryImages] = useState([]);
+  const [avatarPreparing, setAvatarPreparing] = useState({}); // { [filename]: { taskId, status, progress } }
+  const [ytUploadTarget, setYtUploadTarget] = useState(null); // filename being uploaded
+  const [ytUploadForm, setYtUploadForm] = useState({ title: '', description: '', hashtags: '' });
+  const [ytUploadStatus, setYtUploadStatus] = useState(null); // null | 'uploading' | 'success' | 'error'
+  const [ytUploadResult, setYtUploadResult] = useState(null); // youtube URL or error message
+
+  // Avatar image popup viewer
+  const [avatarPopup, setAvatarPopup] = useState(null); // { url, filename, group, wfId, img }
 
   // Image-category LoRA state (separate from mov LoRAs)
   const [imgLoraAdapters, setImgLoraAdapters] = useState([]);
@@ -732,10 +795,25 @@ function App() {
   const [workflows, setWorkflows] = useState([]);
   const [activeWorkflowId, setActiveWorkflowId] = useState(null);
   const [workflowStates, setWorkflowStates] = useState({});
-  const [wfQueue, setWfQueue] = useState({});
+  const [wfQueue, setWfQueue] = useState(() => {
+    const saved = loadQueueFromStorage();
+    // Restore: mark any 'running' items as 'pending' (server state lost on refresh)
+    for (const wfId of Object.keys(saved)) {
+      if (!saved[wfId]) { delete saved[wfId]; continue; }
+      saved[wfId].isProcessing = false;
+      if (saved[wfId].items) {
+        saved[wfId].items = saved[wfId].items
+          .filter(i => i.status !== 'completed' && i.status !== 'failed')
+          .map(i => i.status === 'running' ? { ...i, status: 'pending', progress: 0 } : i);
+        if (saved[wfId].items.length === 0) delete saved[wfId];
+      }
+    }
+    return saved;
+  });
   const wfQueueRef = useRef({});
   const videoRefsMap = useRef({});
   const timelineRefsMap = useRef({});
+  const tasksRestoredRef = useRef(false);
 
   // ============ Studio state ============
   const [studioMode, setStudioMode] = useState('manual'); // 'manual' | 'auto'
@@ -1029,6 +1107,43 @@ function App() {
     }));
   }, []);
 
+  // ─── Restore active generation tasks after page refresh ───
+  useEffect(() => {
+    if (tasksRestoredRef.current || Object.keys(workflowStates).length === 0) return;
+    tasksRestoredRef.current = true;
+    const activeTasks = getActiveTasks();
+    Object.entries(activeTasks).forEach(([wfId, taskId]) => {
+      if (!workflowStates[wfId]) { removeActiveTask(wfId); return; }
+      updateWfState(wfId, { isGenerating: true, currentTaskId: taskId, status: t('wfGenerating') });
+      const poll = setInterval(async () => {
+        try {
+          const s = await getTaskStatus(taskId);
+          updateWfState(wfId, {
+            progress: Math.round((s.progress || 0) * 100),
+            status: s.status_message || s.status,
+          });
+          if (s.status === 'completed') {
+            clearInterval(poll);
+            removeActiveTask(wfId);
+            updateWfState(wfId, { isGenerating: false, progress: 100, outputVideo: s.output_url, currentTaskId: null });
+          } else if (s.status === 'failed') {
+            clearInterval(poll);
+            removeActiveTask(wfId);
+            updateWfState(wfId, { isGenerating: false, status: `Error: ${s.error || 'Failed'}`, currentTaskId: null });
+          } else if (s.status === 'cancelled') {
+            clearInterval(poll);
+            removeActiveTask(wfId);
+            updateWfState(wfId, { isGenerating: false, status: t('wfCancelled'), currentTaskId: null });
+          }
+        } catch (err) {
+          clearInterval(poll);
+          removeActiveTask(wfId);
+          updateWfState(wfId, { isGenerating: false, status: `Polling error: ${err.message}`, currentTaskId: null });
+        }
+      }, 3000);
+    });
+  }, [workflowStates, updateWfState, t]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ============ Studio Handlers ============
   const studioHandleContentTypeChange = (type) => {
     setStudioContentType(type);
@@ -1044,7 +1159,7 @@ function App() {
   const studioAddToTimeline = useCallback((imageUrl, imagePath) => {
     const preset = CONTENT_PRESETS[studioContentType];
     setStudioTimeline(prev => [...prev, {
-      id: crypto.randomUUID(), imageUrl, imagePath,
+      id: Math.random().toString(36).slice(2) + Date.now().toString(36), imageUrl, imagePath,
       segmentLength: preset.defaultSegmentLength,
     }]);
   }, [studioContentType]);
@@ -1396,6 +1511,80 @@ function App() {
     } catch (err) { console.error('Failed to delete:', err); }
   };
 
+  const handleRegisterAsAvatar = async (img) => {
+    try {
+      const groupsData = await listAvatarGroups();
+      const existing = groupsData.groups || [];
+      const hint = existing.length > 0 ? `\n(${existing.join(', ')})` : '';
+      const group = window.prompt(`Avatar group name:${hint}`, existing[0] || 'avatar');
+      if (!group) return;
+
+      // Start avatar prepare pipeline (pose edit + face swap + register)
+      setAvatarPreparing(prev => ({ ...prev, [img.filename]: { status: 'starting', progress: 0 } }));
+      const { task_id } = await prepareAvatar(img.path, group.trim());
+
+      // Poll for completion
+      const poll = setInterval(async () => {
+        try {
+          const s = await getTaskStatus(task_id);
+          setAvatarPreparing(prev => ({
+            ...prev,
+            [img.filename]: { taskId: task_id, status: s.status, progress: Math.round((s.progress || 0) * 100), message: s.status_message || s.message || s.status },
+          }));
+          if (s.status === 'completed') {
+            clearInterval(poll);
+            setAvatarPreparing(prev => { const n = { ...prev }; delete n[img.filename]; return n; });
+            // Refresh avatar groups in all workflows
+            const refreshed = await listAvatarGroups();
+            const newGroups = refreshed.groups || [];
+            setWorkflowStates(prev => {
+              const next = { ...prev };
+              for (const wfId of Object.keys(next)) {
+                next[wfId] = { ...next[wfId], avatarGroups: newGroups };
+              }
+              return next;
+            });
+            alert(`Avatar prepared and registered in "${group.trim()}"`);
+          } else if (s.status === 'failed') {
+            clearInterval(poll);
+            setAvatarPreparing(prev => { const n = { ...prev }; delete n[img.filename]; return n; });
+            alert(`Avatar preparation failed: ${s.error || s.message || 'Unknown error'}`);
+          }
+        } catch (err) {
+          clearInterval(poll);
+          setAvatarPreparing(prev => { const n = { ...prev }; delete n[img.filename]; return n; });
+          alert(`Polling error: ${err.message}`);
+        }
+      }, 3000);
+    } catch (err) { console.error('Failed to prepare avatar:', err); alert('Failed: ' + (err.response?.data?.detail || err.message)); }
+  };
+
+  const handleYtUploadOpen = (filename) => {
+    setYtUploadTarget(filename);
+    setYtUploadForm({ title: '', description: '', hashtags: '' });
+    setYtUploadStatus(null);
+    setYtUploadResult(null);
+  };
+
+  const handleYtUploadClose = () => {
+    setYtUploadTarget(null);
+    setYtUploadStatus(null);
+    setYtUploadResult(null);
+  };
+
+  const handleYtUploadSubmit = async () => {
+    if (!ytUploadTarget) return;
+    setYtUploadStatus('uploading');
+    try {
+      const res = await uploadToYouTube(ytUploadTarget, ytUploadForm.title, ytUploadForm.description, ytUploadForm.hashtags);
+      setYtUploadStatus('success');
+      setYtUploadResult(res.youtube_url);
+    } catch (err) {
+      setYtUploadStatus('error');
+      setYtUploadResult(err.response?.data?.detail || err.message || 'Upload failed');
+    }
+  };
+
   useEffect(() => { if (activeMenu === 'gallery') fetchGallery(); }, [activeMenu, fetchGallery]);
 
   // I2V file picker
@@ -1543,7 +1732,8 @@ function App() {
       const groups = data.groups || [];
       updateWfState(wfId, { avatarGroups: groups });
       if (groups.length > 0) {
-        handleWfAvatarSelect(wfId, groups[0]);
+        const defaultGroup = groups.includes('yuna') ? 'yuna' : groups[0];
+        handleWfAvatarSelect(wfId, defaultGroup);
       }
     } catch {}
   };
@@ -1564,6 +1754,56 @@ function App() {
         },
       }));
     } catch {}
+  };
+
+  const handleWfAvatarDelete = async (wfId, group, img) => {
+    if (!window.confirm(`Delete "${img.filename}" from ${group}?`)) return;
+    try {
+      await deleteAvatarImage(group, img.filename);
+      // Refresh avatar images for ALL workflows that share this group
+      const data = await listAvatarImages(group);
+      const updatedImages = data.images || [];
+      setWorkflowStates(prev => {
+        const next = { ...prev };
+        for (const wId of Object.keys(next)) {
+          if (next[wId]?.avatarImages?.[group]) {
+            next[wId] = {
+              ...next[wId],
+              avatarImages: { ...next[wId].avatarImages, [group]: updatedImages },
+            };
+            // Clear selection if the deleted image was selected
+            if (next[wId].filePaths) {
+              for (const key of Object.keys(next[wId].filePaths)) {
+                if (next[wId].filePaths[key] === img.path) {
+                  next[wId] = {
+                    ...next[wId],
+                    filePaths: { ...next[wId].filePaths, [key]: '' },
+                    previews: { ...next[wId].previews, [key]: '' },
+                  };
+                }
+              }
+            }
+          }
+        }
+        return next;
+      });
+      // If the group is now empty, refresh groups for all workflows
+      if (updatedImages.length === 0) {
+        const groupData = await listAvatarGroups();
+        const groups = groupData.groups || [];
+        setWorkflowStates(prev => {
+          const next = { ...prev };
+          for (const wId of Object.keys(next)) {
+            if (next[wId]?.avatarGroups) {
+              next[wId] = { ...next[wId], avatarGroups: groups };
+            }
+          }
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to delete avatar:', err);
+    }
   };
 
   const handleWfFashionInit = async (wfId) => {
@@ -1892,6 +2132,7 @@ function App() {
       });
       const taskId = data.task_id;
       updateWfState(wfId, { currentTaskId: taskId });
+      saveActiveTask(wfId, taskId);
       const poll = setInterval(async () => {
         try {
           const s = await getTaskStatus(taskId);
@@ -1901,6 +2142,7 @@ function App() {
           });
           if (s.status === 'completed') {
             clearInterval(poll);
+            removeActiveTask(wfId);
             updateWfState(wfId, { isGenerating: false, progress: 100, outputVideo: s.output_url, currentTaskId: null });
             // Refresh avatar gallery for all workflows after fashion_change saves output to avatars
             if (wfId === 'fashion_change') {
@@ -1910,13 +2152,16 @@ function App() {
             }
           } else if (s.status === 'failed') {
             clearInterval(poll);
+            removeActiveTask(wfId);
             updateWfState(wfId, { isGenerating: false, status: `Error: ${s.error || 'Failed'}`, currentTaskId: null });
           } else if (s.status === 'cancelled') {
             clearInterval(poll);
+            removeActiveTask(wfId);
             updateWfState(wfId, { isGenerating: false, status: t('wfCancelled'), currentTaskId: null });
           }
         } catch (err) {
           clearInterval(poll);
+          removeActiveTask(wfId);
           updateWfState(wfId, { isGenerating: false, status: `Polling error: ${err.message}`, currentTaskId: null });
         }
       }, 3000);
@@ -1932,12 +2177,16 @@ function App() {
     try {
       await cancelGeneration(taskId);
     } catch {}
+    removeActiveTask(wfId);
     updateWfState(wfId, { isGenerating: false, status: t('wfCancelled'), currentTaskId: null });
   };
 
   // ─── Queue handlers ───
   // Keep ref in sync for use inside async loops
-  useEffect(() => { wfQueueRef.current = wfQueue; }, [wfQueue]);
+  useEffect(() => {
+    wfQueueRef.current = wfQueue;
+    saveQueueToStorage(wfQueue);
+  }, [wfQueue]);
 
   const updateQueueItem = useCallback((wfId, itemId, updates) => {
     setWfQueue(prev => {
@@ -1967,15 +2216,26 @@ function App() {
             ? (wfState.gallerySelected[inp.key]?.length > 0)
             : wfState.inputs[inp.key];
         if (!val) {
-          updateWfState(wfId, { status: `Required: ${inp.label[lang] || inp.key}` });
+          const msg = `Required: ${inp.label[lang] || inp.key}`;
+          updateWfState(wfId, { status: msg });
+          window.alert(msg);
           return;
         }
       }
     }
 
+    // Build a descriptive label
+    let queueLabel = `Job ${(wfQueue[wfId]?.items?.length || 0) + 1}`;
+    if (wfId === 'fashion_change' && wfState.inputs?.fashion_prompt) {
+      const kw = wfState.inputs.fashion_prompt.length > 40
+        ? wfState.inputs.fashion_prompt.slice(0, 40) + '...'
+        : wfState.inputs.fashion_prompt;
+      queueLabel += ` - ${kw}`;
+    }
+
     const item = {
-      id: crypto.randomUUID(),
-      label: `Job ${(wfQueue[wfId]?.items?.length || 0) + 1}`,
+      id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+      label: queueLabel,
       inputs: { ...wfState.inputs },
       filePaths: { ...wfState.filePaths },
       previews: { ...wfState.previews },
@@ -1997,7 +2257,7 @@ function App() {
         isProcessing: prev[wfId]?.isProcessing || false,
       },
     }));
-    updateWfState(wfId, { status: `Added: ${item.label}` });
+    updateWfState(wfId, { status: `\u2705 Added: ${item.label}` });
   };
 
   const handleWfQueueStart = async (wfId) => {
@@ -2007,15 +2267,22 @@ function App() {
     setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: true } }));
 
     const wfDef = workflows.find(w => w.id === wfId);
-    // Get pending items from current state snapshot
-    const pendingIds = queue.items.filter(i => i.status === 'pending').map(i => i.id);
 
-    for (const itemId of pendingIds) {
-      // Read latest item from ref
-      const currentItem = wfQueueRef.current[wfId]?.items?.find(i => i.id === itemId);
-      if (!currentItem || currentItem.status !== 'pending') continue;
+    // Process pending items, including any newly added during execution
+    const processNextPending = async () => {
+      const currentQueue = wfQueueRef.current[wfId];
+      if (!currentQueue) return null;
+      return currentQueue.items.find(i => i.status === 'pending');
+    };
 
+    let nextItem = await processNextPending();
+    while (nextItem) {
+      const itemId = nextItem.id;
       updateQueueItem(wfId, itemId, { status: 'running', progress: 0 });
+
+      // Re-read from ref to get latest data
+      const currentItem = wfQueueRef.current[wfId]?.items?.find(i => i.id === itemId);
+      if (!currentItem) { nextItem = await processNextPending(); continue; }
 
       try {
         // Build payload
@@ -2079,9 +2346,27 @@ function App() {
       } catch (err) {
         updateQueueItem(wfId, itemId, { status: 'failed', error: err.message });
       }
+
+      // Check for next pending item (including newly added ones)
+      nextItem = await processNextPending();
     }
 
-    setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: false } }));
+    // Queue done: remove completed/failed items from storage (keep in UI briefly)
+    setWfQueue(prev => {
+      const q = prev[wfId];
+      if (!q) return { ...prev, [wfId]: { isProcessing: false, items: [] } };
+      return { ...prev, [wfId]: { ...q, isProcessing: false } };
+    });
+    // Auto-clear completed/failed after 10 seconds
+    setTimeout(() => {
+      setWfQueue(prev => {
+        const q = prev[wfId];
+        if (!q) return prev;
+        const remaining = q.items.filter(i => i.status === 'pending' || i.status === 'running');
+        if (remaining.length === q.items.length) return prev;
+        return { ...prev, [wfId]: { ...q, items: remaining } };
+      });
+    }, 10000);
   };
 
   const handleWfQueueRemove = (wfId, itemId) => {
@@ -2118,7 +2403,17 @@ function App() {
             <div className="card" key={inputDef.key}>
               <h3>{label}</h3>
               {wfState.previews[inputDef.key] && (
-                <div className="avatar-viewer">
+                <div className="avatar-viewer" style={{ cursor: 'pointer' }}
+                  onClick={() => {
+                    const selectedImg = avatarImgs.find(img => img.url === wfState.previews[inputDef.key]);
+                    setAvatarPopup({
+                      url: wfState.previews[inputDef.key],
+                      filename: selectedImg?.filename || '',
+                      group: currentGroup,
+                      wfId,
+                      img: selectedImg,
+                    });
+                  }}>
                   <img src={wfState.previews[inputDef.key]} alt="" />
                 </div>
               )}
@@ -2138,6 +2433,10 @@ function App() {
                       }}>
                       <img src={img.url} alt={img.filename} />
                       <span className="avatar-thumb-name">{img.filename.replace(/\.[^.]+$/, '')}</span>
+                      <button className="avatar-thumb-delete" title="Delete"
+                        onClick={e => { e.stopPropagation(); handleWfAvatarDelete(wfId, currentGroup, img); }}>
+                        &times;
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -3222,9 +3521,8 @@ function App() {
                             </button>
                           ) : (
                             <button
-                              className={`btn ${wf.id === 'change_character' ? 'generate-btn-green' : 'generate-btn'}`}
+                              className={`btn ${(wf.id === 'change_character' || wf.id === 'fashion_change' || wf.id === 'face_swap') ? 'generate-btn-green' : 'generate-btn'}`}
                               onClick={() => handleWfGenerate(wf.id)}
-                              disabled={wfQueue[wf.id]?.isProcessing}
                               style={{ flex: 1 }}
                             >
                               {t('wfGenerateBtn')}
@@ -3286,7 +3584,7 @@ function App() {
                                     <span className="queue-item-status">
                                       {item.status === 'completed' ? '\u2705' : item.status === 'running' ? '\u23f3' : item.status === 'failed' ? '\u274c' : '\u23f8'}
                                     </span>
-                                    <span className="queue-item-label">{item.label}</span>
+                                    <span className="queue-item-label" title={item.inputs?.fashion_prompt || ''}>{item.label}</span>
                                     {item.status === 'running' && (
                                       <div className="queue-item-progress">
                                         <div className="queue-progress-bar">
@@ -3876,7 +4174,16 @@ function App() {
                             <span className="gallery-item-name" title={img.filename}>{img.filename}</span>
                             <span className="gallery-item-meta">{t('gallerySize')}: {(img.size / 1024 / 1024).toFixed(1)} MB</span>
                             <span className="gallery-item-meta">{t('galleryDate')}: {new Date(img.created_at).toLocaleString()}</span>
-                            <button className="btn danger small" onClick={() => handleDeleteOutput(img.filename)}>{t('galleryDelete')}</button>
+                            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                              {avatarPreparing[img.filename] ? (
+                                <button className="btn small" disabled style={{ flex: 1, opacity: 0.7 }}>
+                                  {avatarPreparing[img.filename].message || `Preparing... ${avatarPreparing[img.filename].progress}%`}
+                                </button>
+                              ) : (
+                                <button className="btn primary small" onClick={() => handleRegisterAsAvatar(img)}>Avatar</button>
+                              )}
+                              <button className="btn danger small" onClick={() => handleDeleteOutput(img.filename)}>{t('galleryDelete')}</button>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -3896,8 +4203,47 @@ function App() {
                             <span className="gallery-item-name" title={video.filename}>{video.filename}</span>
                             <span className="gallery-item-meta">{t('gallerySize')}: {(video.size / 1024 / 1024).toFixed(1)} MB</span>
                             <span className="gallery-item-meta">{t('galleryDate')}: {new Date(video.created_at).toLocaleString()}</span>
-                            <button className="btn danger small" onClick={() => handleDeleteOutput(video.filename)}>{t('galleryDelete')}</button>
+                            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                              <button className="btn primary small" onClick={() => handleYtUploadOpen(video.filename)}>{t('galleryYtUpload')}</button>
+                              <button className="btn danger small" onClick={() => handleDeleteOutput(video.filename)}>{t('galleryDelete')}</button>
+                            </div>
                           </div>
+                          {ytUploadTarget === video.filename && (
+                            <div className="yt-upload-form" style={{ padding: '8px 10px', borderTop: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
+                              {ytUploadStatus === 'success' ? (
+                                <div style={{ textAlign: 'center' }}>
+                                  <p style={{ color: 'var(--success)', fontWeight: 600, marginBottom: 6 }}>{t('galleryYtSuccess')}</p>
+                                  <a href={ytUploadResult} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', wordBreak: 'break-all' }}>{ytUploadResult}</a>
+                                  <button className="btn secondary small" style={{ marginTop: 8, width: '100%' }} onClick={handleYtUploadClose}>{t('galleryYtCancel')}</button>
+                                </div>
+                              ) : ytUploadStatus === 'error' ? (
+                                <div style={{ textAlign: 'center' }}>
+                                  <p style={{ color: 'var(--danger)', marginBottom: 6 }}>{ytUploadResult}</p>
+                                  <button className="btn secondary small" style={{ width: '100%' }} onClick={handleYtUploadClose}>{t('galleryYtCancel')}</button>
+                                </div>
+                              ) : (
+                                <>
+                                  <input type="text" placeholder={t('galleryYtTitle')} value={ytUploadForm.title}
+                                    onChange={e => setYtUploadForm(f => ({ ...f, title: e.target.value }))}
+                                    style={{ width: '100%', marginBottom: 4, padding: '4px 6px', fontSize: 12 }} />
+                                  <input type="text" placeholder={t('galleryYtDesc')} value={ytUploadForm.description}
+                                    onChange={e => setYtUploadForm(f => ({ ...f, description: e.target.value }))}
+                                    style={{ width: '100%', marginBottom: 4, padding: '4px 6px', fontSize: 12 }} />
+                                  <input type="text" placeholder={t('galleryYtHashtags') + ' (#AI #dance)'} value={ytUploadForm.hashtags}
+                                    onChange={e => setYtUploadForm(f => ({ ...f, hashtags: e.target.value }))}
+                                    style={{ width: '100%', marginBottom: 6, padding: '4px 6px', fontSize: 12 }} />
+                                  <div style={{ display: 'flex', gap: 6 }}>
+                                    <button className="btn primary small" style={{ flex: 1 }} onClick={handleYtUploadSubmit}
+                                      disabled={ytUploadStatus === 'uploading'}>
+                                      {ytUploadStatus === 'uploading' ? t('galleryYtUploading') : t('galleryYtUpload')}
+                                    </button>
+                                    <button className="btn secondary small" style={{ flex: 1 }} onClick={handleYtUploadClose}
+                                      disabled={ytUploadStatus === 'uploading'}>{t('galleryYtCancel')}</button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -3969,6 +4315,31 @@ function App() {
           )}
         </main>
       </div>
+
+      {/* Avatar Image Popup Viewer */}
+      {avatarPopup && (
+        <div className="avatar-popup-overlay" onClick={() => setAvatarPopup(null)}>
+          <div className="avatar-popup" onClick={e => e.stopPropagation()}>
+            <div className="avatar-popup-header">
+              <span className="avatar-popup-name">{avatarPopup.filename?.replace(/\.[^.]+$/, '') || ''}</span>
+              <button className="avatar-popup-close" onClick={() => setAvatarPopup(null)}>&times;</button>
+            </div>
+            <div className="avatar-popup-body">
+              <img src={avatarPopup.url} alt={avatarPopup.filename || ''} />
+            </div>
+            {avatarPopup.img && (
+              <div className="avatar-popup-footer">
+                <button className="btn cancel-btn" onClick={async () => {
+                  await handleWfAvatarDelete(avatarPopup.wfId, avatarPopup.group, avatarPopup.img);
+                  setAvatarPopup(null);
+                }}>
+                  {t('galleryDelete')}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -172,9 +172,46 @@ WORKFLOW_REGISTRY = {
              "rows": 3,
              "label": {"en": "Fashion Description", "ko": "패션 설명", "zh": "时尚描述"}},
             {"key": "fashion_style", "type": "fashion_select",
-             "csv_path": "settings/fashion/s1.csv",
+             "csv_path": "settings/fashion_hair/s1.csv",
              "label": {"en": "Fashion Style Presets", "ko": "패션 스타일 프리셋", "zh": "时尚风格预设"}},
             {"key": "seed", "type": "number", "node_id": "113", "field": "inputs.value",
+             "default": -1, "min": -1, "max": 2147483647, "step": 1,
+             "label": {"en": "Seed (-1 = random)", "ko": "시드 (-1 = 랜덤)", "zh": "种子 (-1 = 随机)"}},
+        ],
+    },
+    "face_swap": {
+        "id": "face_swap",
+        "display_name": {"en": "Face Swap", "ko": "얼굴 교체", "zh": "换脸"},
+        "description": {
+            "en": "Swap face/head onto a target body image using BFS LoRA. Preserves clothing, lighting, and background from the target.",
+            "ko": "BFS LoRA를 사용하여 대상 이미지에 얼굴/머리를 교체합니다. 대상의 의상, 조명, 배경을 보존합니다.",
+            "zh": "使用BFS LoRA将面部/头部换到目标图像上。保留目标的服装、灯光和背景。",
+        },
+        "api_json": "flux_klein_faceswap_api.json",
+        "output_type": "image",
+        "inputs": [
+            {"key": "avatar_body", "type": "image", "node_id": "10", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
+             "label": {"en": "Avatar (Body to Keep)", "ko": "아바타 (유지할 몸)", "zh": "头像（保留身体）"},
+             "description": {"en": "Avatar image whose body/clothing/background to keep", "ko": "몸/의상/배경을 유지할 아바타 이미지", "zh": "保留身体/服装/背景的头像图片"}},
+            {"key": "face_source", "type": "image", "node_id": "11", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True,
+             "label": {"en": "Style Source", "ko": "스타일 소스", "zh": "风格来源"},
+             "description": {"en": "Style/face to swap onto the avatar body", "ko": "아바타 몸에 교체할 스타일/얼굴", "zh": "要换到头像身体上的风格/面部"}},
+            {"key": "prompt", "type": "text", "node_id": "50", "field": "inputs.text",
+             "default": "head_swap: start with Picture 1 as the base image, keeping its lighting, environment, and background. remove the head from Picture 1 completely and replace it with the head from Picture 2, strictly preserving the hair, eye color, nose structure of Picture 2. copy the direction of the eye, head rotation, micro expressions from Picture 1, high quality, sharp details, 4k.",
+             "rows": 4,
+             "label": {"en": "Swap Instruction", "ko": "교체 지시", "zh": "换脸指令"}},
+            {"key": "lora_strength", "type": "number", "node_id": "21", "field": "inputs.strength_model",
+             "default": 1.1, "min": 0.1, "max": 2.0, "step": 0.05,
+             "label": {"en": "LoRA Strength", "ko": "LoRA 강도", "zh": "LoRA 强度"}},
+            {"key": "cfg", "type": "number", "node_id": "94", "field": "inputs.cfg",
+             "default": 2.5, "min": 1.0, "max": 10.0, "step": 0.5,
+             "label": {"en": "CFG Scale", "ko": "CFG 스케일", "zh": "CFG 比例"}},
+            {"key": "steps", "type": "number", "node_id": "90", "field": "inputs.steps",
+             "default": 20, "min": 4, "max": 50, "step": 1,
+             "label": {"en": "Steps", "ko": "스텝", "zh": "步数"}},
+            {"key": "seed", "type": "number", "node_id": "92", "field": "inputs.value",
              "default": -1, "min": -1, "max": 2147483647, "step": 1,
              "label": {"en": "Seed (-1 = random)", "ko": "시드 (-1 = 랜덤)", "zh": "种子 (-1 = 随机)"}},
         ],
@@ -1822,11 +1859,248 @@ async def list_avatar_images(group: str, user=Depends(get_current_user)):
     return {"images": images, "group": group}
 
 
+@app.delete("/api/avatars/{group}/{filename}")
+async def delete_avatar_image(group: str, filename: str, user=Depends(get_current_user)):
+    """Delete an avatar image from a group."""
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute(
+            "SELECT id, file_path FROM user_files WHERE user_id = ? AND file_type = 'avatar' AND filename = ? AND json_extract(metadata, '$.group') = ?",
+            (user["id"], filename, group))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Avatar image not found")
+        file_id, file_path = row
+        fp = Path(file_path)
+        if fp.exists():
+            fp.unlink()
+        await db.execute("DELETE FROM user_files WHERE id = ?", (file_id,))
+        await db.commit()
+    logging.info(f"Deleted avatar image: {group}/{filename} (user={user['id']})")
+    return {"ok": True, "deleted": filename, "group": group}
+
+
+@app.post("/api/register-avatar")
+async def register_avatar(request: Request, user=Depends(get_current_user)):
+    """Register a gallery/output image as an avatar in a specified group."""
+    import shutil
+    data = await request.json()
+    source_path = data.get("source_path", "").strip()
+    group = data.get("group", "").strip()
+    if not source_path or not group:
+        raise HTTPException(400, "source_path and group are required")
+
+    # Sanitize group name
+    group = "".join(c for c in group if c.isalnum() or c in "_-").strip()
+    if not group:
+        raise HTTPException(400, "Invalid group name")
+
+    # Resolve source file
+    src = Path(source_path)
+    if not src.is_absolute():
+        src = Path.cwd() / src
+    if not src.exists():
+        raise HTTPException(404, f"Source file not found: {source_path}")
+    if src.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+        raise HTTPException(400, "Invalid image format")
+
+    # Copy to avatar directory
+    avatar_dir = AVATARS_DIR / group
+    avatar_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    avatar_fn = f"avatar_{ts}{src.suffix.lower()}"
+    avatar_fp = avatar_dir / avatar_fn
+    shutil.copy2(str(src), str(avatar_fp))
+
+    # Register in DB
+    await record_user_file(user["id"], "avatar", avatar_fn, str(avatar_fp),
+                           src.name, _json.dumps({"group": group}))
+
+    logging.info(f"Registered avatar: {group}/{avatar_fn} from {source_path} (user={user['id']})")
+    return {
+        "ok": True,
+        "group": group,
+        "filename": avatar_fn,
+        "url": f"/avatars/{group}/{avatar_fn}",
+        "path": str(avatar_fp),
+    }
+
+
+@app.post("/api/prepare-avatar")
+async def prepare_avatar(request: Request, user=Depends(get_current_user)):
+    """Run avatar prepare pipeline: pose edit + face swap, then register as avatar."""
+    data = await request.json()
+    source_path = data.get("source_path", "").strip()
+    group = data.get("group", "").strip()
+    if not source_path or not group:
+        raise HTTPException(400, "source_path and group are required")
+    group = "".join(c for c in group if c.isalnum() or c in "_-").strip()
+    if not group:
+        raise HTTPException(400, "Invalid group name")
+    src = Path(source_path)
+    if not src.is_absolute():
+        src = Path.cwd() / src
+    if not src.exists():
+        raise HTTPException(404, f"Source file not found: {source_path}")
+
+    task_id = str(uuid.uuid4())
+    generation_status[task_id] = {
+        "status": "processing", "progress": 0.0,
+        "message": "Starting avatar preparation...", "output_path": None,
+    }
+    _user_id = user["id"]
+    executor.submit(avatar_prepare_task, task_id, str(src), group, _user_id)
+    return {"task_id": task_id}
+
+
+def avatar_prepare_task(task_id: str, source_path: str, group: str, user_id: int):
+    """Background task: 2-step avatar preparation pipeline."""
+    try:
+        gpu0_lock.acquire()
+        gpu1_lock.acquire()
+
+        # Offload models
+        generation_status[task_id].update({"progress": 0.02, "message": "Offloading models..."})
+        _offload_s2v()
+        _offload_i2v()
+        _offload_flux()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        generation_status[task_id].update({"progress": 0.05, "message": "Starting ComfyUI..."})
+        ensure_comfyui_running()
+
+        # ── Step 1: Klein pose edit ──
+        generation_status[task_id].update({"progress": 0.08, "message": "Step 1: Uploading image..."})
+        source_comfyui = upload_to_comfyui(source_path)
+
+        # Load pose edit workflow
+        pose_wf_path = WORKFLOW_DIR / "flux_klein_pose_edit_api.json"
+        with open(pose_wf_path) as f:
+            pose_wf = json_mod.load(f)
+
+        pose_wf["10"]["inputs"]["image"] = source_comfyui
+        pose_wf["92"]["inputs"]["value"] = random.randint(0, 2**53)
+
+        generation_status[task_id].update({"progress": 0.10, "message": "Step 1: Generating pose edit..."})
+        client_id1 = str(uuid.uuid4())
+        resp1 = http_requests.post(
+            f"{COMFYUI_URL}/prompt",
+            json={"prompt": pose_wf, "client_id": client_id1},
+        )
+        if resp1.status_code != 200:
+            raise Exception(f"ComfyUI rejected pose edit: {resp1.text}")
+        prompt_id1 = resp1.json()["prompt_id"]
+
+        try:
+            monitor_comfyui_progress(task_id, prompt_id1, client_id1)
+        except Exception as e1:
+            logging.warning(f"Step 1 monitor timeout, polling: {e1}")
+            import time as _time
+            for _ in range(60):
+                _time.sleep(10)
+                try:
+                    h = http_requests.get(f"{COMFYUI_URL}/history/{prompt_id1}").json()
+                    if h.get(prompt_id1, {}).get("outputs", {}):
+                        break
+                except Exception:
+                    pass
+            else:
+                raise Exception(f"Step 1 timed out: {e1}")
+
+        generation_status[task_id].update({"progress": 0.45, "message": "Step 1: Retrieving result..."})
+        step1_output = retrieve_comfyui_output(prompt_id1)
+        step1_abs = str(OUTPUT_DIR / os.path.basename(step1_output))
+        logging.info(f"Avatar prepare Step 1 complete: {step1_output}")
+
+        # ── Step 2: BFS Face Swap to restore original face ──
+        generation_status[task_id].update({"progress": 0.50, "message": "Step 2: Uploading for face swap..."})
+        step1_comfyui = upload_to_comfyui(step1_abs)
+        original_comfyui = upload_to_comfyui(source_path)
+
+        faceswap_path = WORKFLOW_DIR / "flux_klein_faceswap_api.json"
+        with open(faceswap_path) as f:
+            faceswap_wf = json_mod.load(f)
+
+        faceswap_wf["10"]["inputs"]["image"] = step1_comfyui     # target body (pose-edited)
+        faceswap_wf["11"]["inputs"]["image"] = original_comfyui  # face source (original)
+        faceswap_wf["92"]["inputs"]["value"] = random.randint(0, 2**53)
+        faceswap_wf["21"]["inputs"]["strength_model"] = 0.85     # Lower LoRA for softer face restoration
+
+        generation_status[task_id].update({"progress": 0.55, "message": "Step 2: Running face swap..."})
+        client_id2 = str(uuid.uuid4())
+        resp2 = http_requests.post(
+            f"{COMFYUI_URL}/prompt",
+            json={"prompt": faceswap_wf, "client_id": client_id2},
+        )
+        if resp2.status_code != 200:
+            raise Exception(f"ComfyUI rejected face swap: {resp2.text}")
+        prompt_id2 = resp2.json()["prompt_id"]
+
+        try:
+            monitor_comfyui_progress(task_id, prompt_id2, client_id2)
+        except Exception as e2:
+            logging.warning(f"Step 2 monitor timeout, polling: {e2}")
+            import time as _time2
+            for _ in range(60):
+                _time2.sleep(10)
+                try:
+                    h2 = http_requests.get(f"{COMFYUI_URL}/history/{prompt_id2}").json()
+                    if h2.get(prompt_id2, {}).get("outputs", {}):
+                        break
+                except Exception:
+                    pass
+            else:
+                raise Exception(f"Step 2 timed out: {e2}")
+
+        generation_status[task_id].update({"progress": 0.90, "message": "Step 2: Retrieving result..."})
+        final_output = retrieve_comfyui_output(prompt_id2)
+        final_abs = str(OUTPUT_DIR / os.path.basename(final_output))
+        logging.info(f"Avatar prepare Step 2 complete: {final_output}")
+
+        # ── Step 3: Register as avatar ──
+        generation_status[task_id].update({"progress": 0.95, "message": "Registering as avatar..."})
+        import shutil
+        avatar_dir = AVATARS_DIR / group
+        avatar_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        ext = os.path.splitext(final_abs)[1] or ".png"
+        avatar_fn = f"avatar_{ts}{ext}"
+        avatar_fp = str(avatar_dir / avatar_fn)
+        shutil.copy2(final_abs, avatar_fp)
+
+        import asyncio as _aio
+        try:
+            loop = _aio.new_event_loop()
+            meta = _json.dumps({"group": group})
+            loop.run_until_complete(record_user_file(user_id, "avatar", avatar_fn, avatar_fp, avatar_fn, meta))
+            loop.close()
+        except Exception as db_err:
+            logging.error(f"Failed to record avatar to DB: {db_err}")
+
+        logging.info(f"Avatar prepared and registered: {group}/{avatar_fn}")
+        generation_status[task_id].update({
+            "status": "completed", "progress": 1.0,
+            "message": "Avatar prepared!", "output_path": final_output,
+            "avatar_group": group, "avatar_filename": avatar_fn,
+        })
+    except Exception as e:
+        logging.error(f"Avatar prepare failed: {e}")
+        import traceback
+        traceback.print_exc()
+        generation_status[task_id].update({
+            "status": "failed", "progress": 0,
+            "message": str(e), "output_path": None,
+        })
+    finally:
+        gpu1_lock.release()
+        gpu0_lock.release()
+
+
 @app.get("/api/fashion-styles")
 async def get_fashion_styles(user=Depends(get_current_user)):
     """Load fashion styles from CSV."""
     import csv
-    csv_path = Path("settings/fashion/s1.csv")
+    csv_path = Path("settings/fashion_hair/s1.csv")
     if not csv_path.exists():
         return {"styles": [], "categories": []}
     styles = []
@@ -1974,7 +2248,7 @@ class TrimVideoRequest(BaseModel):
     end: float
 
 @app.post("/api/trim-video")
-async def trim_video(request: TrimVideoRequest, user=Depends(get_current_user)):
+def trim_video(request: TrimVideoRequest, user=Depends(get_current_user)):
     """Trim video to specified start/end times using ffmpeg."""
     if not os.path.exists(request.video_path):
         raise HTTPException(404, f"Video not found: {request.video_path}")
@@ -2139,8 +2413,56 @@ async def delete_output(filename: str, user=Depends(get_current_user)):
     return {"message": f"Deleted {filename}"}
 
 
+class YouTubeUploadRequest(BaseModel):
+    filename: str
+    title: str = ""
+    description: str = ""
+    hashtags: str = ""
+
+
+@app.post("/api/upload-youtube")
+def manual_upload_youtube(request: YouTubeUploadRequest, user=Depends(get_current_user)):
+    """Manually upload a gallery video to YouTube."""
+    filepath = OUTPUT_DIR / request.filename
+    if not filepath.exists():
+        raise HTTPException(404, "File not found")
+    if filepath.resolve().parent != OUTPUT_DIR.resolve():
+        raise HTTPException(403, "Access denied")
+    ext = filepath.suffix.lower()
+    if ext not in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
+        raise HTTPException(400, "Only video files can be uploaded to YouTube")
+
+    title = request.title.strip()
+    if not title:
+        title = f"AI Video - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    description = request.description.strip()
+    tags = None
+    if request.hashtags.strip():
+        tags = [t.strip().lstrip("#") for t in request.hashtags.replace(",", " ").split() if t.strip()]
+    if tags:
+        hashtag_line = " ".join(f"#{t}" for t in tags)
+        description = f"{description}\n\n{hashtag_line}".strip() if description else hashtag_line
+
+    try:
+        yt_url = upload_to_youtube(str(filepath), title, description, tags)
+        if yt_url:
+            try:
+                notify_slack(f"YouTube upload: {yt_url}\nFile: {request.filename}")
+            except Exception:
+                pass
+            return {"status": "ok", "youtube_url": yt_url}
+        else:
+            raise HTTPException(500, "YouTube upload returned no URL (check credentials)")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Manual YouTube upload failed: {e}")
+        raise HTTPException(500, f"YouTube upload failed: {str(e)}")
+
+
 @app.post("/api/extract-frame")
-async def extract_first_frame(video_path: str = Form(...), user=Depends(get_current_user)):
+def extract_first_frame(video_path: str = Form(...), user=Depends(get_current_user)):
     """Extract first frame from a video file and save as PNG."""
     import cv2
 
@@ -2587,7 +2909,35 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 workflow["106:63"]["inputs"]["negative"] = ["106:79:76", 0]
             logging.info("Fashion change: text-only mode (no clothing reference image)")
         else:
-            logging.info(f"Fashion change: reference mode with clothing image: {clothing_ref}")
+            # When clothing reference is provided, inject Try-On LoRA if available
+            tryon_lora = Path(COMFYUI_DIR) / "models" / "loras" / "KleinBase9B_TryOn.safetensors"
+            if tryon_lora.exists():
+                # Insert LoraLoaderModelOnly between UNETLoader (106:70) and CFGGuider (106:63)
+                workflow["tryon_lora"] = {
+                    "inputs": {
+                        "model": ["106:70", 0],
+                        "lora_name": "KleinBase9B_TryOn.safetensors",
+                        "strength_model": 1.5,
+                    },
+                    "class_type": "LoraLoaderModelOnly",
+                    "_meta": {"title": "Try-On LoRA"},
+                }
+                # CFGGuider now uses LoRA-patched model instead of raw UNETLoader
+                if "106:63" in workflow:
+                    workflow["106:63"]["inputs"]["model"] = ["tryon_lora", 0]
+                # Update prompt to use trigger word for Try-On LoRA
+                if "106:74" in workflow:
+                    original_prompt = workflow["106:74"]["inputs"].get("text", "")
+                    workflow["106:74"]["inputs"]["text"] = f"attach the outfit in Image 2 to the woman in Image 1. {original_prompt}"
+                logging.info(f"Fashion change: Try-On LoRA applied with clothing ref: {clothing_ref}")
+            else:
+                logging.info(f"Fashion change: reference mode (no Try-On LoRA found): {clothing_ref}")
+
+    # --- Face Swap / Avatar Prepare: seed randomization ---
+    if workflow_id == "face_swap":
+        seed_val = workflow.get("92", {}).get("inputs", {}).get("value", -1)
+        if seed_val == -1:
+            workflow["92"]["inputs"]["value"] = random.randint(0, 2**53)
 
     return workflow
 
@@ -2595,7 +2945,7 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
 def monitor_comfyui_progress(task_id: str, prompt_id: str, client_id: str):
     """Monitor ComfyUI execution via WebSocket."""
     ws = ws_client.WebSocket()
-    ws.settimeout(600)  # 10 min timeout
+    ws.settimeout(1800)  # 30 min timeout
     ws.connect(f"{COMFYUI_WS_URL}?clientId={client_id}")
     import json as json_mod
 
@@ -2641,8 +2991,8 @@ def retrieve_comfyui_output(prompt_id: str) -> str:
 
     outputs = history.get(prompt_id, {}).get("outputs", {})
 
+    # Pass 1: Prioritize video outputs (VHS_VideoCombine 'gifs' key)
     for node_id, node_output in outputs.items():
-        # VHS_VideoCombine outputs appear under 'gifs' key
         if "gifs" in node_output:
             for gif in node_output["gifs"]:
                 filename = gif["filename"]
@@ -2664,9 +3014,12 @@ def retrieve_comfyui_output(prompt_id: str) -> str:
 
                 return f"/outputs/{output_filename}"
 
-        # SaveImage outputs appear under 'images' key
+    # Pass 2: Fall back to final output images (skip temp previews)
+    for node_id, node_output in outputs.items():
         if "images" in node_output:
             for img in node_output["images"]:
+                if img.get("type") == "temp":
+                    continue  # skip preview/temp images
                 filename = img["filename"]
                 subfolder = img.get("subfolder", "")
                 file_type = img.get("type", "output")
@@ -2788,9 +3141,6 @@ def workflow_generate_task(task_id: str, params: dict):
         generation_status[task_id].update({"progress": 0.05, "message": "Starting ComfyUI..."})
         ensure_comfyui_running()
 
-        # Save original avatar path before ComfyUI upload overwrites it
-        original_avatar_path = user_inputs.get("avatar_image", "") or user_inputs.get("ref_image", "")
-
         # Step 3: Upload files to ComfyUI as needed
         for input_def in wf_config["inputs"]:
             key = input_def["key"]
@@ -2815,7 +3165,25 @@ def workflow_generate_task(task_id: str, params: dict):
 
         # Step 6: Monitor progress
         generation_status[task_id].update({"message": "Executing workflow..."})
-        monitor_comfyui_progress(task_id, prompt_id, client_id)
+        try:
+            monitor_comfyui_progress(task_id, prompt_id, client_id)
+        except Exception as monitor_err:
+            # WebSocket timeout — poll ComfyUI history as fallback
+            logging.warning(f"Monitor timed out, polling ComfyUI for completion: {monitor_err}")
+            generation_status[task_id].update({"progress": 0.90, "message": "Monitor lost connection, checking result..."})
+            import time as _time
+            for _attempt in range(60):  # poll up to 10 min (60 × 10s)
+                _time.sleep(10)
+                try:
+                    _hist = http_requests.get(f"{COMFYUI_URL}/history/{prompt_id}").json()
+                    _outs = _hist.get(prompt_id, {}).get("outputs", {})
+                    if _outs:
+                        logging.info(f"ComfyUI completed (detected via polling after {_attempt*10}s)")
+                        break
+                except Exception:
+                    pass
+            else:
+                raise Exception(f"ComfyUI execution timed out after monitor failure: {monitor_err}")
 
         # Step 7: Retrieve output
         generation_status[task_id].update({"progress": 0.92, "message": "Retrieving output..."})
@@ -2897,44 +3265,6 @@ def workflow_generate_task(task_id: str, params: dict):
                 loop.close()
             except Exception as db_err:
                 logging.error(f"Failed to record output to DB: {db_err}")
-
-        # Step 10: For fashion_change, save output image to avatar directory
-        if workflow_id == "fashion_change" and _user_id and output_path and os.path.exists(abs_output):
-            try:
-                import shutil
-                import json as json_mod2
-                # Determine avatar group from the original avatar path (before ComfyUI upload)
-                src_avatar = original_avatar_path
-                avatar_group = None
-                if "avatars/" in src_avatar:
-                    parts = src_avatar.split("avatars/")
-                    if len(parts) > 1:
-                        avatar_group = parts[1].split("/")[0]
-                if not avatar_group:
-                    avatar_group = "fashion"  # fallback group
-                logging.info(f"Fashion auto-save: src_avatar={src_avatar}, group={avatar_group}")
-
-                avatar_dir = AVATARS_DIR / avatar_group
-                avatar_dir.mkdir(parents=True, exist_ok=True)
-
-                # Generate unique filename: fashion_{timestamp}{ext}
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                ext = os.path.splitext(abs_output)[1] or ".png"
-                avatar_fn = f"fashion_{ts}{ext}"
-                avatar_fp = str(avatar_dir / avatar_fn)
-
-                shutil.copy2(abs_output, avatar_fp)
-                logging.info(f"Fashion output saved to avatar: {avatar_fp}")
-
-                # Record in DB as avatar
-                loop2 = _aio.new_event_loop()
-                meta = json_mod2.dumps({"group": avatar_group})
-                loop2.run_until_complete(record_user_file(
-                    _user_id, "avatar", avatar_fn, avatar_fp, avatar_fn, meta
-                ))
-                loop2.close()
-            except Exception as av_err:
-                logging.error(f"Failed to save fashion output to avatar dir: {av_err}")
 
         generation_status[task_id].update({
             "status": "completed", "progress": 1.0,
@@ -3053,8 +3383,11 @@ async def workflow_comfyui_status(user=Depends(get_current_user)):
 
 
 @app.post("/api/download-youtube")
-async def download_youtube(request: YouTubeDownloadRequest, user=Depends(get_current_user)):
-    """Download a YouTube video for use as reference."""
+def download_youtube(request: YouTubeDownloadRequest, user=Depends(get_current_user)):
+    """Download a YouTube video for use as reference.
+    Note: plain def (not async) so FastAPI runs it in a threadpool,
+    preventing the event loop from blocking during yt-dlp download.
+    """
     try:
         result = download_youtube_video(request.url)
         return result

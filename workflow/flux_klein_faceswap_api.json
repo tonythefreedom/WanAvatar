@@ -1,0 +1,282 @@
+{
+  "10": {
+    "inputs": {
+      "image": "target_body_placeholder.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Target Body Image (Picture 1)"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": "face_source_placeholder.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Face Source Image (Picture 2)"
+    }
+  },
+  "12": {
+    "inputs": {
+      "image": ["10", 0]
+    },
+    "class_type": "FluxKontextImageScale",
+    "_meta": {
+      "title": "Scale Target to Kontext Resolution"
+    }
+  },
+  "13": {
+    "inputs": {
+      "image": ["11", 0]
+    },
+    "class_type": "FluxKontextImageScale",
+    "_meta": {
+      "title": "Scale Face Source to Kontext Resolution"
+    }
+  },
+  "14": {
+    "inputs": {
+      "image": ["12", 0]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Output Size"
+    }
+  },
+  "20": {
+    "inputs": {
+      "unet_name": "flux-2-klein-base-9b.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "21": {
+    "inputs": {
+      "lora_name": "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
+      "strength_model": 1.1,
+      "model": ["20", 0]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "BFS Face Swap LoRA"
+    }
+  },
+  "30": {
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "40": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "50": {
+    "inputs": {
+      "text": "head_swap: start with Picture 1 as the base image, keeping its lighting, environment, and background. remove the head from Picture 1 completely and replace it with the head from Picture 2, strictly preserving the hair, eye color, nose structure of Picture 2. copy the direction of the eye, head rotation, micro expressions from Picture 1, high quality, sharp details, 4k.",
+      "clip": ["30", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "51": {
+    "inputs": {
+      "text": "Noise, blurry",
+      "clip": ["30", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "60": {
+    "inputs": {
+      "pixels": ["12", 0],
+      "vae": ["40", 0]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode Target Body"
+    }
+  },
+  "61": {
+    "inputs": {
+      "pixels": ["13", 0],
+      "vae": ["40", 0]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode Face Source"
+    }
+  },
+  "70": {
+    "inputs": {
+      "conditioning": ["50", 0],
+      "latent": ["60", 0]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Reference: Positive + Target Body (Picture 1)"
+    }
+  },
+  "71": {
+    "inputs": {
+      "conditioning": ["51", 0],
+      "latent": ["60", 0]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Reference: Negative + Target Body (Picture 1)"
+    }
+  },
+  "72": {
+    "inputs": {
+      "conditioning": ["70", 0],
+      "latent": ["61", 0]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Reference: Positive + Face Source (Picture 2)"
+    }
+  },
+  "73": {
+    "inputs": {
+      "conditioning": ["71", 0],
+      "latent": ["61", 0]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "Reference: Negative + Face Source (Picture 2)"
+    }
+  },
+  "74": {
+    "inputs": {
+      "conditioning": ["72", 0],
+      "reference_latents_method": "index"
+    },
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "_meta": {
+      "title": "Multi-Reference Method (Positive)"
+    }
+  },
+  "75": {
+    "inputs": {
+      "conditioning": ["73", 0],
+      "reference_latents_method": "index"
+    },
+    "class_type": "FluxKontextMultiReferenceLatentMethod",
+    "_meta": {
+      "title": "Multi-Reference Method (Negative)"
+    }
+  },
+  "80": {
+    "inputs": {
+      "width": ["14", 0],
+      "height": ["14", 1],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "90": {
+    "inputs": {
+      "steps": 20,
+      "width": ["14", 0],
+      "height": ["14", 1]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2 Scheduler"
+    }
+  },
+  "91": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "Sampler Select"
+    }
+  },
+  "92": {
+    "inputs": {
+      "value": 42
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Seed"
+    }
+  },
+  "93": {
+    "inputs": {
+      "noise_seed": ["92", 0]
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "Random Noise"
+    }
+  },
+  "94": {
+    "inputs": {
+      "cfg": 2.5,
+      "model": ["21", 0],
+      "positive": ["74", 0],
+      "negative": ["75", 0]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFG Guider"
+    }
+  },
+  "95": {
+    "inputs": {
+      "noise": ["93", 0],
+      "guider": ["94", 0],
+      "sampler": ["91", 0],
+      "sigmas": ["90", 0],
+      "latent_image": ["80", 0]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Sampler"
+    }
+  },
+  "100": {
+    "inputs": {
+      "samples": ["95", 0],
+      "vae": ["40", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "101": {
+    "inputs": {
+      "filename_prefix": "FaceSwap",
+      "images": ["100", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

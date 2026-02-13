@@ -209,6 +209,11 @@ export const listAvatarImages = async (group) => {
   return response.data;
 };
 
+export const deleteAvatarImage = async (group, filename) => {
+  const response = await api.delete(`/avatars/${group}/${filename}`);
+  return response.data;
+};
+
 export const getWorkflows = async () => {
   const response = await api.get('/workflows');
   return response.data;
@@ -236,6 +241,21 @@ export const sendStudioChat = async (message, history) => {
 
 export const getFashionStyles = async () => {
   const response = await api.get('/fashion-styles');
+  return response.data;
+};
+
+export const registerAvatar = async (sourcePath, group) => {
+  const response = await api.post('/register-avatar', { source_path: sourcePath, group });
+  return response.data;
+};
+
+export const prepareAvatar = async (sourcePath, group) => {
+  const response = await api.post('/prepare-avatar', { source_path: sourcePath, group });
+  return response.data;
+};
+
+export const uploadToYouTube = async (filename, title, description, hashtags) => {
+  const response = await api.post('/upload-youtube', { filename, title, description, hashtags }, { timeout: 600000 });
   return response.data;
 };
 

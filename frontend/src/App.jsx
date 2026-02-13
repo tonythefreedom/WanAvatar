@@ -1516,47 +1516,25 @@ function App() {
       const groupsData = await listAvatarGroups();
       const existing = groupsData.groups || [];
       const hint = existing.length > 0 ? `\n(${existing.join(', ')})` : '';
-      const group = window.prompt(`Avatar group name:${hint}`, existing[0] || 'avatar');
+      const defaultGroup = existing.includes('yuna') ? 'yuna' : (existing[0] || 'yuna');
+      const group = window.prompt(`Avatar group name:${hint}`, defaultGroup);
       if (!group) return;
 
-      // Start avatar prepare pipeline (pose edit + face swap + register)
-      setAvatarPreparing(prev => ({ ...prev, [img.filename]: { status: 'starting', progress: 0 } }));
-      const { task_id } = await prepareAvatar(img.path, group.trim());
+      // Direct registration (copy image to avatar directory)
+      await registerAvatar(img.path, group.trim());
 
-      // Poll for completion
-      const poll = setInterval(async () => {
-        try {
-          const s = await getTaskStatus(task_id);
-          setAvatarPreparing(prev => ({
-            ...prev,
-            [img.filename]: { taskId: task_id, status: s.status, progress: Math.round((s.progress || 0) * 100), message: s.status_message || s.message || s.status },
-          }));
-          if (s.status === 'completed') {
-            clearInterval(poll);
-            setAvatarPreparing(prev => { const n = { ...prev }; delete n[img.filename]; return n; });
-            // Refresh avatar groups in all workflows
-            const refreshed = await listAvatarGroups();
-            const newGroups = refreshed.groups || [];
-            setWorkflowStates(prev => {
-              const next = { ...prev };
-              for (const wfId of Object.keys(next)) {
-                next[wfId] = { ...next[wfId], avatarGroups: newGroups };
-              }
-              return next;
-            });
-            alert(`Avatar prepared and registered in "${group.trim()}"`);
-          } else if (s.status === 'failed') {
-            clearInterval(poll);
-            setAvatarPreparing(prev => { const n = { ...prev }; delete n[img.filename]; return n; });
-            alert(`Avatar preparation failed: ${s.error || s.message || 'Unknown error'}`);
-          }
-        } catch (err) {
-          clearInterval(poll);
-          setAvatarPreparing(prev => { const n = { ...prev }; delete n[img.filename]; return n; });
-          alert(`Polling error: ${err.message}`);
+      // Refresh avatar groups in all workflows
+      const refreshed = await listAvatarGroups();
+      const newGroups = refreshed.groups || [];
+      setWorkflowStates(prev => {
+        const next = { ...prev };
+        for (const wfId of Object.keys(next)) {
+          next[wfId] = { ...next[wfId], avatarGroups: newGroups, avatarImages: {} };
         }
-      }, 3000);
-    } catch (err) { console.error('Failed to prepare avatar:', err); alert('Failed: ' + (err.response?.data?.detail || err.message)); }
+        return next;
+      });
+      alert(`Avatar registered in "${group.trim()}"`);
+    } catch (err) { console.error('Failed to register avatar:', err); alert('Failed: ' + (err.response?.data?.detail || err.message)); }
   };
 
   const handleYtUploadOpen = (filename) => {

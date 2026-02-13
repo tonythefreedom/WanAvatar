@@ -132,9 +132,9 @@ WORKFLOW_REGISTRY = {
              "default": "portrait",
              "label": {"en": "Aspect Ratio", "ko": "비율", "zh": "比例"},
              "options": [
-                 {"value": "portrait", "label": {"en": "Portrait (9:16)", "ko": "세로 (9:16)", "zh": "竖屏 (9:16)"}, "params": {"width": 480, "height": 832}},
-                 {"value": "landscape", "label": {"en": "Landscape (16:9)", "ko": "가로 (16:9)", "zh": "横屏 (16:9)"}, "params": {"width": 832, "height": 480}},
-                 {"value": "square", "label": {"en": "Square (1:1)", "ko": "정사각 (1:1)", "zh": "正方形 (1:1)"}, "params": {"width": 640, "height": 640}},
+                 {"value": "portrait", "label": {"en": "Portrait (9:16)", "ko": "세로 (9:16)", "zh": "竖屏 (9:16)"}, "params": {"width": 1080, "height": 1920}},
+                 {"value": "landscape", "label": {"en": "Landscape (16:9)", "ko": "가로 (16:9)", "zh": "横屏 (16:9)"}, "params": {"width": 1920, "height": 1080}},
+                 {"value": "square", "label": {"en": "Square (1:1)", "ko": "정사각 (1:1)", "zh": "正方形 (1:1)"}, "params": {"width": 1080, "height": 1080}},
              ]},
             {"key": "bg_image", "type": "image", "node_id": "__custom_bg__",
              "field": "inputs.image", "upload_to_comfyui": True, "required": False,
@@ -207,26 +207,18 @@ WORKFLOW_REGISTRY = {
              "upload_to_comfyui": True, "required": True, "large_viewer": True,
              "label": {"en": "Style Source (Body/Clothing)", "ko": "스타일 소스 (몸/의상)", "zh": "风格来源（身体/服装）"},
              "description": {"en": "Image whose body/clothing/background to use", "ko": "몸/의상/배경을 사용할 이미지", "zh": "使用其身体/服装/背景的图片"}},
-            {"key": "ethnicity", "type": "select", "default": "korean",
-             "options": [
-                 {"value": "korean", "label": {"en": "Korean", "ko": "한국인", "zh": "韩国人"}},
-                 {"value": "asian", "label": {"en": "Asian", "ko": "아시아인", "zh": "亚洲人"}},
-                 {"value": "western", "label": {"en": "Western", "ko": "서양인", "zh": "西方人"}},
-                 {"value": "auto", "label": {"en": "Auto (from prompt)", "ko": "자동 (프롬프트)", "zh": "自动（从提示）"}},
-             ],
-             "label": {"en": "Ethnicity", "ko": "인종", "zh": "种族"}},
             {"key": "prompt", "type": "text", "node_id": "50", "field": "inputs.text",
-             "default": "head_swap: Use image 1 as the base image, preserving its environment, background, camera perspective, framing, exposure, contrast, and lighting. Remove the head from image 1 and seamlessly replace it with the head from image 2. Match the original head size, face-to-body ratio, neck thickness, shoulder alignment, and camera distance so proportions remain natural and unchanged. Adapt the inserted head to the lighting of image 1 by matching light direction, intensity, softness, color temperature, shadows, and highlights, with no independent relighting. Preserve the identity of image 2, including hair texture, eye color, nose structure, facial proportions, and skin details. Match the pose and expression from image 1, including head tilt, rotation, eye direction, gaze, micro-expressions, and lip position. Ensure seamless neck and jaw blending, consistent skin tone, realistic shadow contact, natural skin texture, and uniform sharpness. Photorealistic, high quality, sharp details, 4K.",
+             "default": "head_swap: Use image 1 as the base image, preserving its environment, background, camera perspective, framing, exposure, contrast, and lighting. Remove the head from image 1 and seamlessly replace it with the head from image 2. Match the original head size, face-to-body ratio, neck thickness, shoulder alignment, and camera distance so proportions remain natural and unchanged. Adapt the inserted head to the lighting of image 1 by matching light direction, intensity, softness, color temperature, shadows, and highlights, with no independent relighting. Preserve the identity of image 2, including hair texture, eye color, nose structure, facial proportions, skin details, exact jawline shape and face contour. Do not alter the jawline — keep the same roundness or softness as image 2. Match the pose and expression from image 1, including head tilt, rotation, eye direction, gaze, micro-expressions, and lip position. Ensure seamless neck and jaw blending, consistent skin tone, realistic shadow contact, natural skin texture, and uniform sharpness. Photorealistic, high quality, sharp details, 4K.",
              "rows": 4,
              "label": {"en": "Swap Instruction", "ko": "교체 지시", "zh": "换脸指令"}},
             {"key": "lora_strength", "type": "number", "node_id": "21", "field": "inputs.strength_model",
-             "default": 1.0, "min": 0.1, "max": 2.0, "step": 0.05,
+             "default": 0.8, "min": 0.1, "max": 2.0, "step": 0.05,
              "label": {"en": "LoRA Strength", "ko": "LoRA 강도", "zh": "LoRA 强度"}},
             {"key": "cfg", "type": "number", "node_id": "94", "field": "inputs.cfg",
-             "default": 3.5, "min": 1.0, "max": 10.0, "step": 0.5,
+             "default": 4.0, "min": 1.0, "max": 10.0, "step": 0.5,
              "label": {"en": "CFG Scale", "ko": "CFG 스케일", "zh": "CFG 比例"}},
             {"key": "steps", "type": "number", "node_id": "90", "field": "inputs.steps",
-             "default": 20, "min": 4, "max": 50, "step": 1,
+             "default": 16, "min": 4, "max": 50, "step": 1,
              "label": {"en": "Steps", "ko": "스텝", "zh": "步数"}},
             {"key": "seed", "type": "number", "node_id": "92", "field": "inputs.value",
              "default": -1, "min": -1, "max": 2147483647, "step": 1,
@@ -1964,13 +1956,38 @@ async def register_avatar(request: Request, user=Depends(get_current_user)):
     if src.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
         raise HTTPException(400, "Invalid image format")
 
+    # Crop to 9:16 aspect ratio (portrait) for avatar compatibility
+    import cv2 as _cv2
+    img = _cv2.imread(str(src))
+    if img is not None:
+        h, w = img.shape[:2]
+        target_ratio = 9 / 16  # width / height
+        current_ratio = w / h
+        if abs(current_ratio - target_ratio) > 0.02:  # needs cropping
+            if current_ratio > target_ratio:
+                # Too wide — crop sides
+                new_w = int(h * target_ratio)
+                x_start = (w - new_w) // 2
+                img = img[:, x_start:x_start + new_w]
+            else:
+                # Too tall — crop bottom (keep head/face at top)
+                new_h = int(w / target_ratio)
+                img = img[:new_h, :]
+            logging.info(f"Avatar cropped to 9:16: {w}x{h} -> {img.shape[1]}x{img.shape[0]}")
+        # Resize to 1080x1920
+        img = _cv2.resize(img, (1080, 1920), interpolation=_cv2.INTER_LANCZOS4)
+        logging.info(f"Avatar resized to 1080x1920")
+
     # Copy to avatar directory
     avatar_dir = AVATARS_DIR / group
     avatar_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    avatar_fn = f"avatar_{ts}{src.suffix.lower()}"
+    avatar_fn = f"avatar_{ts}.png"
     avatar_fp = avatar_dir / avatar_fn
-    shutil.copy2(str(src), str(avatar_fp))
+    if img is not None:
+        _cv2.imwrite(str(avatar_fp), img)
+    else:
+        shutil.copy2(str(src), str(avatar_fp))
 
     # Register in DB
     await record_user_file(user["id"], "avatar", avatar_fn, str(avatar_fp),
@@ -2015,6 +2032,7 @@ async def prepare_avatar(request: Request, user=Depends(get_current_user)):
 
 def avatar_prepare_task(task_id: str, source_path: str, group: str, user_id: int):
     """Background task: 2-step avatar preparation pipeline."""
+    import json as json_mod
     try:
         gpu0_lock.acquire()
         gpu1_lock.acquire()
@@ -2126,13 +2144,8 @@ def avatar_prepare_task(task_id: str, source_path: str, group: str, user_id: int
         final_abs = str(OUTPUT_DIR / os.path.basename(final_output))
         logging.info(f"Avatar prepare Step 2 complete: {final_output}")
 
-        # Composite swapped face onto original pose-edited body
-        if os.path.exists(final_abs) and os.path.exists(step1_abs):
-            generation_status[task_id].update({"progress": 0.92, "message": "Step 2: Compositing face..."})
-            try:
-                composite_face_onto_body(final_abs, step1_abs)
-            except Exception as comp_err:
-                logging.warning(f"Avatar prepare face composite failed: {comp_err}")
+        # Face composite disabled — BFS model output is used directly.
+        # composite_face_onto_body was diluting avatar identity at mask boundaries.
 
         # ── Step 3: Register as avatar ──
         generation_status[task_id].update({"progress": 0.95, "message": "Registering as avatar..."})
@@ -2651,17 +2664,18 @@ def ensure_comfyui_running():
     raise Exception("ComfyUI failed to start within 3 minutes")
 
 
-def crop_face_head(image_path: str, padding_ratio: float = 1.8) -> str:
-    """Crop image to head/face area to avoid clothing leaking into face swap.
+def crop_face_head(image_path: str, padding_ratio: float = 2.5) -> str:
+    """Smart crop for BFS face swap: portrait-style head+shoulders framing.
 
-    Uses mediapipe FaceDetector (tasks API) for accurate detection, then crops
-    with generous padding to include hair and neck but exclude torso/clothing.
-    Falls back to upper-half crop if no face is detected.
-    Returns path to the cropped temporary image.
+    3-tier approach:
+    1. Detect face with short_range; if fails, resize image smaller and retry
+    2. If face already prominent (>15% of image area), skip crop entirely
+    3. Otherwise crop to generous head+hair+shoulders portrait framing
     """
     import mediapipe as mp
     import cv2
     import tempfile
+    import numpy as np
 
     img = cv2.imread(image_path)
     if img is None:
@@ -2670,42 +2684,75 @@ def crop_face_head(image_path: str, padding_ratio: float = 1.8) -> str:
 
     h, w = img.shape[:2]
 
-    # Use mediapipe tasks API for face detection
+    # Tier 1: Detect face — try original, then downscaled versions for full-body
     model_path = str(Path(__file__).parent / "models" / "blaze_face_short_range.tflite")
     options = mp.tasks.vision.FaceDetectorOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
-        min_detection_confidence=0.5,
+        min_detection_confidence=0.4,
     )
-    mp_image = mp.Image.create_from_file(image_path)
 
-    with mp.tasks.vision.FaceDetector.create_from_options(options) as detector:
-        result = detector.detect(mp_image)
+    detections = None
+    scale_used = 1.0
 
-    if result.detections:
-        det = result.detections[0]
-        bb = det.bounding_box
-        fx, fy, fw, fh = bb.origin_x, bb.origin_y, bb.width, bb.height
+    # Try at multiple scales: original, then crop upper portion for full-body
+    for attempt, strategy in enumerate(["original", "upper_half", "upper_third"]):
+        try:
+            if strategy == "original":
+                detect_img = img
+                scale_used = 1.0
+            elif strategy == "upper_half":
+                detect_img = img[:h // 2, :]
+                scale_used = 0.5  # y-coordinates need scaling back
+            else:  # upper_third
+                detect_img = img[:h // 3, :]
+                scale_used = 1 / 3
 
-        # Expand with padding_ratio (1.8x = generous head+hair+neck)
-        cx, cy = fx + fw // 2, fy + fh // 2
-        half_size = int(max(fw, fh) * padding_ratio / 2)
+            rgb = cv2.cvtColor(detect_img, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-        x1 = max(0, cx - half_size)
-        y1 = max(0, cy - int(half_size * 0.7))  # less padding above (forehead)
-        x2 = min(w, cx + half_size)
-        y2 = min(h, cy + int(half_size * 1.3))   # more padding below (neck)
-        logging.info(f"crop_face_head: face detected at ({fx},{fy},{fw},{fh}) score={det.categories[0].score:.2f}, crop [{x1}:{x2}, {y1}:{y2}] from {w}x{h}")
-    else:
-        # Fallback: upper 50% of image (likely head area for full-body shots)
-        x1, y1, x2, y2 = 0, 0, w, h // 2
-        logging.warning(f"crop_face_head: no face detected, using upper half")
+            with mp.tasks.vision.FaceDetector.create_from_options(options) as detector:
+                result = detector.detect(mp_image)
+
+            if result.detections:
+                detections = result.detections
+                logging.info(f"crop_face_head: face found on attempt '{strategy}'")
+                break
+        except Exception as det_err:
+            logging.warning(f"crop_face_head: {strategy} detection failed: {det_err}")
+            continue
+
+    if not detections:
+        logging.warning(f"crop_face_head: no face detected at any scale, returning as-is")
+        return image_path
+
+    det = detections[0]
+    bb = det.bounding_box
+    fx, fy, fw, fh = bb.origin_x, bb.origin_y, bb.width, bb.height
+    # No y-scaling needed: fx/fy/fw/fh are pixel coords in the cropped region,
+    # and we use them relative to original full image (upper crop keeps same x/y origin)
+
+    # Tier 2: If face is already prominent (>15% of full image), skip crop
+    face_area_ratio = (fw * fh) / (w * h)
+    if face_area_ratio > 0.15:
+        logging.info(f"crop_face_head: face is {face_area_ratio:.1%} of image (>15%), skipping crop")
+        return image_path
+
+    # Tier 3: Portrait-style crop — head + hair + shoulders
+    cx, cy = fx + fw // 2, fy + fh // 2
+    half_size = int(max(fw, fh) * padding_ratio / 2)
+
+    x1 = max(0, cx - half_size)
+    y1 = max(0, cy - int(half_size * 1.0))   # generous above for hair
+    x2 = min(w, cx + half_size)
+    y2 = min(h, cy + int(half_size * 1.5))    # generous below for neck+shoulders
+    logging.info(f"crop_face_head: face at ({fx},{fy},{fw},{fh}) area={face_area_ratio:.1%}, score={det.categories[0].score:.2f}, crop [{x1}:{x2}, {y1}:{y2}] from {w}x{h}")
 
     cropped = img[y1:y2, x1:x2]
     suffix = os.path.splitext(image_path)[1] or ".png"
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False, dir=str(OUTPUT_DIR))
     cv2.imwrite(tmp.name, cropped)
     tmp.close()
-    logging.info(f"crop_face_head: saved cropped face to {tmp.name} ({x2-x1}x{y2-y1})")
+    logging.info(f"crop_face_head: saved portrait crop to {tmp.name} ({x2-x1}x{y2-y1})")
     return tmp.name
 
 
@@ -3136,34 +3183,11 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             else:
                 logging.info(f"Fashion change: reference mode (no Try-On LoRA found): {clothing_ref}")
 
-    # --- Face Swap: ethnicity injection + seed randomization ---
+    # --- Face Swap: seed randomization ---
+    # Ethnicity injection DISABLED — specific facial feature descriptions
+    # (e.g. "soft jawline, double eyelids") override BFS LoRA identity preservation,
+    # causing the avatar's actual face to be deformed toward generic ethnic features.
     if workflow_id == "face_swap":
-        ethnicity = user_inputs.get("ethnicity", "korean")
-        if ethnicity and ethnicity != "auto":
-            # Korean-specific: ulzzang style (Korean beauty standard)
-            eth_prompts = {
-                "korean": {
-                    "positive": " The person in image 2 is Korean. Preserve Korean ulzzang facial features: soft jawline, natural double eyelids, warm ivory skin tone, small nose bridge, full lips. The result must look like a real Korean person.",
-                    "negative": ", western features, caucasian features, european face",
-                },
-                "asian": {
-                    "positive": " The person in image 2 is East Asian. Preserve East Asian facial features, skin tone, and appearance.",
-                    "negative": ", western features, caucasian features, european face",
-                },
-                "western": {
-                    "positive": " The person in image 2 is Western/Caucasian. Preserve Western facial features, skin tone, and appearance.",
-                    "negative": ", asian features, east asian features",
-                },
-            }
-            eth = eth_prompts.get(ethnicity, eth_prompts["korean"])
-
-            if "50" in workflow:
-                workflow["50"]["inputs"]["text"] += eth["positive"]
-            if "51" in workflow:
-                workflow["51"]["inputs"]["text"] += eth["negative"]
-
-            logging.info(f"Face swap: ethnicity={ethnicity} injected into prompts")
-
         seed_val = workflow.get("92", {}).get("inputs", {}).get("value", -1)
         if seed_val == -1:
             workflow["92"]["inputs"]["value"] = random.randint(0, 2**53)
@@ -3377,20 +3401,8 @@ def workflow_generate_task(task_id: str, params: dict):
         ensure_comfyui_running()
 
         # Step 3: Upload files to ComfyUI as needed
-        # For face_swap: save original body path for post-composite, crop avatar face
-        original_body_path = None
+        # For face_swap: crop avatar face to head-only to prevent clothing bleed
         cropped_tmp = None
-        if workflow_id == "face_swap":
-            # Resolve style_source to absolute path for later face composite
-            style_src = user_inputs.get("style_source", "")
-            if style_src:
-                for d in [OUTPUT_DIR, UPLOAD_DIR, AVATARS_DIR]:
-                    candidate = d / os.path.basename(style_src)
-                    if candidate.exists():
-                        original_body_path = str(candidate)
-                        break
-                if not original_body_path and os.path.isabs(style_src) and os.path.exists(style_src):
-                    original_body_path = style_src
         if workflow_id == "face_swap" and user_inputs.get("avatar_face"):
             generation_status[task_id].update({"progress": 0.07, "message": "Cropping face from avatar..."})
             cropped_tmp = crop_face_head(user_inputs["avatar_face"])
@@ -3453,16 +3465,12 @@ def workflow_generate_task(task_id: str, params: dict):
         generation_status[task_id].update({"progress": 0.92, "message": "Retrieving output..."})
         output_path = retrieve_comfyui_output(prompt_id)
 
-        # Step 7.5: Post-processing — face composite for face_swap
-        # Blend only the swapped face onto the original body to preserve clothing/background
-        if workflow_id == "face_swap" and original_body_path:
-            abs_output_tmp = str(OUTPUT_DIR / os.path.basename(output_path))
-            if os.path.exists(abs_output_tmp):
-                generation_status[task_id].update({"progress": 0.93, "message": "Compositing face onto original body..."})
-                try:
-                    composite_face_onto_body(abs_output_tmp, original_body_path)
-                except Exception as comp_err:
-                    logging.warning(f"Face composite failed (using raw result): {comp_err}")
+        # Step 7.5: Post-processing — face composite for face_swap (DISABLED)
+        # The BFS model + Precise prompt already preserves body/clothing well.
+        # composite_face_onto_body was blending the avatar's face with the original
+        # face at mask boundaries, diluting identity. Raw model output is better.
+        # if workflow_id == "face_swap" and original_body_path:
+        #     ...
 
         # Step 7.6: Post-processing — scene composite (Z-Image + ControlNet)
         # If scene_background was provided, run Z-Image scene composite on the result
@@ -3520,11 +3528,11 @@ def workflow_generate_task(task_id: str, params: dict):
                     logging.warning(f"Scene composite failed (using original result): {scene_err}")
 
         # Step 8: Post-processing — merge audio (video outputs only)
+        abs_output = str(OUTPUT_DIR / os.path.basename(output_path))
+        is_video_output = os.path.splitext(output_path)[1].lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm"}
         # Priority: custom_audio > reference video audio
         custom_audio = params.get("_custom_audio_path")
         ref_video_original = params.get("_ref_video_original")
-        abs_output = str(OUTPUT_DIR / os.path.basename(output_path))
-        is_video_output = os.path.splitext(output_path)[1].lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm"}
         if is_video_output and custom_audio and os.path.exists(custom_audio):
             generation_status[task_id].update({"progress": 0.95, "message": "Merging custom audio..."})
             merge_audio_to_video(abs_output, custom_audio)

@@ -756,8 +756,21 @@ output_lora_14B/checkpoint-50/
 - Flux2 Klein 9B + BFS Head Swap LoRA (rank-128) 기반 얼굴 교체 워크플로우
 - 듀얼 레퍼런스 이미지: Picture 1 (타겟 바디) + Picture 2 (스타일 소스)
 - `FluxKontextMultiReferenceLatentMethod` (index 방식) 다중 참조 체인
-- CFG 2.5, Euler 샘플러, 20 스텝
-- 입력: Avatar (유지할 몸) + Style Source (스타일/얼굴)
+- 입력: Avatar (유지할 얼굴) + Style Source (몸/의상/배경)
+- **최적 설정 (턱선 보존 튜닝 결과):**
+
+| 파라미터 | 값 | 설명 |
+|---------|-----|------|
+| LoRA Strength | **0.8** | BFS LoRA 영향력 — 1.0에서 낮춰 원본 얼굴 형태(턱선 등) 보존 |
+| CFG Scale | **4.0** | Klein Base 기본값, 프롬프트 준수와 자연스러움 균형 |
+| Steps | **16** | 과도한 처리로 인한 얼굴 변형 방지, 속도 향상 (~50초/이미지) |
+| Sampler | euler | Flux2 Klein 권장 |
+| Scheduler | Flux2Scheduler | 해상도 기반 자동 시그마 계산 |
+
+- 프롬프트에 턱선 보존 지시 포함: "exact jawline shape and face contour. Do not alter the jawline"
+- 네거티브 프롬프트: "angular jaw, sharp jawline, square jaw, altered face shape"
+- `crop_face_head` 3단계 얼굴 감지: 원본 → 상반신 → 상단 1/3 (mediapipe blaze_face_short_range)
+- 얼굴 면적 >15%이면 크롭 스킵, 그 외 패딩 2.5x 포트레이트 크롭
 
 **Avatar Prepare 2단계 파이프라인 (`workflow/flux_klein_pose_edit_api.json`, `server.py`):**
 

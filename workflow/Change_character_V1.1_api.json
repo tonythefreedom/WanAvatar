@@ -41,7 +41,7 @@
   "123": {
     "class_type": "Int",
     "inputs": {
-      "value": 480
+      "value": 1080
     },
     "_meta": {
       "title": "Int"
@@ -50,7 +50,7 @@
   "124": {
     "class_type": "Int",
     "inputs": {
-      "value": 832
+      "value": 1920
     },
     "_meta": {
       "title": "Int"
@@ -860,7 +860,7 @@
       "force_size": "Disabled",
       "custom_width": 0,
       "custom_height": 0,
-      "frame_load_cap": 0,
+      "frame_load_cap": 81,
       "skip_first_frames": 0,
       "select_every_nth": 1,
       "format": "Wan",

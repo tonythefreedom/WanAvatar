@@ -57,7 +57,7 @@
   "21": {
     "inputs": {
       "lora_name": "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
-      "strength_model": 1.0,
+      "strength_model": 0.7,
       "model": ["20", 0]
     },
     "class_type": "LoraLoaderModelOnly",
@@ -87,7 +87,7 @@
   },
   "50": {
     "inputs": {
-      "text": "head_swap: Use image 1 as the base image, preserving its environment, background, camera perspective, framing, exposure, contrast, and lighting. Remove the head from image 1 and seamlessly replace it with the head from image 2. Match the original head size, face-to-body ratio, neck thickness, shoulder alignment, and camera distance so proportions remain natural and unchanged. Adapt the inserted head to the lighting of image 1 by matching light direction, intensity, softness, color temperature, shadows, and highlights, with no independent relighting. Preserve the identity of image 2, including hair texture, eye color, nose structure, facial proportions, and skin details. Match the pose and expression from image 1, including head tilt, rotation, eye direction, gaze, micro-expressions, and lip position. Ensure seamless neck and jaw blending, consistent skin tone, realistic shadow contact, natural skin texture, and uniform sharpness. Photorealistic, high quality, sharp details, 4K.",
+      "text": "head_swap: Use image 1 as the base image, preserving its environment, background, camera perspective, framing, exposure, contrast, and lighting. Remove the head from image 1 and seamlessly replace it with the head from image 2. Match the original head size, face-to-body ratio, neck thickness, shoulder alignment, and camera distance so proportions remain natural and unchanged. Adapt the inserted head to the lighting of image 1 by matching light direction, intensity, softness, color temperature, shadows, and highlights, with no independent relighting. Preserve the identity of image 2, including hair texture, eye color, nose structure, facial proportions, skin details, exact jawline shape and face contour. Do not alter the jawline — keep the same roundness or softness as image 2. Match the pose and expression from image 1, including head tilt, rotation, eye direction, gaze, micro-expressions, and lip position. Ensure seamless neck and jaw blending, consistent skin tone, realistic shadow contact, natural skin texture, and uniform sharpness. Photorealistic, high quality, sharp details, 4K.",
       "clip": ["30", 0]
     },
     "class_type": "CLIPTextEncode",
@@ -97,7 +97,7 @@
   },
   "51": {
     "inputs": {
-      "text": "Noise, blurry, deformed face, extra limbs, bad anatomy, different person, wrong identity",
+      "text": "Noise, blurry, deformed face, extra limbs, bad anatomy, different person, wrong identity, angular jaw, sharp jawline, square jaw, altered face shape",
       "clip": ["30", 0]
     },
     "class_type": "CLIPTextEncode",
@@ -198,7 +198,7 @@
   },
   "90": {
     "inputs": {
-      "steps": 20,
+      "steps": 16,
       "width": ["14", 0],
       "height": ["14", 1]
     },
@@ -236,7 +236,7 @@
   },
   "94": {
     "inputs": {
-      "cfg": 3.5,
+      "cfg": 4.0,
       "model": ["21", 0],
       "positive": ["74", 0],
       "negative": ["75", 0]

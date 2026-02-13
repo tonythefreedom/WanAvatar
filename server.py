@@ -633,10 +633,36 @@ async def migrate_existing_files():
         logging.info("Migrated existing files to super admin account")
 
 
+async def sync_background_files():
+    """Ensure all background images on disk are registered in the DB."""
+    IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute("SELECT id FROM users WHERE email = ?", (SUPER_ADMIN_EMAIL,))
+        admin = await cursor.fetchone()
+        if not admin:
+            return
+        admin_id = admin[0]
+        cursor = await db.execute(
+            "SELECT filename FROM user_files WHERE file_type = 'background'")
+        existing = {row[0] for row in await cursor.fetchall()}
+        added = 0
+        for f in BACKGROUNDS_DIR.iterdir():
+            if f.is_file() and f.suffix.lower() in IMG_EXT and f.name not in existing:
+                await db.execute(
+                    "INSERT INTO user_files (user_id, file_type, filename, file_path, original_name) VALUES (?,?,?,?,?)",
+                    (admin_id, "background", f.name, str(f), f.name),
+                )
+                added += 1
+        if added:
+            await db.commit()
+            logging.info(f"Synced {added} new background file(s) to DB")
+
+
 @app.on_event("startup")
 async def on_startup():
     await init_db()
     await migrate_existing_files()
+    await sync_background_files()
 
 
 # --- JWT helpers ---
@@ -3240,13 +3266,36 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 logging.info(f"Fashion change: reference mode (no Try-On LoRA found): {clothing_ref}")
 
     # --- Change Character: dynamic frame_load_cap ---
-    # Set frame_load_cap to 0 so VHS_LoadVideo loads ALL frames from the source video.
-    # The actual frame count flows through: VHS_VideoInfoLoaded(96) → SetNode(133) "frame count"
-    # → GetNode(233) → WanVideoAnimateEmbeds num_frames, so the generation matches
-    # the original video length automatically.
+    # Calculate frame_load_cap from video duration to match original length.
+    # WanVideo processes at ~16fps internally. VHS_LoadVideo with format="Wan"
+    # auto-converts to this rate. We compute: duration * 16fps, rounded to 4k+1.
+    # Max 481 frames (~30s) to prevent RAM explosion (37s video used 174GB at cap=0).
+    MAX_FRAMES = 481  # 30 seconds at 16fps, 4k+1 aligned
     if workflow_id == "change_character" and "114" in workflow:
-        workflow["114"]["inputs"]["frame_load_cap"] = 0
-        logging.info("Change character: frame_load_cap set to 0 (load all frames)")
+        video_path = workflow["114"]["inputs"].get("video", "")
+        frame_cap = MAX_FRAMES
+        # Try to get actual duration from the uploaded video
+        for search_dir in [UPLOAD_DIR, Path(COMFYUI_DIR) / "input"]:
+            vp = search_dir / video_path if not os.path.isabs(video_path) else Path(video_path)
+            if vp.exists():
+                try:
+                    probe = subprocess.run(
+                        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                         "-of", "default=noprint_wrappers=1:nokey=1", str(vp)],
+                        capture_output=True, text=True, timeout=10)
+                    if probe.returncode == 0:
+                        duration = float(probe.stdout.strip())
+                        # WanVideo uses 16fps, frame count must be 4k+1
+                        raw_frames = int(duration * 16)
+                        frame_cap = ((raw_frames - 1) // 4) * 4 + 1
+                        frame_cap = min(frame_cap, MAX_FRAMES)
+                        frame_cap = max(frame_cap, 81)  # minimum 5 seconds
+                        logging.info(f"Change character: video duration={duration:.1f}s, calculated frames={frame_cap}")
+                except Exception as e:
+                    logging.warning(f"Could not probe video duration: {e}")
+                break
+        workflow["114"]["inputs"]["frame_load_cap"] = frame_cap
+        logging.info(f"Change character: frame_load_cap set to {frame_cap}")
 
     # --- Face Swap: seed randomization ---
     # Ethnicity injection DISABLED — specific facial feature descriptions

@@ -371,7 +371,8 @@
     "inputs": {
       "blocks_to_swap": 20,
       "offload_img_emb": false,
-      "offload_txt_emb": false
+      "offload_txt_emb": false,
+      "vace_blocks_to_swap": 0
     },
     "_meta": {
       "title": "WanVideoBlockSwap"
@@ -380,9 +381,9 @@
   "205": {
     "class_type": "WanVideoModelLoader",
     "inputs": {
-      "model": "Wan22Animate/wan2.2_animate_14B_bf16.safetensors",
+      "model": "Wan2.2-Animate-14B-Q4_K_M.gguf",
       "base_precision": "bf16",
-      "quantization": "fp8_e4m3fn_scaled",
+      "quantization": "disabled",
       "load_device": "offload_device",
       "attention_mode": "sageattn",
       "rms_norm_function": "pytorch",
@@ -392,10 +393,6 @@
       ],
       "lora": [
         "208",
-        0
-      ],
-      "compile_args": [
-        "206",
         0
       ]
     },
@@ -417,7 +414,7 @@
       "lora_4": "WanAnimate_relight_lora_fp16.safetensors",
       "strength_4": 0.7000000000000002,
       "low_mem_load": false,
-      "merge_loras": true
+      "merge_loras": false
     },
     "_meta": {
       "title": "WanVideoLoraSelectMulti"
@@ -864,7 +861,7 @@
       "force_size": "Disabled",
       "custom_width": 0,
       "custom_height": 0,
-      "frame_load_cap": 0,
+      "frame_load_cap": 481,
       "skip_first_frames": 0,
       "select_every_nth": 1,
       "format": "Wan",
@@ -959,7 +956,7 @@
       "scheduler": "flowmatch_distill",
       "riflex_freq_index": 0,
       "denoise_strength": 1,
-      "batched_cfg": true,
+      "batched_cfg": false,
       "rope_function": "comfy",
       "start_step": 0,
       "end_step": -1,

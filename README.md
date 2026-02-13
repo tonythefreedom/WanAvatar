@@ -749,6 +749,60 @@ output_lora_14B/checkpoint-50/
 
 ## Changelog
 
+### 2026-02-14: Change Character V1.1 GGUF 최적화 + 배경 자동 동기화 + 갤러리 업로드
+
+**Change Character V1.1 속도 최적화 (`workflow/Change_character_V1.1_api.json`, `server.py`):**
+
+- **GGUF Q4_K_M 모델 전환**: bf16 (28GB) → Q4_K_M (11GB), VRAM 사용량 60% 절감
+  - 모델: `Wan2.2-Animate-14B-Q4_K_M.gguf` (QuantStack/Wan2.2-Animate-14B-GGUF)
+  - `quantization: disabled` (GGUF 자체 양자화), `merge_loras: false` (GGUF 미지원)
+- **TeaCache 통합**: `rel_l1_thresh: 0.3`, `use_coefficients: true` — 30-45% 샘플링 속도 향상
+- **동적 frame_load_cap**: 비디오 길이에서 자동 계산 (`ffprobe` → `duration × 16fps` → 4k+1 정렬)
+  - `MAX_FRAMES = 481` (30초@16fps), 최소 81프레임
+  - 하드코딩 제거 → 비디오 길이 기반 자동 조절
+- **rms_norm_function: pytorch**: cuDNN 대신 PyTorch native RMS norm 사용
+- **Block Swap**: `blocks_to_swap: 20`, `vace_blocks_to_swap: 0` (VRAM 절약)
+- **SageAttention**: `attention_mode: sageattn` (메모리 효율 어텐션)
+
+**A100 호환성 이슈 해결:**
+
+| 최적화 | 상태 | 비고 |
+|--------|------|------|
+| TeaCache | ✅ 적용 | 30-45% 속도 향상, 독립 동작 |
+| GGUF Q4_K_M | ✅ 적용 | VRAM 60% 절감 (28GB → 11GB) |
+| FP8 e4m3fn | ❌ 제거 | A100 (compute 8.0) + torch.compile 시 triton fp8e4nv 미지원 |
+| torch.compile | ❌ 제거 | FP8 호환 불가, bf16에서는 OOM |
+| batched_cfg | ❌ 제거 | TeaCache와 `is_uncond` 파라미터 충돌 |
+| rms_norm pytorch | ✅ 적용 | cuDNN 의존성 제거 |
+| Block Swap 20 | ✅ 적용 | VRAM ↔ RAM 블록 교체 |
+
+**배경 자동 동기화 (`server.py`):**
+
+- `sync_background_files()`: 서버 시작 시 `background/stages/` 디렉토리 스캔
+- 파일시스템에 있지만 DB에 없는 배경 이미지 자동 등록
+- 지원 확장자: `.jpg`, `.jpeg`, `.png`, `.webp`
+- 기존 `init_db()`, `migrate_existing_files()` 이후 실행
+
+**갤러리 직접 업로드 (`server.py`, `App.jsx`, `api.js`):**
+
+- `POST /api/gallery/upload`: 이미지/영상 파일을 갤러리에 직접 업로드
+  - 지원 형식: 이미지 (.jpg/.jpeg/.png/.webp), 영상 (.mp4/.avi/.mov/.webm)
+  - `outputs/upload_{uuid}.{ext}` 형식으로 저장, `user_files`에 자동 기록
+- 갤러리 헤더에 업로드 버튼 추가 (멀티파일 지원)
+- 업로드 진행률 실시간 표시
+- 삭제 시 DB + 파일 동시 정리
+
+**Queue UI 썸네일 (`App.jsx`):**
+
+- 대기열 아이템에 아바타, 비디오(첫 프레임), 배경 썸네일 표시
+- 워크플로우별 입력 파라미터 시각적 프리뷰
+
+**버그 수정:**
+
+- `UPLOADS_DIR` → `UPLOAD_DIR` 변수명 오류 수정 (server.py)
+- `vace_blocks_to_swap: None` → `0` (TypeError 방지, model.py:2068)
+- `fp8_e4m3fn_scaled` → `fp8_e4m3fn` (A100 compute 8.0 호환)
+
 ### 2026-02-13: BFS Face Swap + Avatar Prepare 파이프라인 + 갤러리 아바타 등록
 
 **BFS Face Swap 워크플로우 (`workflow/flux_klein_faceswap_api.json`, `server.py`):**

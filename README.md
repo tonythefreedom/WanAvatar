@@ -717,6 +717,46 @@ output_lora_14B/checkpoint-50/
 
 ## Changelog
 
+### 2026-02-13: BFS Face Swap + Avatar Prepare 파이프라인 + 갤러리 아바타 등록
+
+**BFS Face Swap 워크플로우 (`workflow/flux_klein_faceswap_api.json`, `server.py`):**
+
+- Flux2 Klein 9B + BFS Head Swap LoRA (rank-128) 기반 얼굴 교체 워크플로우
+- 듀얼 레퍼런스 이미지: Picture 1 (타겟 바디) + Picture 2 (스타일 소스)
+- `FluxKontextMultiReferenceLatentMethod` (index 방식) 다중 참조 체인
+- CFG 2.5, Euler 샘플러, 20 스텝
+- 입력: Avatar (유지할 몸) + Style Source (스타일/얼굴)
+
+**Avatar Prepare 2단계 파이프라인 (`workflow/flux_klein_pose_edit_api.json`, `server.py`):**
+
+- **Step 1 (Klein Pose Edit):** 원본 이미지 → 전신, 차렷 자세, 크로마키 초록 배경으로 변환
+  - LoRA 없이 Flux2 Klein base 모델만 사용
+  - 프롬프트: "full body photo... attention pose... solid bright green chroma key background..."
+- **Step 2 (BFS Face Swap):** Step 1 결과에 원본 얼굴 복원
+  - BFS LoRA strength 0.85 (일반 face_swap 1.1 대비 부드러운 복원)
+  - Step 1 출력 = 타겟 바디, 원본 이미지 = 얼굴 소스
+- 최종 결과를 아바타 디렉토리에 자동 등록
+
+**갤러리 → 아바타 등록 (`App.jsx`, `api.js`):**
+
+- 갤러리 Avatar 버튼 클릭 시 Avatar Prepare 파이프라인 자동 실행
+- 진행 상황 실시간 폴링 (3초 간격) + 버튼에 진행률 표시
+- 완료 시 아바타 그룹에 자동 등록 + 사이드바 갤러리 새로고침
+
+**새 API 엔드포인트:**
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/prepare-avatar` | POST | Avatar Prepare 파이프라인 실행 (2단계) |
+| `/api/register-avatar` | POST | 이미지를 아바타로 직접 등록 |
+
+**기타 변경:**
+
+- Fashion Change 완료 후 자동 아바타 등록 제거 (갤러리에서 수동 등록으로 대체)
+- Face Swap 입력 방향 수정: Avatar = 타겟 바디 (node 10), Style Source = 얼굴 (node 11)
+- "Face Source" → "Style Source" 명칭 변경 (EN/KO/ZH)
+- Vite 개발 서버 프록시 경로 추가: `/avatars`, `/backgrounds`
+
 ### 2026-02-13: 로그인/회원가입 + 사용자 관리 + 계정별 데이터 관리
 
 **인증 시스템 (`server.py`, `App.jsx`, `api.js`):**
@@ -785,6 +825,8 @@ output_lora_14B/checkpoint-50/
 |-----------|------|
 | **Change Character V1.1** | 참조 비디오의 캐릭터를 사용자 이미지로 교체 (정면 사진 1장) |
 | **FFLF Auto Loop V2** | 이미지 시퀀스에서 듀얼 패스 샘플링으로 루핑 전환 비디오 생성 |
+| **Face Swap (BFS)** | Flux2 Klein + BFS LoRA 기반 얼굴 교체 (아바타 바디 + 스타일 소스) |
+| **Fashion Change** | 아바타 의상 변경 (Try-On LoRA) |
 
 **워크플로우 입력 기능:**
 

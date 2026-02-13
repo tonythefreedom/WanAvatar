@@ -3783,16 +3783,19 @@ function App() {
                               )}
                               <div className="queue-list">
                                 {items.map(item => (
-                                  <div key={item.id} className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video) ? ' queue-item--rich' : ''}`}>
+                                  <div key={item.id} className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}`}>
                                     <div className="queue-item-top">
                                       {/* Thumbnails */}
-                                      {(item.previews?.ref_image || item.previews?.ref_video) && (
+                                      {(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) && (
                                         <div className="queue-item-thumbs">
                                           {item.previews?.ref_image && (
                                             <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar" />
                                           )}
                                           {item.previews?.ref_video && (
                                             <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata" />
+                                          )}
+                                          {item.previews?.bg_image && (
+                                            <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg" />
                                           )}
                                         </div>
                                       )}

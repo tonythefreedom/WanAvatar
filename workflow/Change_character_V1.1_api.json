@@ -302,7 +302,7 @@
     "inputs": {
       "backend": "inductor",
       "fullgraph": false,
-      "mode": "default",
+      "mode": "reduce-overhead",
       "dynamic": false,
       "dynamo_cache_size_limit": 64,
       "compile_transformer_blocks_only": true,
@@ -382,16 +382,20 @@
     "inputs": {
       "model": "Wan22Animate/wan2.2_animate_14B_bf16.safetensors",
       "base_precision": "bf16",
-      "quantization": "disabled",
+      "quantization": "fp8_e4m3fn_scaled",
       "load_device": "offload_device",
       "attention_mode": "sageattn",
-      "rms_norm_function": "default",
+      "rms_norm_function": "pytorch",
       "block_swap_args": [
         "207",
         0
       ],
       "lora": [
         "208",
+        0
+      ],
+      "compile_args": [
+        "206",
         0
       ]
     },
@@ -413,7 +417,7 @@
       "lora_4": "WanAnimate_relight_lora_fp16.safetensors",
       "strength_4": 0.7000000000000002,
       "low_mem_load": false,
-      "merge_loras": false
+      "merge_loras": true
     },
     "_meta": {
       "title": "WanVideoLoraSelectMulti"
@@ -955,7 +959,7 @@
       "scheduler": "flowmatch_distill",
       "riflex_freq_index": 0,
       "denoise_strength": 1,
-      "batched_cfg": false,
+      "batched_cfg": true,
       "rope_function": "comfy",
       "start_step": 0,
       "end_step": -1,
@@ -970,6 +974,10 @@
       ],
       "text_embeds": [
         "235",
+        0
+      ],
+      "cache_args": [
+        "260",
         0
       ]
     },
@@ -1063,6 +1071,19 @@
     "inputs": {},
     "_meta": {
       "title": "Fast Groups Bypasser (rgthree)"
+    }
+  },
+  "260": {
+    "class_type": "WanVideoTeaCache",
+    "inputs": {
+      "rel_l1_thresh": 0.3,
+      "start_step": 1,
+      "end_step": -1,
+      "cache_device": "offload_device",
+      "use_coefficients": true
+    },
+    "_meta": {
+      "title": "TeaCache (Speed Optimization)"
     }
   }
 }

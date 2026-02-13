@@ -2053,6 +2053,10 @@ video.picker-thumb {
   border: 2px solid var(--secondary);
 }
 
+.queue-thumb--bg {
+  border: 2px solid var(--success);
+}
+
 .queue-item-info {
   flex: 1;
   min-width: 0;

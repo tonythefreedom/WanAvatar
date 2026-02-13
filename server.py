@@ -1858,6 +1858,54 @@ async def upload_background(file: UploadFile = File(...), user=Depends(get_curre
         raise HTTPException(500, str(e))
 
 
+@app.post("/api/gallery/upload")
+async def upload_to_gallery(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Upload an image or video directly to the gallery."""
+    try:
+        ext = Path(file.filename).suffix.lower()
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+        VIDEO_EXTS = {".mp4", ".avi", ".mov", ".webm"}
+        allowed = IMAGE_EXTS | VIDEO_EXTS
+        if ext not in allowed:
+            raise HTTPException(400, f"Unsupported format. Allowed: {', '.join(sorted(allowed))}")
+
+        filename = f"upload_{uuid.uuid4()}{ext}"
+        filepath = OUTPUT_DIR / filename
+
+        with open(filepath, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        metadata = {}
+        if ext in IMAGE_EXTS:
+            with Image.open(filepath) as img:
+                metadata["width"], metadata["height"] = img.size
+
+        await record_user_file(
+            user["id"], "output", filename, str(filepath),
+            file.filename, _json.dumps(metadata) if metadata else None
+        )
+
+        item = {
+            "filename": filename,
+            "url": f"/outputs/{filename}",
+            "path": str(filepath),
+            "type": "image" if ext in IMAGE_EXTS else "video",
+            "size": filepath.stat().st_size,
+            "created_at": datetime.datetime.now().isoformat(),
+        }
+        if ext in IMAGE_EXTS:
+            item["width"] = metadata.get("width", 0)
+            item["height"] = metadata.get("height", 0)
+
+        return item
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error("Gallery upload failed: %s", e, exc_info=True)
+        raise HTTPException(500, str(e))
+
+
 @app.get("/api/backgrounds")
 async def list_backgrounds(user=Depends(get_current_user)):
     """List background images owned by current user."""
@@ -2500,6 +2548,14 @@ async def delete_output(filename: str, user=Depends(get_current_user)):
     if filepath.resolve().parent != OUTPUT_DIR.resolve():
         raise HTTPException(403, "Access denied")
     filepath.unlink()
+    try:
+        async with aiosqlite.connect(str(DB_PATH)) as db:
+            await db.execute(
+                "DELETE FROM user_files WHERE user_id = ? AND filename = ? AND file_type = 'output'",
+                (user["id"], filename))
+            await db.commit()
+    except Exception:
+        pass
     return {"message": f"Deleted {filename}"}
 
 
@@ -3182,6 +3238,15 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 logging.info(f"Fashion change: Try-On LoRA applied with clothing ref: {clothing_ref}")
             else:
                 logging.info(f"Fashion change: reference mode (no Try-On LoRA found): {clothing_ref}")
+
+    # --- Change Character: dynamic frame_load_cap ---
+    # Set frame_load_cap to 0 so VHS_LoadVideo loads ALL frames from the source video.
+    # The actual frame count flows through: VHS_VideoInfoLoaded(96) → SetNode(133) "frame count"
+    # → GetNode(233) → WanVideoAnimateEmbeds num_frames, so the generation matches
+    # the original video length automatically.
+    if workflow_id == "change_character" and "114" in workflow:
+        workflow["114"]["inputs"]["frame_load_cap"] = 0
+        logging.info("Change character: frame_load_cap set to 0 (load all frames)")
 
     # --- Face Swap: seed randomization ---
     # Ethnicity injection DISABLED — specific facial feature descriptions
@@ -4159,10 +4224,8 @@ if __name__ == "__main__":
     logging.info(f"Device: {DEVICE}, Dtype: {DTYPE}")
     logging.info(f"Sequence Parallel: {USE_SP}, World Size: {WORLD_SIZE}")
 
-    # Eager-load S2V pipeline so all ranks load together
-    logging.info("Loading S2V pipeline at startup...")
-    load_pipeline()
-    logging.info("S2V pipeline ready!")
+    # Lazy-load S2V pipeline — loaded on first S2V request via ensure_model_loaded('s2v')
+    logging.info("S2V pipeline: lazy loading (will load on first use)")
 
     if USE_SP and LOCAL_RANK != 0:
         # Non-master ranks enter worker loop

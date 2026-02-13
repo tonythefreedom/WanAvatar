@@ -22,6 +22,7 @@ import {
   sendStudioChat,
   trimVideo,
   uploadBackground,
+  uploadToGallery,
   listBackgrounds,
   listAvatarGroups,
   listAvatarImages,
@@ -59,6 +60,8 @@ const translations = {
     gallerySize: 'Size',
     galleryDate: 'Created',
     galleryRefresh: 'Refresh',
+    galleryUploadBtn: 'Upload',
+    galleryUploading: 'Uploading',
     galleryYtUpload: 'YouTube Upload',
     galleryYtTitle: 'Title',
     galleryYtDesc: 'Description',
@@ -268,6 +271,8 @@ const translations = {
     gallerySize: '크기',
     galleryDate: '생성일',
     galleryRefresh: '새로고침',
+    galleryUploadBtn: '업로드',
+    galleryUploading: '업로드 중',
     galleryYtUpload: 'YouTube 업로드',
     galleryYtTitle: '제목',
     galleryYtDesc: '설명',
@@ -475,6 +480,8 @@ const translations = {
     gallerySize: '大小',
     galleryDate: '创建时间',
     galleryRefresh: '刷新',
+    galleryUploadBtn: '上传',
+    galleryUploading: '上传中',
     galleryYtUpload: 'YouTube上传',
     galleryYtTitle: '标题',
     galleryYtDesc: '描述',
@@ -722,6 +729,9 @@ function App() {
   // Gallery state
   const [videos, setVideos] = useState([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryUploading, setGalleryUploading] = useState(false);
+  const [galleryUploadProgress, setGalleryUploadProgress] = useState(0);
+  const galleryUploadRef = useRef(null);
 
   // I2V state
   const [i2vImageFile, setI2vImageFile] = useState(null);
@@ -1509,6 +1519,30 @@ function App() {
       setGalleryImages(prev => prev.filter(o => o.filename !== filename));
       setVideos(prev => prev.filter(v => v.filename !== filename));
     } catch (err) { console.error('Failed to delete:', err); }
+  };
+
+  const handleGalleryUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    setGalleryUploading(true);
+    setGalleryUploadProgress(0);
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const item = await uploadToGallery(files[i], (pct) => {
+          setGalleryUploadProgress(Math.round(((i * 100) + pct) / files.length));
+        });
+        if (item.type === 'image') {
+          setGalleryImages(prev => [item, ...prev]);
+        } else {
+          setVideos(prev => [item, ...prev]);
+        }
+      } catch (err) {
+        console.error('Gallery upload failed:', err);
+      }
+    }
+    setGalleryUploading(false);
+    setGalleryUploadProgress(0);
+    if (galleryUploadRef.current) galleryUploadRef.current.value = '';
   };
 
   const handleRegisterAsAvatar = async (img) => {
@@ -3749,31 +3783,53 @@ function App() {
                               )}
                               <div className="queue-list">
                                 {items.map(item => (
-                                  <div key={item.id} className={`queue-item queue-item--${item.status}`}>
-                                    <span className="queue-item-status">
-                                      {item.status === 'completed' ? '\u2705' : item.status === 'running' ? '\u23f3' : item.status === 'failed' ? '\u274c' : '\u23f8'}
-                                    </span>
-                                    <span className="queue-item-label" title={item.inputs?.fashion_prompt || ''}>{item.label}</span>
-                                    {item.status === 'running' && (
-                                      <div className="queue-item-progress">
-                                        <div className="queue-progress-bar">
-                                          <div className="queue-progress-fill" style={{ width: `${item.progress}%` }} />
+                                  <div key={item.id} className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video) ? ' queue-item--rich' : ''}`}>
+                                    <div className="queue-item-top">
+                                      {/* Thumbnails */}
+                                      {(item.previews?.ref_image || item.previews?.ref_video) && (
+                                        <div className="queue-item-thumbs">
+                                          {item.previews?.ref_image && (
+                                            <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar" />
+                                          )}
+                                          {item.previews?.ref_video && (
+                                            <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata" />
+                                          )}
                                         </div>
-                                        <span className="queue-progress-text">{item.progress}%</span>
+                                      )}
+                                      <div className="queue-item-info">
+                                        <div className="queue-item-title-row">
+                                          <span className="queue-item-status">
+                                            {item.status === 'completed' ? '\u2705' : item.status === 'running' ? '\u23f3' : item.status === 'failed' ? '\u274c' : '\u23f8'}
+                                          </span>
+                                          <span className="queue-item-label" title={item.ytTitle || item.inputs?.prompt || item.inputs?.fashion_prompt || ''}>
+                                            {item.ytTitle || item.label}
+                                          </span>
+                                          {item.status !== 'running' && (
+                                            <button className="queue-item-remove" onClick={() => handleWfQueueRemove(wf.id, item.id)}>&times;</button>
+                                          )}
+                                        </div>
+                                        {item.ytTitle && item.label && (
+                                          <div className="queue-item-sublabel">{item.label}</div>
+                                        )}
+                                        {item.status === 'running' && (
+                                          <div className="queue-item-progress">
+                                            <div className="queue-progress-bar">
+                                              <div className="queue-progress-fill" style={{ width: `${item.progress}%` }} />
+                                            </div>
+                                            <span className="queue-progress-text">{item.progress}%</span>
+                                          </div>
+                                        )}
+                                        {item.status === 'pending' && (
+                                          <span className="queue-item-pending">{t('wfQueuePending')}</span>
+                                        )}
+                                        {item.status === 'completed' && item.outputVideo && (
+                                          <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
+                                        )}
+                                        {item.status === 'failed' && item.error && (
+                                          <span className="queue-item-error" title={item.error}>Error</span>
+                                        )}
                                       </div>
-                                    )}
-                                    {item.status === 'pending' && (
-                                      <span className="queue-item-pending">{t('wfQueuePending')}</span>
-                                    )}
-                                    {item.status === 'completed' && item.outputVideo && (
-                                      <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
-                                    )}
-                                    {item.status === 'failed' && item.error && (
-                                      <span className="queue-item-error" title={item.error}>Error</span>
-                                    )}
-                                    {item.status !== 'running' && (
-                                      <button className="queue-item-remove" onClick={() => handleWfQueueRemove(wf.id, item.id)}>&times;</button>
-                                    )}
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -4319,7 +4375,29 @@ function App() {
               <div className="card">
                 <div className="gallery-header">
                   <h3>{t('galleryTitle')}</h3>
-                  <button className="btn secondary" onClick={fetchGallery} disabled={galleryLoading}>{galleryLoading ? '...' : t('galleryRefresh')}</button>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {galleryUploading && (
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-light)' }}>
+                        {galleryUploadProgress}%
+                      </span>
+                    )}
+                    <input
+                      ref={galleryUploadRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
+                      multiple
+                      onChange={handleGalleryUpload}
+                      style={{ display: 'none' }}
+                    />
+                    <button
+                      className="btn primary"
+                      onClick={() => galleryUploadRef.current?.click()}
+                      disabled={galleryUploading}
+                    >
+                      {galleryUploading ? `${t('galleryUploading')} ${galleryUploadProgress}%` : t('galleryUploadBtn')}
+                    </button>
+                    <button className="btn secondary" onClick={fetchGallery} disabled={galleryLoading}>{galleryLoading ? '...' : t('galleryRefresh')}</button>
+                  </div>
                 </div>
 
                 <div className="sub-tabs">

@@ -194,6 +194,18 @@ export const uploadBackground = async (file) => {
   return response.data;
 };
 
+export const uploadToGallery = async (file, onProgress) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await api.post('/gallery/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: onProgress
+      ? (e) => onProgress(Math.round((e.loaded * 100) / e.total))
+      : undefined,
+  });
+  return response.data;
+};
+
 export const listBackgrounds = async () => {
   const response = await api.get('/backgrounds');
   return response.data;

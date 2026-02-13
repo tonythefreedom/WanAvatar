@@ -3348,7 +3348,7 @@ def download_youtube_video(url: str) -> dict:
         try:
             result = subprocess.run([
                 'ffmpeg', '-y', '-i', str(actual_path),
-                '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
+                '-c:v', 'h264_nvenc', '-cq', '18', '-preset', 'p4',
                 '-c:a', 'aac', '-b:a', '192k',
                 str(h264_path),
             ], capture_output=True, timeout=120)

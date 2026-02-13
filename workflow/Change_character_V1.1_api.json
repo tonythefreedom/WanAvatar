@@ -369,7 +369,7 @@
   "207": {
     "class_type": "WanVideoBlockSwap",
     "inputs": {
-      "blocks_to_swap": 12,
+      "blocks_to_swap": 20,
       "offload_img_emb": false,
       "offload_txt_emb": false
     },
@@ -833,11 +833,11 @@
   "238": {
     "class_type": "WanVideoDecode",
     "inputs": {
-      "enable_vae_tiling": false,
-      "tile_x": 272,
-      "tile_y": 272,
-      "tile_stride_x": 144,
-      "tile_stride_y": 128,
+      "enable_vae_tiling": true,
+      "tile_x": 96,
+      "tile_y": 96,
+      "tile_stride_x": 48,
+      "tile_stride_y": 48,
       "normalization": "default",
       "vae": [
         "249",
@@ -1024,7 +1024,7 @@
       "colormatch": "disabled",
       "pose_strength": 1,
       "face_strength": 1,
-      "tiled_vae": false,
+      "tiled_vae": true,
       "vae": [
         "219",
         0

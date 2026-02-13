@@ -177,6 +177,15 @@ WORKFLOW_REGISTRY = {
             {"key": "seed", "type": "number", "node_id": "113", "field": "inputs.value",
              "default": -1, "min": -1, "max": 2147483647, "step": 1,
              "label": {"en": "Seed (-1 = random)", "ko": "시드 (-1 = 랜덤)", "zh": "种子 (-1 = 随机)"}},
+            {"key": "scene_background", "type": "image", "required": False,
+             "upload_to_comfyui": True,
+             "label": {"en": "Scene Background (Optional)", "ko": "배경 장면 (선택)", "zh": "场景背景（可选）"},
+             "description": {"en": "If set, result will be composited into this background with perspective", "ko": "설정 시 결과물이 이 배경에 원근감 있게 합성됩니다", "zh": "设置后，结果将带有透视效果合成到此背景中"}},
+            {"key": "scene_prompt", "type": "text", "required": False,
+             "default": "A person standing naturally in the scene, photorealistic, natural lighting, correct perspective and depth, 4K",
+             "rows": 2,
+             "label": {"en": "Scene Description", "ko": "장면 설명", "zh": "场景描述"},
+             "description": {"en": "Prompt for scene composite (used when Scene Background is set)", "ko": "배경 합성 프롬프트 (배경 장면 설정 시 사용)", "zh": "场景合成提示（设置场景背景时使用）"}},
         ],
     },
     "face_swap": {
@@ -207,7 +216,7 @@ WORKFLOW_REGISTRY = {
              ],
              "label": {"en": "Ethnicity", "ko": "인종", "zh": "种族"}},
             {"key": "prompt", "type": "text", "node_id": "50", "field": "inputs.text",
-             "default": "head_swap: start with Picture 1 as the base image, keeping its lighting, environment, and background. remove the head from Picture 1 completely and replace it with the head from Picture 2, strictly preserving the hair, eye color, nose structure, skin tone, face shape, ethnicity, and all facial features of Picture 2. the person in the result must look exactly like the person in Picture 2 with the same race and skin color. copy the direction of the eye, head rotation, micro expressions from Picture 1. do not alter any part of Picture 1 below the neckline. high quality, sharp details, 4k.",
+             "default": "head_swap: Use image 1 as the base image, preserving its environment, background, camera perspective, framing, exposure, contrast, and lighting. Remove the head from image 1 and seamlessly replace it with the head from image 2. Match the original head size, face-to-body ratio, neck thickness, shoulder alignment, and camera distance so proportions remain natural and unchanged. Adapt the inserted head to the lighting of image 1 by matching light direction, intensity, softness, color temperature, shadows, and highlights, with no independent relighting. Preserve the identity of image 2, including hair texture, eye color, nose structure, facial proportions, and skin details. Match the pose and expression from image 1, including head tilt, rotation, eye direction, gaze, micro-expressions, and lip position. Ensure seamless neck and jaw blending, consistent skin tone, realistic shadow contact, natural skin texture, and uniform sharpness. Photorealistic, high quality, sharp details, 4K.",
              "rows": 4,
              "label": {"en": "Swap Instruction", "ko": "교체 지시", "zh": "换脸指令"}},
             {"key": "lora_strength", "type": "number", "node_id": "21", "field": "inputs.strength_model",
@@ -220,6 +229,47 @@ WORKFLOW_REGISTRY = {
              "default": 20, "min": 4, "max": 50, "step": 1,
              "label": {"en": "Steps", "ko": "스텝", "zh": "步数"}},
             {"key": "seed", "type": "number", "node_id": "92", "field": "inputs.value",
+             "default": -1, "min": -1, "max": 2147483647, "step": 1,
+             "label": {"en": "Seed (-1 = random)", "ko": "시드 (-1 = 랜덤)", "zh": "种子 (-1 = 随机)"}},
+        ],
+    },
+    "scene_composite": {
+        "id": "scene_composite",
+        "display_name": {"en": "Scene Composite", "ko": "배경 합성", "zh": "场景合成"},
+        "description": {
+            "en": "Place a character into a background scene with natural perspective and lighting using Z-Image-Turbo + ControlNet.",
+            "ko": "Z-Image-Turbo + ControlNet을 사용하여 캐릭터를 배경에 자연스러운 원근감과 조명으로 배치합니다.",
+            "zh": "使用Z-Image-Turbo + ControlNet将角色自然地放入背景场景中。",
+        },
+        "api_json": "z_image_scene_api.json",
+        "output_type": "image",
+        "inputs": [
+            {"key": "character", "type": "image", "node_id": "10", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
+             "label": {"en": "Character Image", "ko": "캐릭터 이미지", "zh": "角色图片"},
+             "description": {"en": "Avatar or character to place in the scene", "ko": "배경에 배치할 아바타 또는 캐릭터", "zh": "要放入场景中的角色"}},
+            {"key": "background", "type": "image", "node_id": "11", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True,
+             "label": {"en": "Background Scene", "ko": "배경 이미지", "zh": "背景场景"},
+             "description": {"en": "Background/scene image for perspective and structure reference", "ko": "원근감과 구조 참조용 배경/장면 이미지", "zh": "用于透视和结构参考的背景/场景图片"}},
+            {"key": "prompt", "type": "text", "node_id": "50", "field": "inputs.user_prompt",
+             "default": "A person standing naturally in the scene, photorealistic, natural lighting, correct perspective and depth, 4K",
+             "rows": 3,
+             "label": {"en": "Scene Description", "ko": "장면 설명", "zh": "场景描述"}},
+            {"key": "negative_prompt", "type": "text", "node_id": "51", "field": "inputs.user_prompt",
+             "default": "blurry, low quality, deformed, bad anatomy, watermark, text, extra limbs",
+             "rows": 2,
+             "label": {"en": "Negative Prompt", "ko": "네거티브 프롬프트", "zh": "负面提示"}},
+            {"key": "cn_strength", "type": "number", "node_id": "56", "field": "inputs.strength",
+             "default": 0.8, "min": 0.1, "max": 1.5, "step": 0.05,
+             "label": {"en": "ControlNet Strength", "ko": "ControlNet 강도", "zh": "ControlNet 强度"}},
+            {"key": "steps", "type": "number", "node_id": "90", "field": "inputs.steps",
+             "default": 9, "min": 4, "max": 30, "step": 1,
+             "label": {"en": "Steps", "ko": "스텝", "zh": "步数"}},
+            {"key": "cfg", "type": "number", "node_id": "90", "field": "inputs.cfg",
+             "default": 4.0, "min": 1.0, "max": 10.0, "step": 0.5,
+             "label": {"en": "CFG Scale", "ko": "CFG 스케일", "zh": "CFG 比例"}},
+            {"key": "seed", "type": "number", "node_id": "90", "field": "inputs.seed",
              "default": -1, "min": -1, "max": 2147483647, "step": 1,
              "label": {"en": "Seed (-1 = random)", "ko": "시드 (-1 = 랜덤)", "zh": "种子 (-1 = 随机)"}},
         ],
@@ -1725,7 +1775,10 @@ async def upload_image(file: UploadFile = File(...), user=Depends(get_current_us
             "width": width,
             "height": height,
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        logging.error("Image upload failed: %s", e, exc_info=True)
         raise HTTPException(500, str(e))
 
 
@@ -2026,6 +2079,12 @@ def avatar_prepare_task(task_id: str, source_path: str, group: str, user_id: int
         # Crop original image to head-only so clothing doesn't leak into face swap
         cropped_face_path = crop_face_head(source_path)
         original_comfyui = upload_to_comfyui(cropped_face_path)
+        # Clean up cropped temp file after upload
+        if cropped_face_path != source_path and os.path.exists(cropped_face_path):
+            try:
+                os.remove(cropped_face_path)
+            except OSError:
+                pass
 
         faceswap_path = WORKFLOW_DIR / "flux_klein_faceswap_api.json"
         with open(faceswap_path) as f:
@@ -2066,6 +2125,14 @@ def avatar_prepare_task(task_id: str, source_path: str, group: str, user_id: int
         final_output = retrieve_comfyui_output(prompt_id2)
         final_abs = str(OUTPUT_DIR / os.path.basename(final_output))
         logging.info(f"Avatar prepare Step 2 complete: {final_output}")
+
+        # Composite swapped face onto original pose-edited body
+        if os.path.exists(final_abs) and os.path.exists(step1_abs):
+            generation_status[task_id].update({"progress": 0.92, "message": "Step 2: Compositing face..."})
+            try:
+                composite_face_onto_body(final_abs, step1_abs)
+            except Exception as comp_err:
+                logging.warning(f"Avatar prepare face composite failed: {comp_err}")
 
         # ── Step 3: Register as avatar ──
         generation_status[task_id].update({"progress": 0.95, "message": "Registering as avatar..."})
@@ -2642,6 +2709,70 @@ def crop_face_head(image_path: str, padding_ratio: float = 1.8) -> str:
     return tmp.name
 
 
+def composite_face_onto_body(swapped_path: str, original_body_path: str, feather: int = 30) -> None:
+    """Composite the face/head from swapped result onto the original body image.
+
+    Detects face in the swapped result, creates a soft elliptical mask around
+    the head area, and blends only that region onto the original body image
+    (resized to match). This preserves original clothing/background exactly.
+    Overwrites swapped_path in-place.
+    """
+    import mediapipe as mp
+    import cv2
+    import numpy as np
+
+    swapped = cv2.imread(swapped_path)
+    original = cv2.imread(original_body_path)
+    if swapped is None or original is None:
+        logging.warning("composite_face_onto_body: could not read images, skipping")
+        return
+
+    sh, sw = swapped.shape[:2]
+    # Resize original to match swapped dimensions
+    original = cv2.resize(original, (sw, sh), interpolation=cv2.INTER_LANCZOS4)
+
+    # Detect face in the swapped result
+    model_path = str(Path(__file__).parent / "models" / "blaze_face_short_range.tflite")
+    options = mp.tasks.vision.FaceDetectorOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+        min_detection_confidence=0.4,
+    )
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(swapped, cv2.COLOR_BGR2RGB))
+
+    with mp.tasks.vision.FaceDetector.create_from_options(options) as detector:
+        result = detector.detect(mp_image)
+
+    if not result.detections:
+        logging.warning("composite_face_onto_body: no face in swapped result, skipping composite")
+        return
+
+    det = result.detections[0]
+    bb = det.bounding_box
+    fx, fy, fw, fh = bb.origin_x, bb.origin_y, bb.width, bb.height
+
+    # Create elliptical mask centered on face with generous head padding
+    cx, cy = fx + fw // 2, fy + fh // 2
+    # Ellipse radii: wider horizontally (ears/hair), taller vertically (hair+chin+neck)
+    rx = int(fw * 1.4)
+    ry = int(fh * 1.8)
+
+    mask = np.zeros((sh, sw), dtype=np.float32)
+    cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 1.0, -1)
+
+    # Feather the mask edges with Gaussian blur for smooth blending
+    if feather > 0:
+        mask = cv2.GaussianBlur(mask, (feather * 2 + 1, feather * 2 + 1), feather)
+
+    # Blend: face from swapped, body/background from original
+    mask_3ch = mask[:, :, np.newaxis]
+    blended = (swapped.astype(np.float32) * mask_3ch +
+               original.astype(np.float32) * (1.0 - mask_3ch))
+    blended = np.clip(blended, 0, 255).astype(np.uint8)
+
+    cv2.imwrite(swapped_path, blended)
+    logging.info(f"composite_face_onto_body: face at ({fx},{fy},{fw},{fh}), ellipse ({rx},{ry}), feather={feather}")
+
+
 def upload_to_comfyui(local_path: str, subfolder: str = "") -> str:
     """Upload a file to ComfyUI's input directory."""
     filename = os.path.basename(local_path)
@@ -3012,16 +3143,16 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             # Korean-specific: ulzzang style (Korean beauty standard)
             eth_prompts = {
                 "korean": {
-                    "positive": " The person in Picture 2 is Korean. Preserve Korean ulzzang facial features: soft jawline, natural double eyelids, warm ivory skin tone, small nose bridge, full lips. The result must look like a real Korean person, not generic Asian.",
-                    "negative": ", western features, caucasian features, pale white skin, european face, japanese features, chinese features, southeast asian features, sharp angular jaw",
+                    "positive": " The person in image 2 is Korean. Preserve Korean ulzzang facial features: soft jawline, natural double eyelids, warm ivory skin tone, small nose bridge, full lips. The result must look like a real Korean person.",
+                    "negative": ", western features, caucasian features, european face",
                 },
                 "asian": {
-                    "positive": " The person in Picture 2 is East Asian. The result must clearly show East Asian facial features, skin tone, and appearance.",
-                    "negative": ", western features, caucasian features, pale white skin, european face",
+                    "positive": " The person in image 2 is East Asian. Preserve East Asian facial features, skin tone, and appearance.",
+                    "negative": ", western features, caucasian features, european face",
                 },
                 "western": {
-                    "positive": " The person in Picture 2 is Western/Caucasian. The result must clearly show Western facial features, skin tone, and appearance.",
-                    "negative": ", asian features, east asian features, korean features",
+                    "positive": " The person in image 2 is Western/Caucasian. Preserve Western facial features, skin tone, and appearance.",
+                    "negative": ", asian features, east asian features",
                 },
             }
             eth = eth_prompts.get(ethnicity, eth_prompts["korean"])
@@ -3031,11 +3162,17 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             if "51" in workflow:
                 workflow["51"]["inputs"]["text"] += eth["negative"]
 
-            logging.info(f"Face swap: ethnicity={ethnicity} ({eth_label}) injected into prompts")
+            logging.info(f"Face swap: ethnicity={ethnicity} injected into prompts")
 
         seed_val = workflow.get("92", {}).get("inputs", {}).get("value", -1)
         if seed_val == -1:
             workflow["92"]["inputs"]["value"] = random.randint(0, 2**53)
+
+    # --- Scene Composite: seed randomization ---
+    if workflow_id == "scene_composite":
+        seed_val = workflow.get("90", {}).get("inputs", {}).get("seed", -1)
+        if seed_val == -1:
+            workflow["90"]["inputs"]["seed"] = random.randint(0, 2**53)
 
     return workflow
 
@@ -3240,16 +3377,37 @@ def workflow_generate_task(task_id: str, params: dict):
         ensure_comfyui_running()
 
         # Step 3: Upload files to ComfyUI as needed
-        # For face_swap: crop avatar_face to head-only to prevent clothing bleed
+        # For face_swap: save original body path for post-composite, crop avatar face
+        original_body_path = None
+        cropped_tmp = None
+        if workflow_id == "face_swap":
+            # Resolve style_source to absolute path for later face composite
+            style_src = user_inputs.get("style_source", "")
+            if style_src:
+                for d in [OUTPUT_DIR, UPLOAD_DIR, AVATARS_DIR]:
+                    candidate = d / os.path.basename(style_src)
+                    if candidate.exists():
+                        original_body_path = str(candidate)
+                        break
+                if not original_body_path and os.path.isabs(style_src) and os.path.exists(style_src):
+                    original_body_path = style_src
         if workflow_id == "face_swap" and user_inputs.get("avatar_face"):
             generation_status[task_id].update({"progress": 0.07, "message": "Cropping face from avatar..."})
-            user_inputs["avatar_face"] = crop_face_head(user_inputs["avatar_face"])
+            cropped_tmp = crop_face_head(user_inputs["avatar_face"])
+            user_inputs["avatar_face"] = cropped_tmp
 
         for input_def in wf_config["inputs"]:
             key = input_def["key"]
             if input_def.get("upload_to_comfyui") and key in user_inputs and user_inputs[key]:
                 generation_status[task_id].update({"progress": 0.08, "message": f"Uploading {key}..."})
                 user_inputs[key] = upload_to_comfyui(user_inputs[key])
+
+        # Clean up cropped temp file after upload
+        if cropped_tmp and os.path.exists(cropped_tmp):
+            try:
+                os.remove(cropped_tmp)
+            except OSError:
+                pass
 
         # Step 4: Prepare workflow
         generation_status[task_id].update({"progress": 0.12, "message": "Preparing workflow..."})
@@ -3294,6 +3452,72 @@ def workflow_generate_task(task_id: str, params: dict):
         # Step 7: Retrieve output
         generation_status[task_id].update({"progress": 0.92, "message": "Retrieving output..."})
         output_path = retrieve_comfyui_output(prompt_id)
+
+        # Step 7.5: Post-processing — face composite for face_swap
+        # Blend only the swapped face onto the original body to preserve clothing/background
+        if workflow_id == "face_swap" and original_body_path:
+            abs_output_tmp = str(OUTPUT_DIR / os.path.basename(output_path))
+            if os.path.exists(abs_output_tmp):
+                generation_status[task_id].update({"progress": 0.93, "message": "Compositing face onto original body..."})
+                try:
+                    composite_face_onto_body(abs_output_tmp, original_body_path)
+                except Exception as comp_err:
+                    logging.warning(f"Face composite failed (using raw result): {comp_err}")
+
+        # Step 7.6: Post-processing — scene composite (Z-Image + ControlNet)
+        # If scene_background was provided, run Z-Image scene composite on the result
+        scene_bg = user_inputs.get("scene_background")
+        scene_prompt = user_inputs.get("scene_prompt", "A person standing naturally in the scene, photorealistic, natural lighting, correct perspective and depth, 4K")
+        if scene_bg and workflow_id == "fashion_change":
+            abs_output_for_scene = str(OUTPUT_DIR / os.path.basename(output_path))
+            if os.path.exists(abs_output_for_scene):
+                generation_status[task_id].update({"progress": 0.94, "message": "Scene composite: uploading images..."})
+                try:
+                    import json as json_mod2
+                    # Upload character result to ComfyUI; scene_bg is already uploaded
+                    char_comfyui = upload_to_comfyui(abs_output_for_scene)
+                    bg_comfyui = scene_bg  # already uploaded via upload_to_comfyui in Step 3
+
+                    # Load scene composite workflow
+                    scene_wf_path = WORKFLOW_DIR / "z_image_scene_api.json"
+                    with open(scene_wf_path) as f:
+                        scene_wf = json_mod2.load(f)
+
+                    scene_wf["10"]["inputs"]["image"] = char_comfyui
+                    scene_wf["11"]["inputs"]["image"] = bg_comfyui
+                    scene_wf["50"]["inputs"]["user_prompt"] = scene_prompt
+                    scene_wf["90"]["inputs"]["seed"] = random.randint(0, 2**53)
+
+                    generation_status[task_id].update({"progress": 0.95, "message": "Scene composite: generating..."})
+                    client_id_sc = str(uuid.uuid4())
+                    resp_sc = http_requests.post(
+                        f"{COMFYUI_URL}/prompt",
+                        json={"prompt": scene_wf, "client_id": client_id_sc},
+                    )
+                    if resp_sc.status_code == 200:
+                        prompt_id_sc = resp_sc.json()["prompt_id"]
+                        try:
+                            monitor_comfyui_progress(task_id, prompt_id_sc, client_id_sc)
+                        except Exception:
+                            import time as _time_sc
+                            for _ in range(60):
+                                _time_sc.sleep(10)
+                                try:
+                                    h_sc = http_requests.get(f"{COMFYUI_URL}/history/{prompt_id_sc}").json()
+                                    if h_sc.get(prompt_id_sc, {}).get("outputs", {}):
+                                        break
+                                except Exception:
+                                    pass
+
+                        scene_output = retrieve_comfyui_output(prompt_id_sc)
+                        # Replace the original output with scene composite result
+                        import shutil
+                        shutil.copy2(str(OUTPUT_DIR / os.path.basename(scene_output)), abs_output_for_scene)
+                        logging.info(f"Scene composite applied: {scene_output} -> {abs_output_for_scene}")
+                    else:
+                        logging.warning(f"Scene composite workflow rejected: {resp_sc.text}")
+                except Exception as scene_err:
+                    logging.warning(f"Scene composite failed (using original result): {scene_err}")
 
         # Step 8: Post-processing — merge audio (video outputs only)
         # Priority: custom_audio > reference video audio

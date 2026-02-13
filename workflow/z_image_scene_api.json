@@ -1,0 +1,165 @@
+{
+  "10": {
+    "inputs": {
+      "image": "character_placeholder.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Character Image"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": "background_placeholder.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Background Reference"
+    }
+  },
+  "15": {
+    "inputs": {
+      "image": ["11", 0],
+      "upscale_method": "lanczos",
+      "megapixels": 1.0,
+      "resolution_steps": 1
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Scale Background to 1MP"
+    }
+  },
+  "16": {
+    "inputs": {
+      "image": ["15", 0],
+      "low_threshold": 0.4,
+      "high_threshold": 0.8
+    },
+    "class_type": "Canny",
+    "_meta": {
+      "title": "Canny Edge Detection (Background)"
+    }
+  },
+  "20": {
+    "inputs": {
+      "unet_name": "z-image-turbo-fp8-e4m3fn.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Z-Image-Turbo Model"
+    }
+  },
+  "30": {
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "lumina2"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP (Qwen 3 4B)"
+    }
+  },
+  "40": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "50": {
+    "inputs": {
+      "system_prompt": "superior",
+      "user_prompt": "A young Korean woman standing naturally in a modern coffee shop interior, warm ambient lighting, depth of field, photorealistic, 4K, cinematic composition",
+      "clip": ["30", 0]
+    },
+    "class_type": "CLIPTextEncodeLumina2",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "51": {
+    "inputs": {
+      "system_prompt": "superior",
+      "user_prompt": "blurry, low quality, deformed, bad anatomy, watermark, text, extra limbs",
+      "clip": ["30", 0]
+    },
+    "class_type": "CLIPTextEncodeLumina2",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "55": {
+    "inputs": {
+      "name": "Z-Image-Turbo-Fun-Controlnet-Union-2.1.safetensors"
+    },
+    "class_type": "ModelPatchLoader",
+    "_meta": {
+      "title": "Load ControlNet Union 2.1"
+    }
+  },
+  "56": {
+    "inputs": {
+      "model": ["20", 0],
+      "model_patch": ["55", 0],
+      "vae": ["40", 0],
+      "strength": 0.8,
+      "image": ["16", 0]
+    },
+    "class_type": "ZImageFunControlnet",
+    "_meta": {
+      "title": "Apply ControlNet (Structure from Background)"
+    }
+  },
+  "80": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "90": {
+    "inputs": {
+      "seed": 42,
+      "steps": 9,
+      "cfg": 4.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": ["50", 0],
+      "negative": ["51", 0],
+      "latent_image": ["80", 0],
+      "model": ["56", 0],
+      "denoise": 1.0
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "100": {
+    "inputs": {
+      "samples": ["90", 0],
+      "vae": ["40", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "101": {
+    "inputs": {
+      "filename_prefix": "SceneComposite",
+      "images": ["100", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

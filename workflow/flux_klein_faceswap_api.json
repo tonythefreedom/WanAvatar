@@ -57,7 +57,7 @@
   "21": {
     "inputs": {
       "lora_name": "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
-      "strength_model": 1.1,
+      "strength_model": 1.0,
       "model": ["20", 0]
     },
     "class_type": "LoraLoaderModelOnly",
@@ -87,7 +87,7 @@
   },
   "50": {
     "inputs": {
-      "text": "head_swap: start with Picture 1 as the base image, keeping its lighting, environment, and background. remove the head from Picture 1 completely and replace it with the head from Picture 2, strictly preserving the hair, eye color, nose structure of Picture 2. copy the direction of the eye, head rotation, micro expressions from Picture 1, high quality, sharp details, 4k.",
+      "text": "head_swap: start with Picture 1 as the base image, keeping its lighting, environment, and background. remove the head from Picture 1 completely and replace it with the head from Picture 2, strictly preserving the hair, eye color, nose structure, skin tone, face shape, ethnicity, and all facial features of Picture 2. the person in the result must look exactly like the person in Picture 2 with the same race and skin color. copy the direction of the eye, head rotation, micro expressions from Picture 1. do not alter any part of Picture 1 below the neckline. high quality, sharp details, 4k.",
       "clip": ["30", 0]
     },
     "class_type": "CLIPTextEncode",
@@ -97,7 +97,7 @@
   },
   "51": {
     "inputs": {
-      "text": "Noise, blurry",
+      "text": "Noise, blurry, wrong ethnicity, race change, skin color change, whitewashing, different person",
       "clip": ["30", 0]
     },
     "class_type": "CLIPTextEncode",
@@ -236,7 +236,7 @@
   },
   "94": {
     "inputs": {
-      "cfg": 2.5,
+      "cfg": 3.5,
       "model": ["21", 0],
       "positive": ["74", 0],
       "negative": ["75", 0]

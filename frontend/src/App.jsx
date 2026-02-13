@@ -1688,15 +1688,43 @@ function App() {
 
   // ─── Generic Workflow handlers ───
   const handleWfImageUpload = async (wfId, key, e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    updateWfPreview(wfId, key, URL.createObjectURL(file));
-    try {
-      const data = await uploadImage(file);
-      updateWfFilePath(wfId, key, data.path);
-    } catch (err) {
-      updateWfState(wfId, { status: `Upload error: ${err.message}` });
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    if (files.length === 1) {
+      // Single file: existing behavior
+      updateWfPreview(wfId, key, URL.createObjectURL(files[0]));
+      try {
+        const data = await uploadImage(files[0]);
+        updateWfFilePath(wfId, key, data.path);
+      } catch (err) {
+        updateWfState(wfId, { status: `Upload error: ${err.message}` });
+      }
+    } else {
+      // Multi-file: upload all, store paths in multiUploads
+      updateWfState(wfId, { status: `Uploading ${files.length} images...` });
+      try {
+        const uploaded = [];
+        for (const file of files) {
+          const data = await uploadImage(file);
+          uploaded.push({ path: data.path, url: data.url, name: file.name });
+        }
+        // Set first as current, store all in multiUploads
+        updateWfFilePath(wfId, key, uploaded[0].path);
+        updateWfPreview(wfId, key, uploaded[0].url);
+        setWorkflowStates(prev => ({
+          ...prev, [wfId]: {
+            ...prev[wfId],
+            multiUploads: { ...prev[wfId].multiUploads, [key]: uploaded },
+          },
+        }));
+        updateWfState(wfId, { status: `✅ ${uploaded.length} images uploaded` });
+      } catch (err) {
+        updateWfState(wfId, { status: `Upload error: ${err.message}` });
+      }
     }
+    // Reset input so same files can be re-selected
+    e.target.value = '';
   };
 
   const handleWfBgImageUpload = async (wfId, key, e) => {
@@ -1835,6 +1863,118 @@ function App() {
     if (filtered.length === 0) return;
     const pick = filtered[Math.floor(Math.random() * filtered.length)];
     handleWfFashionApply(wfId, pick.prompt);
+  };
+
+  const handleWfFashionMultiToggle = (wfId, style) => {
+    setWorkflowStates(prev => {
+      const wf = prev[wfId];
+      const current = wf.fashionMultiSelected || [];
+      const exists = current.some(s => s.id === style.id);
+      const updated = exists ? current.filter(s => s.id !== style.id) : [...current, style];
+      return {
+        ...prev, [wfId]: {
+          ...wf,
+          fashionMultiSelected: updated,
+          // Also apply last selected to prompt for preview
+          inputs: { ...wf.inputs, fashion_prompt: updated.length > 0 ? updated[updated.length - 1].prompt : wf.inputs.fashion_prompt },
+        },
+      };
+    });
+  };
+
+  const handleWfBatchQueue = (wfId) => {
+    const wfState = workflowStates[wfId];
+    const wfDef = workflows.find(w => w.id === wfId);
+    if (!wfDef || !wfState) return;
+    const selectedStyles = wfState.fashionMultiSelected || [];
+
+    // Check for multi-uploaded images
+    const imageInputKeys = wfDef.inputs.filter(i => i.type === 'image' && !i.avatar_gallery).map(i => i.key);
+    let multiImages = [];
+    for (const key of imageInputKeys) {
+      const uploads = wfState.multiUploads?.[key];
+      if (uploads && uploads.length > 1) {
+        multiImages = uploads.map(u => ({ key, path: u.path, url: u.url, name: u.name }));
+        break;
+      }
+    }
+
+    // Need at least one dimension to batch
+    if (selectedStyles.length === 0 && multiImages.length === 0) return;
+
+    // Validate required inputs (skip keys that will be overridden by multiUploads)
+    const multiUploadKeys = new Set(multiImages.map(m => m.key));
+    for (const inp of wfDef.inputs) {
+      if (inp.required && inp.key !== 'fashion_prompt' && !multiUploadKeys.has(inp.key)) {
+        const val = (inp.type === 'image' || inp.type === 'video')
+          ? wfState.filePaths[inp.key]
+          : wfState.inputs[inp.key];
+        if (!val) {
+          const msg = `Required: ${inp.label[lang] || inp.key}`;
+          updateWfState(wfId, { status: msg });
+          window.alert(msg);
+          return;
+        }
+      }
+    }
+
+    // Build combinations: images × styles
+    const imageSets = multiImages.length > 0 ? multiImages : [null];
+    const styleSets = selectedStyles.length > 0
+      ? selectedStyles
+      : [null]; // null = use current inputs as-is (no style override)
+
+    const newItems = [];
+    for (const img of imageSets) {
+      for (const style of styleSets) {
+        const imgLabel = img ? `[${img.name.replace(/\.[^.]+$/, '')}]` : '';
+        const styleLabel = style ? (style.category ? `${style.category} - ` : '') + (style.prompt.length > 40 ? style.prompt.slice(0, 40) + '...' : style.prompt) : '';
+        const label = [imgLabel, styleLabel].filter(Boolean).join(' ');
+
+        const itemInputs = { ...wfState.inputs };
+        if (style) itemInputs.fashion_prompt = style.prompt;
+
+        const item = {
+          id: Math.random().toString(36).slice(2) + Date.now().toString(36) + newItems.length,
+          label: label || `Job ${newItems.length + 1}`,
+          inputs: itemInputs,
+          filePaths: { ...wfState.filePaths },
+          previews: { ...wfState.previews },
+          gallerySelected: { ...wfState.gallerySelected },
+          ytTitle: '', ytDescription: '', ytHashtags: '',
+          status: 'pending', progress: 0, outputVideo: null, error: null,
+        };
+        if (img) {
+          item.filePaths = { ...item.filePaths, [img.key]: img.path };
+          item.previews = { ...item.previews, [img.key]: img.url };
+        }
+        newItems.push(item);
+      }
+    }
+
+    // Add all to queue
+    setWfQueue(prev => ({
+      ...prev,
+      [wfId]: {
+        ...prev[wfId],
+        items: [...(prev[wfId]?.items || []), ...newItems],
+        isProcessing: prev[wfId]?.isProcessing || false,
+      },
+    }));
+
+    const parts = [];
+    if (multiImages.length > 0) parts.push(`${multiImages.length} images`);
+    if (selectedStyles.length > 0) parts.push(`${selectedStyles.length} styles`);
+    const totalLabel = `✅ ${newItems.length} items (${parts.join(' × ')}) added`;
+
+    // Clear multi-selection
+    updateWfState(wfId, {
+      fashionMultiSelected: [],
+      status: totalLabel,
+    });
+
+    // Auto-start queue
+    setTimeout(() => handleWfQueueStart(wfId), 300);
   };
 
   const handleWfVideoUpload = async (wfId, key, e) => {
@@ -2480,29 +2620,43 @@ function App() {
             </div>
           );
         }
-        return (
-          <div className="card" key={inputDef.key}>
-            <h3>{label}</h3>
-            <div className="drop-zone" onClick={() => document.getElementById(inputIdBase)?.click()}
-              onDragOver={e => e.preventDefault()}
-              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById(inputIdBase); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); } }}>
-              {wfState.previews[inputDef.key]
-                ? <img src={wfState.previews[inputDef.key]} alt="" style={{ maxHeight: 200, objectFit: 'contain' }} />
-                : <p>{t('dropImageHere')}</p>}
-            </div>
-            <input id={inputIdBase} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleWfImageUpload(wfId, inputDef.key, e)} />
-            <button className="btn secondary" style={{ marginTop: 8 }} onClick={() => handleWfGalleryToggle(wfId, inputDef.key)}>
-              {t('wfSelectImages') || t('selectFromUploads')}
-            </button>
-            {wfState.galleryOpen[inputDef.key] && (
-              <div className="uploaded-images-grid" style={{ marginTop: 8 }}>
-                {(wfState.galleryImages || uploadedImages).map((img, i) => (
-                  <img key={i} src={img.url} alt="" className="uploaded-thumb" onClick={() => { updateWfFilePath(wfId, inputDef.key, img.path); updateWfPreview(wfId, inputDef.key, img.url); updateWfState(wfId, { galleryOpen: { ...wfState.galleryOpen, [inputDef.key]: false } }); }} />
-                ))}
+        {
+          const multiUploads = wfState.multiUploads?.[inputDef.key] || [];
+          return (
+            <div className="card" key={inputDef.key}>
+              <h3>{label}{multiUploads.length > 1 ? ` (${multiUploads.length} images)` : ''}</h3>
+              <div className="drop-zone" onClick={() => document.getElementById(inputIdBase)?.click()}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => {
+                  e.preventDefault();
+                  const files = e.dataTransfer.files;
+                  if (files.length > 0) {
+                    const inp = document.getElementById(inputIdBase);
+                    inp.files = files;
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                  }
+                }}>
+                {wfState.previews[inputDef.key]
+                  ? <img src={wfState.previews[inputDef.key]} alt="" style={{ maxHeight: inputDef.large_viewer ? 400 : 200, objectFit: 'contain' }} />
+                  : <p>{t('dropImageHere')}</p>}
               </div>
-            )}
-          </div>
-        );
+              <input id={inputIdBase} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => handleWfImageUpload(wfId, inputDef.key, e)} />
+              {multiUploads.length > 1 && (
+                <>
+                  <div className="multi-image-preview" style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+                    {multiUploads.map((img, i) => (
+                      <img key={i} src={img.url} alt={img.name} style={{ height: 50, objectFit: 'contain', borderRadius: 4, border: '1px solid var(--border)' }} />
+                    ))}
+                  </div>
+                  <button className="btn primary" style={{ width: '100%', marginTop: 8 }}
+                    onClick={() => handleWfBatchQueue(wfId)}>
+                    Add {multiUploads.length} to Queue & Start
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        }
       }
 
       case 'audio': {
@@ -2717,6 +2871,25 @@ function App() {
         );
       }
 
+      case 'select': {
+        const currentVal = wfState.inputs[inputDef.key] ?? inputDef.default ?? '';
+        const selectedOpt = (inputDef.options || []).find(o => o.value === currentVal);
+        const selectedLabel = selectedOpt ? (selectedOpt.label[lang] || selectedOpt.label.en || selectedOpt.value) : currentVal;
+        return (
+          <div className="card" key={inputDef.key}>
+            <h3>{label}: {selectedLabel}</h3>
+            <div className="form-group">
+              <select value={currentVal} onChange={e => updateWfInput(wfId, inputDef.key, e.target.value)}
+                style={{ width: '100%', padding: '8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 14 }}>
+                {(inputDef.options || []).map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label[lang] || opt.label.en || opt.value}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        );
+      }
+
       case 'toggle': {
         return (
           <div className="card" key={inputDef.key}>
@@ -2754,9 +2927,11 @@ function App() {
         const categories = wfState.fashionCategories || [];
         const filterCat = wfState.fashionFilterCat || 'All';
         const filtered = filterCat === 'All' ? styles : styles.filter(s => s.category === filterCat);
+        const multiSelected = wfState.fashionMultiSelected || [];
+        const multiCount = multiSelected.length;
         return (
           <div className="card" key={inputDef.key}>
-            <h3>{t('fashionStyle')}</h3>
+            <h3>{t('fashionStyle')}{multiCount > 0 ? ` (${multiCount} selected)` : ''}</h3>
             <div className="fashion-filter-row">
               <button className={`fashion-cat-btn${filterCat === 'All' ? ' active' : ''}`}
                 onClick={() => updateWfState(wfId, { fashionFilterCat: 'All' })}>
@@ -2771,15 +2946,31 @@ function App() {
               <button className="btn secondary fashion-random-btn" onClick={() => handleWfFashionRandom(wfId)}>
                 {t('fashionRandom')}
               </button>
+              {multiCount > 0 && (
+                <button className="btn secondary fashion-random-btn" onClick={() => updateWfState(wfId, { fashionMultiSelected: [] })}>
+                  Clear ({multiCount})
+                </button>
+              )}
             </div>
+            {multiCount > 0 && (
+              <button className="btn primary" style={{ width: '100%', marginBottom: 8 }}
+                onClick={() => handleWfBatchQueue(wfId)}>
+                🚀 Add {multiCount} to Queue & Start
+              </button>
+            )}
             <div className="fashion-grid">
-              {filtered.map(style => (
-                <div key={style.id} className={`fashion-item${wfState.inputs?.fashion_prompt === style.prompt ? ' selected' : ''}`}
-                  onClick={() => handleWfFashionApply(wfId, style.prompt)}>
-                  <span className="fashion-item-cat">{style.category}</span>
-                  <span className="fashion-item-text">{style.prompt}</span>
-                </div>
-              ))}
+              {filtered.map(style => {
+                const isMultiSelected = multiSelected.some(s => s.id === style.id);
+                const isSingleSelected = wfState.inputs?.fashion_prompt === style.prompt && !isMultiSelected;
+                return (
+                  <div key={style.id} className={`fashion-item${isMultiSelected ? ' selected' : isSingleSelected ? ' selected' : ''}`}
+                    onClick={() => handleWfFashionMultiToggle(wfId, style)}>
+                    {isMultiSelected && <span style={{ position: 'absolute', top: 2, right: 6, fontSize: 14 }}>✓</span>}
+                    <span className="fashion-item-cat">{style.category}</span>
+                    <span className="fashion-item-text">{style.prompt}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         );

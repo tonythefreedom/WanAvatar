@@ -151,20 +151,52 @@ wget -O weights/RealESRGAN_x2plus.pth \
 
 ## 실행
 
-### FastAPI 서버 (권장)
+### 백엔드 서버 (FastAPI)
 
 ```bash
+# 방법 1: start.sh (GPU 자동 감지)
 bash start.sh
+
+# 방법 2: 직접 실행
+source venv/bin/activate
+python server.py
 ```
 
 - 서버: `http://localhost:8000`
 - API 문서: `http://localhost:8000/docs`
-- 프론트엔드: `http://localhost:8000` (빌드된 React 앱)
+- 프론트엔드: `http://localhost:8000` (빌드된 React 앱을 백엔드가 서빙)
 
 `start.sh`는 GPU 수를 자동 감지하여:
 - **2+ GPU**: `torchrun --nproc_per_node=N server.py` (Sequence Parallel 활성화)
 - **1 GPU**: `python server.py` (싱글 프로세스)
 - **SP 비활성화**: `DISABLE_SP=1 bash start.sh`
+
+> **참고**: 서버 시작 시 S2V 모델 로딩에 약 3~5분 소요됩니다. `Uvicorn running on http://0.0.0.0:8000` 로그가 출력되면 접근 가능합니다.
+
+### 프론트엔드 (React)
+
+**프로덕션 모드**: 백엔드가 `frontend/dist/` 정적 파일을 자동 서빙하므로 별도 실행 불필요. 프론트엔드 변경 시:
+
+```bash
+cd frontend
+npm run build    # dist/ 에 빌드
+# 브라우저 새로고침하면 반영 (서버 재시작 불필요)
+```
+
+**개발 모드** (HMR 지원, Node.js 20.19+ 필요):
+
+```bash
+cd frontend
+npm install      # 최초 1회
+npm run dev      # Vite 개발 서버: http://localhost:5173
+```
+
+개발 모드에서는 Vite가 5173 포트에서 프론트엔드를 서빙하고, API 요청(`/api`, `/outputs`, `/uploads`, `/avatars`, `/backgrounds`)을 백엔드(8000)로 프록시합니다. 코드 수정 시 즉시 반영(Hot Module Replacement).
+
+| 모드 | 접근 URL | 프론트엔드 | 백엔드 | 서버 재시작 필요 |
+|------|---------|-----------|--------|--------------|
+| 프로덕션 | `http://localhost:8000` | 백엔드가 dist/ 서빙 | 동일 프로세스 | 백엔드 변경 시만 |
+| 개발 | `http://localhost:5173` | Vite HMR | 별도 프로세스(8000) | 백엔드 변경 시만 |
 
 ### Gradio 웹 인터페이스
 

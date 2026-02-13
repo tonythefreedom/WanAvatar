@@ -190,23 +190,31 @@ WORKFLOW_REGISTRY = {
         "api_json": "flux_klein_faceswap_api.json",
         "output_type": "image",
         "inputs": [
-            {"key": "avatar_body", "type": "image", "node_id": "10", "field": "inputs.image",
+            {"key": "avatar_face", "type": "image", "node_id": "11", "field": "inputs.image",
              "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
-             "label": {"en": "Avatar (Body to Keep)", "ko": "아바타 (유지할 몸)", "zh": "头像（保留身体）"},
-             "description": {"en": "Avatar image whose body/clothing/background to keep", "ko": "몸/의상/배경을 유지할 아바타 이미지", "zh": "保留身体/服装/背景的头像图片"}},
-            {"key": "face_source", "type": "image", "node_id": "11", "field": "inputs.image",
-             "upload_to_comfyui": True, "required": True,
-             "label": {"en": "Style Source", "ko": "스타일 소스", "zh": "风格来源"},
-             "description": {"en": "Style/face to swap onto the avatar body", "ko": "아바타 몸에 교체할 스타일/얼굴", "zh": "要换到头像身体上的风格/面部"}},
+             "label": {"en": "Avatar (Face to Keep)", "ko": "아바타 (유지할 얼굴)", "zh": "头像（保留面部）"},
+             "description": {"en": "Avatar whose face/head to preserve", "ko": "얼굴/머리를 유지할 아바타", "zh": "保留面部/头部的头像"}},
+            {"key": "style_source", "type": "image", "node_id": "10", "field": "inputs.image",
+             "upload_to_comfyui": True, "required": True, "large_viewer": True,
+             "label": {"en": "Style Source (Body/Clothing)", "ko": "스타일 소스 (몸/의상)", "zh": "风格来源（身体/服装）"},
+             "description": {"en": "Image whose body/clothing/background to use", "ko": "몸/의상/배경을 사용할 이미지", "zh": "使用其身体/服装/背景的图片"}},
+            {"key": "ethnicity", "type": "select", "default": "korean",
+             "options": [
+                 {"value": "korean", "label": {"en": "Korean", "ko": "한국인", "zh": "韩国人"}},
+                 {"value": "asian", "label": {"en": "Asian", "ko": "아시아인", "zh": "亚洲人"}},
+                 {"value": "western", "label": {"en": "Western", "ko": "서양인", "zh": "西方人"}},
+                 {"value": "auto", "label": {"en": "Auto (from prompt)", "ko": "자동 (프롬프트)", "zh": "自动（从提示）"}},
+             ],
+             "label": {"en": "Ethnicity", "ko": "인종", "zh": "种族"}},
             {"key": "prompt", "type": "text", "node_id": "50", "field": "inputs.text",
-             "default": "head_swap: start with Picture 1 as the base image, keeping its lighting, environment, and background. remove the head from Picture 1 completely and replace it with the head from Picture 2, strictly preserving the hair, eye color, nose structure of Picture 2. copy the direction of the eye, head rotation, micro expressions from Picture 1, high quality, sharp details, 4k.",
+             "default": "head_swap: start with Picture 1 as the base image, keeping its lighting, environment, and background. remove the head from Picture 1 completely and replace it with the head from Picture 2, strictly preserving the hair, eye color, nose structure, skin tone, face shape, ethnicity, and all facial features of Picture 2. the person in the result must look exactly like the person in Picture 2 with the same race and skin color. copy the direction of the eye, head rotation, micro expressions from Picture 1. do not alter any part of Picture 1 below the neckline. high quality, sharp details, 4k.",
              "rows": 4,
              "label": {"en": "Swap Instruction", "ko": "교체 지시", "zh": "换脸指令"}},
             {"key": "lora_strength", "type": "number", "node_id": "21", "field": "inputs.strength_model",
-             "default": 1.1, "min": 0.1, "max": 2.0, "step": 0.05,
+             "default": 1.0, "min": 0.1, "max": 2.0, "step": 0.05,
              "label": {"en": "LoRA Strength", "ko": "LoRA 강도", "zh": "LoRA 强度"}},
             {"key": "cfg", "type": "number", "node_id": "94", "field": "inputs.cfg",
-             "default": 2.5, "min": 1.0, "max": 10.0, "step": 0.5,
+             "default": 3.5, "min": 1.0, "max": 10.0, "step": 0.5,
              "label": {"en": "CFG Scale", "ko": "CFG 스케일", "zh": "CFG 比例"}},
             {"key": "steps", "type": "number", "node_id": "90", "field": "inputs.steps",
              "default": 20, "min": 4, "max": 50, "step": 1,
@@ -2013,9 +2021,11 @@ def avatar_prepare_task(task_id: str, source_path: str, group: str, user_id: int
         logging.info(f"Avatar prepare Step 1 complete: {step1_output}")
 
         # ── Step 2: BFS Face Swap to restore original face ──
-        generation_status[task_id].update({"progress": 0.50, "message": "Step 2: Uploading for face swap..."})
+        generation_status[task_id].update({"progress": 0.50, "message": "Step 2: Cropping face & uploading..."})
         step1_comfyui = upload_to_comfyui(step1_abs)
-        original_comfyui = upload_to_comfyui(source_path)
+        # Crop original image to head-only so clothing doesn't leak into face swap
+        cropped_face_path = crop_face_head(source_path)
+        original_comfyui = upload_to_comfyui(cropped_face_path)
 
         faceswap_path = WORKFLOW_DIR / "flux_klein_faceswap_api.json"
         with open(faceswap_path) as f:
@@ -2574,6 +2584,64 @@ def ensure_comfyui_running():
     raise Exception("ComfyUI failed to start within 3 minutes")
 
 
+def crop_face_head(image_path: str, padding_ratio: float = 1.8) -> str:
+    """Crop image to head/face area to avoid clothing leaking into face swap.
+
+    Uses mediapipe FaceDetector (tasks API) for accurate detection, then crops
+    with generous padding to include hair and neck but exclude torso/clothing.
+    Falls back to upper-half crop if no face is detected.
+    Returns path to the cropped temporary image.
+    """
+    import mediapipe as mp
+    import cv2
+    import tempfile
+
+    img = cv2.imread(image_path)
+    if img is None:
+        logging.warning(f"crop_face_head: could not read image {image_path}, returning as-is")
+        return image_path
+
+    h, w = img.shape[:2]
+
+    # Use mediapipe tasks API for face detection
+    model_path = str(Path(__file__).parent / "models" / "blaze_face_short_range.tflite")
+    options = mp.tasks.vision.FaceDetectorOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+        min_detection_confidence=0.5,
+    )
+    mp_image = mp.Image.create_from_file(image_path)
+
+    with mp.tasks.vision.FaceDetector.create_from_options(options) as detector:
+        result = detector.detect(mp_image)
+
+    if result.detections:
+        det = result.detections[0]
+        bb = det.bounding_box
+        fx, fy, fw, fh = bb.origin_x, bb.origin_y, bb.width, bb.height
+
+        # Expand with padding_ratio (1.8x = generous head+hair+neck)
+        cx, cy = fx + fw // 2, fy + fh // 2
+        half_size = int(max(fw, fh) * padding_ratio / 2)
+
+        x1 = max(0, cx - half_size)
+        y1 = max(0, cy - int(half_size * 0.7))  # less padding above (forehead)
+        x2 = min(w, cx + half_size)
+        y2 = min(h, cy + int(half_size * 1.3))   # more padding below (neck)
+        logging.info(f"crop_face_head: face detected at ({fx},{fy},{fw},{fh}) score={det.categories[0].score:.2f}, crop [{x1}:{x2}, {y1}:{y2}] from {w}x{h}")
+    else:
+        # Fallback: upper 50% of image (likely head area for full-body shots)
+        x1, y1, x2, y2 = 0, 0, w, h // 2
+        logging.warning(f"crop_face_head: no face detected, using upper half")
+
+    cropped = img[y1:y2, x1:x2]
+    suffix = os.path.splitext(image_path)[1] or ".png"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False, dir=str(OUTPUT_DIR))
+    cv2.imwrite(tmp.name, cropped)
+    tmp.close()
+    logging.info(f"crop_face_head: saved cropped face to {tmp.name} ({x2-x1}x{y2-y1})")
+    return tmp.name
+
+
 def upload_to_comfyui(local_path: str, subfolder: str = "") -> str:
     """Upload a file to ComfyUI's input directory."""
     filename = os.path.basename(local_path)
@@ -2831,6 +2899,10 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
         if isinstance(node_id, str) and node_id.startswith("__"):
             continue
 
+        # Skip inputs without node_id (metadata-only, handled in post-processing)
+        if not node_id and "node_ids" not in input_def:
+            continue
+
         if input_def["type"] == "select_buttons":
             option = next((o for o in input_def["options"] if o["value"] == value), None)
             if option and "params" in option:
@@ -2933,8 +3005,34 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             else:
                 logging.info(f"Fashion change: reference mode (no Try-On LoRA found): {clothing_ref}")
 
-    # --- Face Swap / Avatar Prepare: seed randomization ---
+    # --- Face Swap: ethnicity injection + seed randomization ---
     if workflow_id == "face_swap":
+        ethnicity = user_inputs.get("ethnicity", "korean")
+        if ethnicity and ethnicity != "auto":
+            # Korean-specific: ulzzang style (Korean beauty standard)
+            eth_prompts = {
+                "korean": {
+                    "positive": " The person in Picture 2 is Korean. Preserve Korean ulzzang facial features: soft jawline, natural double eyelids, warm ivory skin tone, small nose bridge, full lips. The result must look like a real Korean person, not generic Asian.",
+                    "negative": ", western features, caucasian features, pale white skin, european face, japanese features, chinese features, southeast asian features, sharp angular jaw",
+                },
+                "asian": {
+                    "positive": " The person in Picture 2 is East Asian. The result must clearly show East Asian facial features, skin tone, and appearance.",
+                    "negative": ", western features, caucasian features, pale white skin, european face",
+                },
+                "western": {
+                    "positive": " The person in Picture 2 is Western/Caucasian. The result must clearly show Western facial features, skin tone, and appearance.",
+                    "negative": ", asian features, east asian features, korean features",
+                },
+            }
+            eth = eth_prompts.get(ethnicity, eth_prompts["korean"])
+
+            if "50" in workflow:
+                workflow["50"]["inputs"]["text"] += eth["positive"]
+            if "51" in workflow:
+                workflow["51"]["inputs"]["text"] += eth["negative"]
+
+            logging.info(f"Face swap: ethnicity={ethnicity} ({eth_label}) injected into prompts")
+
         seed_val = workflow.get("92", {}).get("inputs", {}).get("value", -1)
         if seed_val == -1:
             workflow["92"]["inputs"]["value"] = random.randint(0, 2**53)
@@ -3142,6 +3240,11 @@ def workflow_generate_task(task_id: str, params: dict):
         ensure_comfyui_running()
 
         # Step 3: Upload files to ComfyUI as needed
+        # For face_swap: crop avatar_face to head-only to prevent clothing bleed
+        if workflow_id == "face_swap" and user_inputs.get("avatar_face"):
+            generation_status[task_id].update({"progress": 0.07, "message": "Cropping face from avatar..."})
+            user_inputs["avatar_face"] = crop_face_head(user_inputs["avatar_face"])
+
         for input_def in wf_config["inputs"]:
             key = input_def["key"]
             if input_def.get("upload_to_comfyui") and key in user_inputs and user_inputs[key]:
@@ -3150,7 +3253,10 @@ def workflow_generate_task(task_id: str, params: dict):
 
         # Step 4: Prepare workflow
         generation_status[task_id].update({"progress": 0.12, "message": "Preparing workflow..."})
+        logging.info(f"[{workflow_id}] user_inputs before prepare: { {k:v for k,v in user_inputs.items() if isinstance(v, str) and len(v) < 200} }")
         workflow = prepare_comfyui_workflow(workflow_id, user_inputs)
+        if workflow_id == "face_swap":
+            logging.info(f"[face_swap] node10(Picture1/body)={workflow.get('10',{}).get('inputs',{}).get('image','?')}  node11(Picture2/face)={workflow.get('11',{}).get('inputs',{}).get('image','?')}")
 
         # Step 5: Submit workflow
         generation_status[task_id].update({"progress": 0.15, "message": "Submitting workflow..."})

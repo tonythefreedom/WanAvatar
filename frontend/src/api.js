@@ -211,6 +211,11 @@ export const listBackgrounds = async () => {
   return response.data;
 };
 
+export const deleteBackground = async (filename) => {
+  const response = await api.delete(`/backgrounds/${filename}`);
+  return response.data;
+};
+
 export const listAvatarGroups = async () => {
   const response = await api.get('/avatars');
   return response.data;

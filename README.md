@@ -749,6 +749,40 @@ output_lora_14B/checkpoint-50/
 
 ## Changelog
 
+### 2026-02-14: Dance Shorts 독립 메뉴 + UI 개편 + 메뉴 구조 변경
+
+**Dance Shorts 독립 메뉴 (`App.jsx`, `App.css`, `api.js`, `server.py`):**
+
+- **사이드바 독립 메뉴**: Video Studio Step 3의 하위 탭에서 사이드바 최상위 메뉴로 분리
+- **듀얼 패널 레이아웃**: 좌측(설정) + 우측(YouTube 설정 & 출력)
+- **아바타 갤러리 연동**: 등록된 아바타 그룹에서 캐릭터 이미지 직접 선택 + 업로드
+- **스테이지 갤러리**: 배경 이미지 선택/업로드/삭제 (기존 `listBackgrounds`/`uploadBackground` API 재사용)
+- **YouTube Shorts 설정**: 채널 URL, 채널명 (기본: `Dancing Yuna`), Title/Description/Hashtags 기본값 자동 생성
+  - Title 기본: `{아바타이름} #shorts - YYYY:MM:DD:HH:MM`
+  - Description 기본: `{아바타이름} {채널명} 많이 사랑해 주세요. 구독 좋아요 부탁드립니다.`
+  - Hashtags 기본: `#{채널명} #dancecover`
+- **생성 완료 후 YouTube 업로드**: 빈 필드는 기본값으로 자동 채움
+
+**메뉴 구조 변경:**
+
+| 변경 전 | 변경 후 | 비고 |
+|---------|---------|------|
+| Video Studio (studio) | **삭제** | FFLF, InfiniTalk, 타임라인 등 전체 제거 |
+| Workflow (workflow) | **Video Studio** (workflow) | 메뉴명 변경, 아이콘 변경 |
+| — | **Dance Shorts** (danceshorts) | 신규 독립 메뉴 |
+
+- 사이드바 순서: Dance Shorts → Image Gen → Video Gen → Video Studio → Gallery → Admin
+
+**Backend 추가 (`server.py`):**
+
+- `DELETE /api/backgrounds/{filename}`: 배경 이미지 삭제 (파일 + DB)
+- `sync_background_files()` 양방향 동기화: 파일 추가/삭제 모두 처리
+- `/api/backgrounds` 호출 시 자동 동기화
+
+**Frontend API 추가 (`api.js`):**
+
+- `deleteBackground(filename)`: 배경 삭제 API
+
 ### 2026-02-14: LoRA 머지 GGUF + GGUF 로딩 버그 수정 + 배경 자동 동기화 + 갤러리 업로드
 
 **5 LoRA 머지 Q4_K_M GGUF 모델 (`workflow/Change_character_V1.1_api.json`, `server.py`):**

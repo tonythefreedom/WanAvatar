@@ -634,7 +634,7 @@ async def migrate_existing_files():
 
 
 async def sync_background_files():
-    """Ensure all background images on disk are registered in the DB."""
+    """Sync background images: add new files to DB, remove DB records for deleted files."""
     IMG_EXT = {".jpg", ".jpeg", ".png", ".webp"}
     async with aiosqlite.connect(str(DB_PATH)) as db:
         cursor = await db.execute("SELECT id FROM users WHERE email = ?", (SUPER_ADMIN_EMAIL,))
@@ -645,17 +645,23 @@ async def sync_background_files():
         cursor = await db.execute(
             "SELECT filename FROM user_files WHERE file_type = 'background'")
         existing = {row[0] for row in await cursor.fetchall()}
+        disk_files = {f.name for f in BACKGROUNDS_DIR.iterdir()
+                      if f.is_file() and f.suffix.lower() in IMG_EXT}
         added = 0
-        for f in BACKGROUNDS_DIR.iterdir():
-            if f.is_file() and f.suffix.lower() in IMG_EXT and f.name not in existing:
-                await db.execute(
-                    "INSERT INTO user_files (user_id, file_type, filename, file_path, original_name) VALUES (?,?,?,?,?)",
-                    (admin_id, "background", f.name, str(f), f.name),
-                )
-                added += 1
-        if added:
+        for name in disk_files - existing:
+            await db.execute(
+                "INSERT INTO user_files (user_id, file_type, filename, file_path, original_name) VALUES (?,?,?,?,?)",
+                (admin_id, "background", name, str(BACKGROUNDS_DIR / name), name),
+            )
+            added += 1
+        removed = 0
+        for name in existing - disk_files:
+            await db.execute(
+                "DELETE FROM user_files WHERE file_type = 'background' AND filename = ?", (name,))
+            removed += 1
+        if added or removed:
             await db.commit()
-            logging.info(f"Synced {added} new background file(s) to DB")
+            logging.info(f"Background sync: +{added} -{removed}")
 
 
 @app.on_event("startup")
@@ -1935,6 +1941,7 @@ async def upload_to_gallery(file: UploadFile = File(...), user=Depends(get_curre
 @app.get("/api/backgrounds")
 async def list_backgrounds(user=Depends(get_current_user)):
     """List background images owned by current user."""
+    await sync_background_files()
     async with aiosqlite.connect(str(DB_PATH)) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
@@ -1951,6 +1958,27 @@ async def list_backgrounds(user=Depends(get_current_user)):
                 "path": r["file_path"], "width": meta.get("width", 0), "height": meta.get("height", 0),
             })
     return {"backgrounds": images, "total": len(images)}
+
+
+@app.delete("/api/backgrounds/{filename}")
+async def delete_background(filename: str, user=Depends(get_current_user)):
+    """Delete a background/stage image."""
+    filepath = BACKGROUNDS_DIR / filename
+    if filepath.resolve().parent != BACKGROUNDS_DIR.resolve():
+        raise HTTPException(403, "Access denied")
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute(
+            "SELECT id FROM user_files WHERE user_id = ? AND file_type = 'background' AND filename = ?",
+            (user["id"], filename))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Background not found")
+        if filepath.exists():
+            filepath.unlink()
+        await db.execute("DELETE FROM user_files WHERE id = ?", (row[0],))
+        await db.commit()
+    logging.info(f"Deleted background: {filename} (user={user['id']})")
+    return {"ok": True, "deleted": filename}
 
 
 @app.get("/api/avatars")
@@ -2706,6 +2734,7 @@ class WorkflowGenerateRequest(BaseModel):
     yt_title: str = ""
     yt_description: str = ""
     yt_hashtags: str = ""
+    yt_upload: bool = False  # explicit flag to enable YouTube upload
 
 
 class YouTubeDownloadRequest(BaseModel):
@@ -3657,9 +3686,10 @@ def workflow_generate_task(task_id: str, params: dict):
             logging.info(f"Audio merged from reference video: {ref_video_original}")
 
         # Step 9: Post-processing — YouTube upload + Slack notification
-        # Skip for image-only workflows (fashion_change)
+        # Only upload if yt_upload flag is explicitly True
         output_type = wf_config.get("output_type", "video")
-        if output_type == "video" and os.path.exists(abs_output):
+        yt_upload_enabled = params.get("yt_upload", False)
+        if output_type == "video" and os.path.exists(abs_output) and yt_upload_enabled:
             generation_status[task_id].update({"progress": 0.97, "message": "Uploading to YouTube..."})
 
             yt_title = params.get("yt_title", "").strip()

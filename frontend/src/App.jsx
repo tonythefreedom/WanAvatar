@@ -40,6 +40,7 @@ import {
   adminActivateUser,
   adminDeleteUser,
   uploadToYouTube,
+  deleteBackground,
 } from './api';
 import './App.css';
 
@@ -109,6 +110,11 @@ const translations = {
     loraCopyToClipboard: 'Copy',
     loraRec: 'Rec',
     loraClickToReset: 'Click to reset to recommended value',
+    // Dance Shorts
+    menuDanceShorts: 'Dance Shorts',
+    dsCharImage: 'Character Image',
+    dsSelectAvatar: 'Select Avatar',
+    dsNeedImage: 'Please select or upload a character image',
     // Image Gen
     menuImageGen: 'Image Gen',
     imgGenTitle: 'Image Generation (FLUX.2-klein-9B)',
@@ -137,7 +143,7 @@ const translations = {
     outputTypeImage: 'Image',
     outputTypeVideo: 'Video (first frame)',
     // Workflow (generic)
-    menuWorkflow: 'Workflow',
+    menuWorkflow: 'Video Studio',
     wfGenerateBtn: 'Run Workflow',
     wfGenerating: 'Running...',
     wfCancelBtn: 'Cancel',
@@ -199,7 +205,7 @@ const translations = {
     studioSeed: 'Seed (same = consistent character)',
     studioFflfMode: 'FFLF Video',
     studioInfiniTalkMode: 'InfiniTalk',
-    studioChangeCharMode: 'Change Character',
+    studioChangeCharMode: 'Dance Shorts',
     studioRefVideo: 'Reference Video',
     studioSceneDesc: 'Scene Description',
     studioAspectRatio: 'Aspect Ratio',
@@ -227,6 +233,15 @@ const translations = {
     studioNeedImage: 'Generate a character image first',
     studioNeedAudio: 'Upload or generate narration audio first',
     studioNeedRefVideo: 'Upload a reference video first',
+    studioAvatarName: 'Avatar Name',
+    studioStageSelect: 'Select Stage',
+    studioStageUpload: 'Upload Stage',
+    studioStageDeleteConfirm: 'Delete this stage?',
+    studioYtChannel: 'YouTube Channel URL',
+    studioYtChannelName: 'Channel Name',
+    studioYtSettings: 'YouTube Shorts Settings',
+    studioYtUploadBtn: 'Upload to YouTube',
+    studioYtUploading: 'Uploading to YouTube...',
     studioTotalFrames: 'Total Frames',
     studioEstDuration: 'Est. Duration',
     // Auth
@@ -318,6 +333,11 @@ const translations = {
     loraCopyToClipboard: '복사',
     loraRec: '추천',
     loraClickToReset: '클릭하면 추천값으로 리셋',
+    // Dance Shorts
+    menuDanceShorts: '댄스 쇼츠',
+    dsCharImage: '캐릭터 이미지',
+    dsSelectAvatar: '아바타 선택',
+    dsNeedImage: '캐릭터 이미지를 선택하거나 업로드해 주세요',
     // Image Gen
     menuImageGen: '이미지 생성',
     imgGenTitle: '이미지 생성 (FLUX.2-klein-9B)',
@@ -346,7 +366,7 @@ const translations = {
     outputTypeImage: '이미지',
     outputTypeVideo: '비디오 (첫 프레임)',
     // Workflow (generic)
-    menuWorkflow: '워크플로우',
+    menuWorkflow: '비디오 스튜디오',
     wfGenerateBtn: '워크플로우 실행',
     wfGenerating: '실행 중...',
     wfCancelBtn: '취소',
@@ -408,7 +428,7 @@ const translations = {
     studioSeed: '시드 (동일 = 일관된 캐릭터)',
     studioFflfMode: 'FFLF 비디오',
     studioInfiniTalkMode: '인피니톡',
-    studioChangeCharMode: '캐릭터 교체',
+    studioChangeCharMode: '댄스 쇼츠',
     studioRefVideo: '참조 비디오',
     studioSceneDesc: '장면 설명',
     studioAspectRatio: '비율',
@@ -436,6 +456,15 @@ const translations = {
     studioNeedImage: '먼저 캐릭터 이미지를 생성하세요',
     studioNeedAudio: '먼저 나레이션 오디오를 업로드하거나 생성하세요',
     studioNeedRefVideo: '참조 비디오를 업로드하세요',
+    studioAvatarName: '아바타 이름',
+    studioStageSelect: '스테이지 선택',
+    studioStageUpload: '스테이지 업로드',
+    studioStageDeleteConfirm: '이 스테이지를 삭제하시겠습니까?',
+    studioYtChannel: 'YouTube 채널 URL',
+    studioYtChannelName: '채널명',
+    studioYtSettings: 'YouTube Shorts 설정',
+    studioYtUploadBtn: 'YouTube 업로드',
+    studioYtUploading: 'YouTube 업로드 중...',
     studioTotalFrames: '총 프레임',
     studioEstDuration: '예상 시간',
     // Auth
@@ -527,6 +556,11 @@ const translations = {
     loraCopyToClipboard: '复制',
     loraRec: '推荐',
     loraClickToReset: '点击重置为推荐值',
+    // Dance Shorts
+    menuDanceShorts: '舞蹈短片',
+    dsCharImage: '角色图片',
+    dsSelectAvatar: '选择角色',
+    dsNeedImage: '请选择或上传角色图片',
     // Image Gen
     menuImageGen: '图像生成',
     imgGenTitle: '图像生成 (FLUX.2-klein-9B)',
@@ -555,7 +589,7 @@ const translations = {
     outputTypeImage: '图片',
     outputTypeVideo: '视频（首帧）',
     // Workflow
-    menuWorkflow: '工作流',
+    menuWorkflow: '视频工作室',
     wfGenerateBtn: '运行工作流',
     wfGenerating: '运行中...',
     wfCancelBtn: '取消',
@@ -617,7 +651,7 @@ const translations = {
     studioSeed: '种子 (相同=角色一致)',
     studioFflfMode: 'FFLF视频',
     studioInfiniTalkMode: 'InfiniTalk',
-    studioChangeCharMode: '角色替换',
+    studioChangeCharMode: '舞蹈短片',
     studioRefVideo: '参考视频',
     studioSceneDesc: '场景描述',
     studioAspectRatio: '比例',
@@ -645,6 +679,15 @@ const translations = {
     studioNeedImage: '请先生成角色图片',
     studioNeedAudio: '请先上传或生成旁白音频',
     studioNeedRefVideo: '请上传参考视频',
+    studioAvatarName: '角色名称',
+    studioStageSelect: '选择舞台',
+    studioStageUpload: '上传舞台',
+    studioStageDeleteConfirm: '确定删除此舞台？',
+    studioYtChannel: 'YouTube频道链接',
+    studioYtChannelName: '频道名称',
+    studioYtSettings: 'YouTube Shorts设置',
+    studioYtUploadBtn: '上传到YouTube',
+    studioYtUploading: 'YouTube上传中...',
     studioTotalFrames: '总帧数',
     studioEstDuration: '预计时长',
     // Auth
@@ -710,7 +753,7 @@ const getActiveTasks = () => {
 
 function App() {
   const [lang, setLang] = useState('en');
-  const [activeMenu, setActiveMenu] = useState('studio');
+  const [activeMenu, setActiveMenu] = useState('danceshorts');
   const [config, setConfig] = useState(null);
 
   // Auth state
@@ -879,13 +922,36 @@ function App() {
   const [studioTtsGenerating, setStudioTtsGenerating] = useState(false);
   const [studioAudioSource, setStudioAudioSource] = useState('tts');
 
-  // Change Character
+  // Dance Shorts (Change Character)
   const [studioRefVideoPath, setStudioRefVideoPath] = useState('');
   const [studioRefVideoPreview, setStudioRefVideoPreview] = useState(null);
-  const [studioRefVideoMode, setStudioRefVideoMode] = useState('upload');
+  const [studioRefVideoMode, setStudioRefVideoMode] = useState('youtube');
   const [studioYoutubeUrl, setStudioYoutubeUrl] = useState('');
   const [studioYoutubeDownloading, setStudioYoutubeDownloading] = useState(false);
   const [studioScenePrompt, setStudioScenePrompt] = useState('The character is dancing in the room');
+
+  // Dance Shorts - Character Image (direct upload or avatar gallery)
+  const [dsCharImagePath, setDsCharImagePath] = useState('');
+  const [dsCharImagePreview, setDsCharImagePreview] = useState(null);
+  const [dsAvatarGroups, setDsAvatarGroups] = useState([]);
+  const [dsAvatarSelectedGroup, setDsAvatarSelectedGroup] = useState('');
+  const [dsAvatarImages, setDsAvatarImages] = useState([]);
+
+  // Dance Shorts - Avatar & Stage
+  const [studioAvatarName, setStudioAvatarName] = useState('');
+  const [studioStages, setStudioStages] = useState([]);
+  const [studioSelectedStage, setStudioSelectedStage] = useState(null);
+
+  // Dance Shorts - YouTube Settings
+  const DEFAULT_YT_CHANNEL = 'https://www.youtube.com/channel/UCYcITGLPC3qv9txSM4GB70w';
+  const [studioYtChannel, setStudioYtChannel] = useState(DEFAULT_YT_CHANNEL);
+  const [studioYtChannelName, setStudioYtChannelName] = useState('');
+  const [studioYtTitle, setStudioYtTitle] = useState('');
+  const [studioYtDescription, setStudioYtDescription] = useState('');
+  const [studioYtHashtags, setStudioYtHashtags] = useState('');
+  const [studioYtUploadStatus, setStudioYtUploadStatus] = useState(null);
+  const [studioYtUploadResult, setStudioYtUploadResult] = useState(null);
+  const [studioCurrentTaskId, setStudioCurrentTaskId] = useState(null);
 
   // Gallery picker
   const [studioGalleryOpen, setStudioGalleryOpen] = useState(false);
@@ -1307,29 +1373,194 @@ function App() {
     }
   };
 
-  // Studio Change Character generation
+  // Dance Shorts generation
   const studioHandleChangeCharacter = async () => {
-    const charImage = studioTimeline[0];
-    if (!charImage) return alert(t('studioNeedImage'));
+    if (!dsCharImagePath) return alert(t('dsNeedImage'));
     if (!studioRefVideoPath) return alert(t('studioNeedRefVideo'));
     setStudioIsGenerating(true);
     setStudioProgress(0);
-    setStudioStatus('Starting Change Character...');
+    setStudioStatus('Starting Dance Shorts...');
+    setStudioYtUploadStatus(null);
+    setStudioYtUploadResult(null);
+    const defaults = getStudioYtDefaults();
     try {
       const { task_id } = await startWorkflowGeneration({
         workflow_id: 'change_character',
         inputs: {
-          ref_image: charImage.imagePath,
+          ref_image: dsCharImagePath,
           ref_video: studioRefVideoPath,
           prompt: studioScenePrompt,
           aspect_ratio: studioFluxAspectRatio,
+          bg_image: studioSelectedStage?.path || '',
         },
+        yt_title: studioYtTitle.trim() || defaults.title,
+        yt_description: studioYtDescription.trim() || defaults.description,
+        yt_hashtags: studioYtHashtags.trim() || defaults.hashtags,
+        yt_upload: true,
       });
+      setStudioCurrentTaskId(task_id);
       pollStudioTask(task_id);
     } catch (err) {
       setStudioIsGenerating(false);
       setStudioStatus(`Error: ${err.message}`);
     }
+  };
+
+  // Dance Shorts cancel
+  const handleDsCancel = async () => {
+    if (!studioCurrentTaskId) return;
+    try { await cancelGeneration(studioCurrentTaskId); } catch {}
+    setStudioIsGenerating(false);
+    setStudioStatus(t('wfCancelled'));
+    setStudioCurrentTaskId(null);
+  };
+
+  // Dance Shorts - Add to Queue
+  const handleDsQueueAdd = () => {
+    if (!dsCharImagePath) return alert(t('dsNeedImage'));
+    if (!studioRefVideoPath) return alert(t('studioNeedRefVideo'));
+    const defaults = getStudioYtDefaults();
+    const ytTitle = studioYtTitle.trim() || defaults.title;
+    const ytDesc = studioYtDescription.trim() || defaults.description;
+    const ytHash = studioYtHashtags.trim() || defaults.hashtags;
+    const item = {
+      id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+      label: `Job ${(wfQueue['change_character']?.items?.length || 0) + 1}`,
+      inputs: {
+        ref_image: dsCharImagePath,
+        ref_video: studioRefVideoPath,
+        prompt: studioScenePrompt,
+        aspect_ratio: studioFluxAspectRatio,
+        bg_image: studioSelectedStage?.path || '',
+      },
+      filePaths: {},
+      previews: {
+        ref_image: dsCharImagePreview,
+        ref_video: studioRefVideoPreview,
+        bg_image: studioSelectedStage?.url || null,
+      },
+      gallerySelected: {},
+      ytTitle,
+      ytDescription: ytDesc,
+      ytHashtags: ytHash,
+      status: 'pending',
+      progress: 0,
+      outputVideo: null,
+      error: null,
+    };
+    setWfQueue(prev => ({
+      ...prev,
+      change_character: {
+        ...prev.change_character,
+        items: [...(prev.change_character?.items || []), item],
+        isProcessing: prev.change_character?.isProcessing || false,
+      },
+    }));
+    setStudioStatus(`\u2705 Added: ${item.label}`);
+  };
+
+  // Dance Shorts - Stage management
+  const loadStudioStages = useCallback(async () => {
+    try {
+      const data = await listBackgrounds();
+      setStudioStages(data.backgrounds || []);
+    } catch (err) { console.error('Failed to load stages:', err); }
+  }, []);
+
+  const handleStudioStageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      await uploadBackground(file);
+      await loadStudioStages();
+    } catch (err) { alert(`Upload failed: ${err.message}`); }
+    e.target.value = '';
+  };
+
+  const handleStudioStageDelete = async (filename) => {
+    if (!window.confirm(t('studioStageDeleteConfirm'))) return;
+    try {
+      await deleteBackground(filename);
+      setStudioStages(prev => prev.filter(s => s.filename !== filename));
+      if (studioSelectedStage?.filename === filename) {
+        setStudioSelectedStage(null);
+      }
+    } catch (err) { alert(`Delete failed: ${err.message}`); }
+  };
+
+  // Dance Shorts - YouTube defaults & upload
+  const getStudioYtDefaults = useCallback(() => {
+    const name = studioAvatarName || 'Avatar';
+    const chName = studioYtChannelName || `Dancing ${name}`;
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}:${String(now.getMonth() + 1).padStart(2, '0')}:${String(now.getDate()).padStart(2, '0')}:${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    return {
+      title: `${name} #shorts - ${dateStr}`,
+      description: `${chName} 많이 사랑해 주세요. 구독 좋아요 부탁드립니다.`,
+      hashtags: `#dancing${name.toLowerCase()} #dancecover`,
+    };
+  }, [studioAvatarName, studioYtChannelName]);
+
+  const handleStudioYtUpload = async () => {
+    if (!studioOutputVideo) return;
+    setStudioYtUploadStatus('uploading');
+    const defaults = getStudioYtDefaults();
+    const title = studioYtTitle.trim() || defaults.title;
+    const description = studioYtDescription.trim() || defaults.description;
+    const hashtags = studioYtHashtags.trim() || defaults.hashtags;
+    try {
+      const filename = studioOutputVideo.split('/').pop();
+      const res = await uploadToYouTube(filename, title, description, hashtags);
+      setStudioYtUploadStatus('success');
+      setStudioYtUploadResult(res.youtube_url);
+    } catch (err) {
+      setStudioYtUploadStatus('error');
+      setStudioYtUploadResult(err.response?.data?.detail || err.message || 'Upload failed');
+    }
+  };
+
+  // Dance Shorts - Character image handlers
+  const loadDsAvatarGroups = useCallback(async () => {
+    try {
+      const data = await listAvatarGroups();
+      const groups = (data.groups || []).sort((a, b) => {
+        if (a.toLowerCase() === 'yuna') return -1;
+        if (b.toLowerCase() === 'yuna') return 1;
+        return a.localeCompare(b);
+      });
+      setDsAvatarGroups(groups);
+      if (groups.length > 0 && !dsAvatarSelectedGroup) {
+        setDsAvatarSelectedGroup(groups[0]);
+        setStudioAvatarName(groups[0]);
+        setStudioYtChannelName(`Dancing ${groups[0]}`);
+      }
+    } catch (err) { console.error('Failed to load avatar groups:', err); }
+  }, [dsAvatarSelectedGroup]);
+
+  const loadDsAvatarImages = useCallback(async (group) => {
+    if (!group) return;
+    try {
+      const data = await listAvatarImages(group);
+      setDsAvatarImages(data.images || []);
+    } catch (err) { console.error('Failed to load avatar images:', err); }
+  }, []);
+
+  const handleDsCharImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const data = await uploadImage(file);
+      setDsCharImagePath(data.path || data.filename);
+      setDsCharImagePreview(data.url || URL.createObjectURL(file));
+    } catch (err) { alert(`Upload failed: ${err.message}`); }
+    e.target.value = '';
+  };
+
+  const handleDsAvatarSelect = (img) => {
+    setDsCharImagePath(img.path);
+    setDsCharImagePreview(img.url);
+    setStudioAvatarName(dsAvatarSelectedGroup);
+    setStudioYtChannelName(`Dancing ${dsAvatarSelectedGroup}`);
   };
 
   // Studio task polling (shared)
@@ -1598,6 +1829,21 @@ function App() {
   };
 
   useEffect(() => { if (activeMenu === 'gallery') fetchGallery(); }, [activeMenu, fetchGallery]);
+
+  // Load stages and avatars when Dance Shorts menu is active
+  useEffect(() => {
+    if (activeMenu === 'danceshorts') {
+      loadStudioStages();
+      loadDsAvatarGroups();
+    }
+  }, [activeMenu, loadStudioStages, loadDsAvatarGroups]);
+
+  // Load avatar images when group changes
+  useEffect(() => {
+    if (activeMenu === 'danceshorts' && dsAvatarSelectedGroup) {
+      loadDsAvatarImages(dsAvatarSelectedGroup);
+    }
+  }, [activeMenu, dsAvatarSelectedGroup, loadDsAvatarImages]);
 
   // I2V file picker
   const toggleI2vImagePicker = async () => {
@@ -2457,6 +2703,7 @@ function App() {
           yt_title: currentItem.ytTitle || '',
           yt_description: currentItem.ytDescription || '',
           yt_hashtags: currentItem.ytHashtags || '',
+          yt_upload: !!(currentItem.ytTitle || currentItem.ytDescription || currentItem.ytHashtags),
         });
         const taskId = data.task_id;
 
@@ -2749,7 +2996,7 @@ function App() {
                       value={wfState.youtubeUrl?.[inputDef.key] || ''}
                       onChange={e => updateWfState(wfId, { youtubeUrl: { ...wfState.youtubeUrl, [inputDef.key]: e.target.value } })}
                       disabled={wfState.youtubeDownloading?.[inputDef.key]} />
-                    <button className="btn secondary" onClick={() => handleWfYoutubeDownload(wfId, inputDef.key)}
+                    <button className="btn btn-youtube-dl" onClick={() => handleWfYoutubeDownload(wfId, inputDef.key)}
                       disabled={wfState.youtubeDownloading?.[inputDef.key] || !wfState.youtubeUrl?.[inputDef.key]?.trim()}>
                       {wfState.youtubeDownloading?.[inputDef.key] ? t('wfDownloading') : t('wfDownloadBtn')}
                     </button>
@@ -3123,11 +3370,11 @@ function App() {
         {/* Sidebar */}
         <nav className="sidebar">
           <div
-            className={`sidebar-item${activeMenu === 'studio' ? ' active' : ''}`}
-            onClick={() => setActiveMenu('studio')}
+            className={`sidebar-item${activeMenu === 'danceshorts' ? ' active' : ''}`}
+            onClick={() => setActiveMenu('danceshorts')}
           >
-            <span className="sidebar-icon">&#127916;</span>
-            {t('menuStudio')}
+            <span className="sidebar-icon">&#128131;</span>
+            {t('menuDanceShorts')}
           </div>
           <div
             className={`sidebar-item${activeMenu === 'imagegen' ? ' active' : ''}`}
@@ -3147,7 +3394,7 @@ function App() {
             className={`sidebar-item${activeMenu === 'workflow' ? ' active' : ''}`}
             onClick={() => setActiveMenu('workflow')}
           >
-            <span className="sidebar-icon">&#9881;</span>
+            <span className="sidebar-icon">&#127916;</span>
             {t('menuWorkflow')}
           </div>
           <div
@@ -3688,8 +3935,8 @@ function App() {
                       <div className="column">
                         {wf.inputs.map(inputDef => renderWorkflowInput(wf.id, inputDef))}
 
-                        {/* YouTube Shorts metadata — only for video-output workflows */}
-                        {wf.output_type !== 'image' && <div className="card yt-meta-card">
+                        {/* YouTube Shorts metadata — only for video-output workflows (not change_character, handled in Dance Shorts) */}
+                        {wf.output_type !== 'image' && wf.id !== 'change_character' && <div className="card yt-meta-card">
                           <h3>{t('ytMeta')}</h3>
                           <div className="yt-meta-fields">
                             <label className="yt-meta-label">{t('ytTitle')}
@@ -3859,519 +4106,334 @@ function App() {
             </div>
           )}
 
-          {/* ============ VIDEO STUDIO ============ */}
-          {activeMenu === 'studio' && (
+          {/* ============ DANCE SHORTS ============ */}
+          {activeMenu === 'danceshorts' && (
             <div className="page-content">
-              {/* Mode Tabs */}
-              <div className="studio-mode-tabs">
-                <button
-                  className={`studio-mode-tab${studioMode === 'manual' ? ' active' : ''}`}
-                  onClick={() => setStudioMode('manual')}
-                >{t('studioManualMode')}</button>
-                <button
-                  className={`studio-mode-tab${studioMode === 'auto' ? ' active' : ''}`}
-                  onClick={() => setStudioMode('auto')}
-                >{t('studioAutoMode')}</button>
-              </div>
+              <div className="two-column">
+                {/* Left Column - Settings */}
+                <div className="column">
+                  <div className="card">
+                    <h3>{t('menuDanceShorts')}</h3>
 
-              {studioMode === 'manual' && (
-                <>
-                  {/* Content Type Selector */}
-                  <div className="studio-content-type">
-                    <label>{t('studioContentType')}:</label>
-                    <div className="studio-content-btns">
-                      {['dance', 'narration', 'presentation'].map(ct => (
-                        <button key={ct}
-                          className={`btn${studioContentType === ct ? ' primary' : ' secondary'}`}
-                          onClick={() => studioHandleContentTypeChange(ct)}
-                        >
-                          {ct === 'dance' ? '🎵 ' : ct === 'narration' ? '🎤 ' : '📊 '}
-                          {t(`studioContent${ct.charAt(0).toUpperCase() + ct.slice(1)}`)}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="model-note">
-                      {studioContentType === 'dance' ? t('studioDanceDesc')
-                        : studioContentType === 'narration' ? t('studioNarrationDesc')
-                        : t('studioPresentationDesc')}
-                    </p>
-                  </div>
-
-                  {/* Step Indicator */}
-                  <div className="studio-steps">
-                    {[1, 2, 3].map(step => (
-                      <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {step > 1 && <span className="studio-step-arrow">→</span>}
-                        <button
-                          className={`studio-step${studioStep === step ? ' active' : ''}${
-                            (step === 1 && studioTimeline.length > 0) ||
-                            (step === 2 && studioTimeline.length >= 2)
-                              ? ' completed' : ''
-                          }`}
-                          onClick={() => setStudioStep(step)}
-                        >
-                          {t(`studioStep${step}`)}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="two-column">
-                    {/* Left Panel - Controls */}
-                    <div className="panel">
-                      {/* ---- STEP 1: Image Generation ---- */}
-                      {studioStep === 1 && (
-                        <div className="card">
-                          <h3>{t('studioGenerateImage')}</h3>
-                          <div className="form-group">
-                            <label>{t('fluxPromptLabel')}</label>
-                            <textarea
-                              value={studioFluxPrompt}
-                              onChange={e => setStudioFluxPrompt(e.target.value)}
-                              rows={5}
-                              placeholder={translations[lang].fluxPromptDefault}
-                            />
-                          </div>
-                          <div className="form-group">
-                            <label>{t('studioSeed')}</label>
-                            <input type="number" value={studioFluxSeed}
-                              onChange={e => setStudioFluxSeed(parseInt(e.target.value) || -1)} />
-                          </div>
-                          <div className="form-group">
-                            <label>{t('fluxAspectRatio')}</label>
-                            <div className="aspect-ratio-btns">
-                              {['portrait', 'landscape', 'square'].map(ar => (
-                                <button key={ar}
-                                  className={`btn${studioFluxAspectRatio === ar ? ' primary' : ' secondary'}`}
-                                  onClick={() => setStudioFluxAspectRatio(ar)}
-                                >{t(`flux${ar.charAt(0).toUpperCase() + ar.slice(1)}`)}</button>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* LoRA Selection for Image Gen */}
-                          {imgLoraAdapters.length > 0 && (
-                            <div className="form-group">
-                              <label>{t('loraTitle')}</label>
-                              <div className="lora-list">
-                                {imgLoraAdapters.filter(a => a.available).map(a => (
-                                  <div key={a.name} className="lora-item">
-                                    <label className="lora-toggle">
-                                      <input type="checkbox"
-                                        checked={studioSelectedLoras[a.name]?.enabled || false}
-                                        onChange={e => setStudioSelectedLoras(prev => ({
-                                          ...prev,
-                                          [a.name]: { ...prev[a.name], enabled: e.target.checked,
-                                            high_weight: prev[a.name]?.high_weight ?? a.default_high_weight,
-                                            low_weight: prev[a.name]?.low_weight ?? a.default_low_weight },
-                                        }))}
-                                      />
-                                      <span>{a.name}</span>
-                                    </label>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          <button className="btn primary"
-                            disabled={studioFluxIsGenerating || !studioFluxPrompt.trim()}
-                            onClick={studioHandleFluxGenerate}
-                          >
-                            {studioFluxIsGenerating
-                              ? `${t('fluxGenerating')} ${studioFluxProgress}%`
-                              : t('studioGenerateImage')}
-                          </button>
-
-                          <div style={{ marginTop: 12 }}>
-                            <button className="btn secondary" onClick={() => {
-                              studioLoadGallery();
-                              setStudioGalleryOpen(true);
-                            }}>{t('studioSelectFromGallery')}</button>
-                          </div>
+                    {/* Character Image - Avatar Gallery */}
+                    <div className="form-group">
+                      <label>{t('dsCharImage')}</label>
+                      {dsAvatarGroups.length > 0 && (
+                        <div className="sub-tabs" style={{ marginBottom: 8 }}>
+                          {dsAvatarGroups.map(g => (
+                            <button key={g} className={dsAvatarSelectedGroup === g ? 'active' : ''}
+                              onClick={() => { setDsAvatarSelectedGroup(g); setStudioAvatarName(g); setStudioYtChannelName(`Dancing ${g}`); }}>{g}</button>
+                          ))}
                         </div>
                       )}
-
-                      {/* ---- STEP 2: Timeline Controls ---- */}
-                      {studioStep === 2 && (
-                        <div className="card">
-                          <h3>{t('studioStep2')}</h3>
-                          <p className="model-note">{t('studioDragToReorder')}</p>
-                          {studioTimeline.length === 0 ? (
-                            <p className="model-note">{t('studioMinImages')}</p>
-                          ) : (
-                            <div>
-                              <p>{t('studioTotalFrames')}: {studioTimeline.reduce((s, i) => s + i.segmentLength, 0)}</p>
-                              <p>{t('studioEstDuration')}: {(studioTimeline.reduce((s, i) => s + i.segmentLength, 0) / 24).toFixed(1)}s</p>
-                            </div>
-                          )}
-                          <button className="btn secondary" style={{ marginTop: 8 }} onClick={() => {
-                            studioLoadGallery();
-                            setStudioGalleryOpen(true);
-                          }}>{t('studioSelectFromGallery')}</button>
-                        </div>
-                      )}
-
-                      {/* ---- STEP 3: Video Generation ---- */}
-                      {studioStep === 3 && (
-                        <div className="card">
-                          <h3>{t('studioStep3')}</h3>
-
-                          {/* Video Mode Tabs */}
-                          <div className="sub-tabs" style={{ marginBottom: 16 }}>
-                            <button className={studioVideoMode === 'fflf' ? 'active' : ''}
-                              onClick={() => setStudioVideoMode('fflf')}>{t('studioFflfMode')}</button>
-                            <button className={studioVideoMode === 'infinitalk' ? 'active' : ''}
-                              onClick={() => setStudioVideoMode('infinitalk')}>{t('studioInfiniTalkMode')}</button>
-                            <button className={studioVideoMode === 'change_character' ? 'active' : ''}
-                              onClick={() => setStudioVideoMode('change_character')}>{t('studioChangeCharMode')}</button>
-                          </div>
-
-                          {/* FFLF Mode */}
-                          {studioVideoMode === 'fflf' && (
-                            <>
-                              <div className="form-group">
-                                <label>{t('studioMasterPrompt')}</label>
-                                <textarea value={studioMasterPrompt} onChange={e => setStudioMasterPrompt(e.target.value)} rows={3} />
-                              </div>
-                              <div className="form-group">
-                                <label>{t('studioNegPrompt')}</label>
-                                <textarea value={studioNegPrompt} onChange={e => setStudioNegPrompt(e.target.value)} rows={2} />
-                              </div>
-                              <div className="form-group">
-                                <label>{t('studioLooping')}</label>
-                                <label className="lora-toggle">
-                                  <input type="checkbox" checked={studioLooping} onChange={e => setStudioLooping(e.target.checked)} />
-                                  <span>{studioLooping ? 'ON' : 'OFF'}</span>
-                                </label>
-                              </div>
-                              <div className="form-group">
-                                <label>{t('studioInitialWidth')}: {studioInitialWidth}</label>
-                                <input type="range" min={192} max={480} step={16} value={studioInitialWidth}
-                                  onChange={e => setStudioInitialWidth(parseInt(e.target.value))} />
-                              </div>
-                              <div className="form-group">
-                                <label>{t('studioUpscaleFactor')}: {studioUpscaleFactor}</label>
-                                <input type="range" min={1} max={4} step={0.5} value={studioUpscaleFactor}
-                                  onChange={e => setStudioUpscaleFactor(parseFloat(e.target.value))} />
-                              </div>
-                              <div className="form-group">
-                                <label>{t('studioVideoSeed')}</label>
-                                <input type="number" value={studioVideoSeed} onChange={e => setStudioVideoSeed(parseInt(e.target.value) || 0)} />
-                              </div>
-                              <button className="btn primary" disabled={studioIsGenerating || studioTimeline.length < 2}
-                                onClick={studioHandleCreateVideo}>
-                                {studioIsGenerating ? `${t('studioCreateVideo')} ${studioProgress}%` : t('studioCreateVideo')}
-                              </button>
-                            </>
-                          )}
-
-                          {/* InfiniTalk Mode */}
-                          {studioVideoMode === 'infinitalk' && (
-                            <>
-                              <p className="model-note">{t('studioNarrationDesc')}</p>
-                              <div className="form-group">
-                                <label>{t('studioMasterPrompt')}</label>
-                                <textarea value={studioMasterPrompt} onChange={e => setStudioMasterPrompt(e.target.value)} rows={2} />
-                              </div>
-
-                              {/* Audio Source Toggle */}
-                              <div className="sub-tabs" style={{ marginBottom: 12 }}>
-                                <button className={studioAudioSource === 'tts' ? 'active' : ''}
-                                  onClick={() => setStudioAudioSource('tts')}>{t('studioAudioSourceTts')}</button>
-                                <button className={studioAudioSource === 'upload' ? 'active' : ''}
-                                  onClick={() => setStudioAudioSource('upload')}>{t('studioAudioSourceUpload')}</button>
-                              </div>
-
-                              {studioAudioSource === 'tts' && (
-                                <>
-                                  <div className="form-group">
-                                    <label>{t('studioTtsScript')}</label>
-                                    <textarea value={studioTtsScript} onChange={e => setStudioTtsScript(e.target.value)} rows={4}
-                                      placeholder="Enter narration text..." />
-                                  </div>
-                                  <div className="form-group" style={{ display: 'flex', gap: 8 }}>
-                                    <div style={{ flex: 1 }}>
-                                      <label>{t('studioTtsLanguage')}</label>
-                                      <select value={studioTtsLanguage} onChange={e => setStudioTtsLanguage(e.target.value)}>
-                                        {['Korean', 'English', 'Chinese', 'Japanese'].map(l => (
-                                          <option key={l} value={l}>{l}</option>
-                                        ))}
-                                      </select>
-                                    </div>
-                                    <div style={{ flex: 1 }}>
-                                      <label>{t('studioTtsSpeaker')}</label>
-                                      <select value={studioTtsSpeaker} onChange={e => setStudioTtsSpeaker(e.target.value)}>
-                                        {['Ryan', 'Claire', 'Laura', 'Aidan', 'Matt', 'Aria', 'Serena', 'Leo', 'Mei', 'Luna'].map(s => (
-                                          <option key={s} value={s}>{s}</option>
-                                        ))}
-                                      </select>
-                                    </div>
-                                  </div>
-                                  <button className="btn secondary" disabled={studioTtsGenerating || !studioTtsScript.trim()}
-                                    onClick={studioHandleTTSGenerate}>
-                                    {studioTtsGenerating ? '...' : t('studioTtsGenerate')}
-                                  </button>
-                                </>
-                              )}
-
-                              {studioAudioSource === 'upload' && (
-                                <div className="form-group">
-                                  <label>{t('studioUploadAudio')}</label>
-                                  <div className="upload-area">
-                                    <input type="file" accept="audio/*" onChange={studioHandleAudioUpload} />
-                                    <p>{t('dropAudio')}</p>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Audio Preview */}
-                              {studioNarrationAudio && (
-                                <div style={{ margin: '12px 0' }}>
-                                  <audio controls src={studioNarrationAudio} style={{ width: '100%' }} />
-                                  <p className="model-note">Frames: {studioNarrationLength} (~{(studioNarrationLength / 20).toFixed(1)}s at 20fps)</p>
-                                </div>
-                              )}
-
-                              <button className="btn primary" disabled={studioIsGenerating || !studioNarrationAudioPath || studioTimeline.length < 1}
-                                onClick={studioHandleInfiniTalk}>
-                                {studioIsGenerating ? `Generating... ${studioProgress}%` : t('studioCreateVideo')}
-                              </button>
-                            </>
-                          )}
-
-                          {/* Change Character Mode */}
-                          {studioVideoMode === 'change_character' && (
-                            <>
-                              <div className="form-group">
-                                <label>{t('studioSceneDesc')}</label>
-                                <textarea value={studioScenePrompt} onChange={e => setStudioScenePrompt(e.target.value)} rows={2} />
-                              </div>
-
-                              {/* Ref Video Source */}
-                              <div className="sub-tabs" style={{ marginBottom: 12 }}>
-                                <button className={studioRefVideoMode === 'upload' ? 'active' : ''}
-                                  onClick={() => setStudioRefVideoMode('upload')}>{t('wfVideoUpload')}</button>
-                                <button className={studioRefVideoMode === 'youtube' ? 'active' : ''}
-                                  onClick={() => setStudioRefVideoMode('youtube')}>{t('wfVideoYoutube')}</button>
-                              </div>
-
-                              {studioRefVideoMode === 'upload' && (
-                                <div className="form-group">
-                                  <label>{t('studioRefVideo')}</label>
-                                  <div className="upload-area">
-                                    <input type="file" accept="video/*" onChange={studioHandleRefVideoUpload} />
-                                    <p>{t('dropVideo')}</p>
-                                  </div>
-                                </div>
-                              )}
-
-                              {studioRefVideoMode === 'youtube' && (
-                                <div className="form-group youtube-input">
-                                  <input type="text" placeholder="YouTube URL"
-                                    value={studioYoutubeUrl} onChange={e => setStudioYoutubeUrl(e.target.value)} />
-                                  <button className="btn secondary" disabled={studioYoutubeDownloading}
-                                    onClick={studioHandleYoutubeDownload}>
-                                    {studioYoutubeDownloading ? t('wfDownloading') : t('wfDownloadBtn')}
-                                  </button>
-                                </div>
-                              )}
-
-                              {studioRefVideoPreview && (
-                                <video controls src={studioRefVideoPreview} style={{ width: '100%', marginTop: 8, borderRadius: 8 }} />
-                              )}
-
-                              <div className="form-group">
-                                <label>{t('studioAspectRatio')}</label>
-                                <div className="aspect-ratio-btns">
-                                  {['portrait', 'landscape', 'square'].map(ar => (
-                                    <button key={ar}
-                                      className={`btn${studioFluxAspectRatio === ar ? ' primary' : ' secondary'}`}
-                                      onClick={() => setStudioFluxAspectRatio(ar)}
-                                    >{t(`flux${ar.charAt(0).toUpperCase() + ar.slice(1)}`)}</button>
-                                  ))}
-                                </div>
-                              </div>
-
-                              <button className="btn primary" disabled={studioIsGenerating || studioTimeline.length < 1 || !studioRefVideoPath}
-                                onClick={studioHandleChangeCharacter}>
-                                {studioIsGenerating ? `Generating... ${studioProgress}%` : t('studioCreateVideo')}
-                              </button>
-                            </>
-                          )}
-
-                          {/* Status & Output */}
-                          {studioStatus && (
-                            <div className="status-box" style={{ marginTop: 16 }}>
-                              <p>{studioStatus}</p>
-                              {studioIsGenerating && (
-                                <div className="progress-bar">
-                                  <div className="progress-fill" style={{ width: `${studioProgress}%` }} />
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Right Panel - Preview */}
-                    <div className="panel">
-                      {/* Timeline (always visible in right panel) */}
-                      <div className="card">
-                        <h3>{t('studioStep2')}</h3>
-                        <div className="studio-timeline">
-                          {studioTimeline.length === 0 ? (
-                            <p className="model-note" style={{ margin: 'auto' }}>{t('studioMinImages')}</p>
-                          ) : (
-                            studioTimeline.map((item, idx) => (
-                              <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start' }}>
-                                {idx > 0 && (
-                                  <span className="studio-timeline-connector">→</span>
-                                )}
-                                <div
-                                  className={`studio-timeline-item${studioDragIndex === idx ? ' dragging' : ''}`}
-                                  draggable
-                                  onDragStart={e => studioHandleDragStart(e, idx)}
-                                  onDragOver={e => studioHandleDragOver(e, idx)}
-                                  onDragEnd={studioHandleDragEnd}
-                                >
-                                  <button className="studio-timeline-remove"
-                                    onClick={() => studioRemoveFromTimeline(idx)}>×</button>
-                                  <img src={item.imageUrl} alt={`Frame ${idx + 1}`} />
-                                  <input type="number" className="studio-segment-input"
-                                    value={item.segmentLength}
-                                    onChange={e => studioUpdateSegmentLength(idx, parseInt(e.target.value) || 33)}
-                                    min={17} max={81} />
-                                  <span style={{ fontSize: '0.7rem', color: 'var(--text-light)' }}>{t('studioSegmentFrames')}</span>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Video Output */}
-                      {studioOutputVideo && (
-                        <div className="card" style={{ marginTop: 16 }}>
-                          <h3>{t('output')}</h3>
-                          <video controls src={studioOutputVideo} style={{ width: '100%', borderRadius: 8 }} />
-                          <a href={studioOutputVideo} download className="btn secondary" style={{ marginTop: 8, display: 'block', textAlign: 'center' }}>
-                            {t('download')}
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* Auto Mode (AI Chat) */}
-              {studioMode === 'auto' && (
-                <div className="two-column">
-                  {/* Chat Panel */}
-                  <div className="panel">
-                    <div className="card studio-chat">
-                      <div className="studio-chat-messages" ref={el => { if (el) el.scrollTop = el.scrollHeight; }}>
-                        {chatMessages.map((msg, idx) => (
-                          <div key={idx}>
-                            <div className={`studio-chat-bubble ${msg.role}`}>
-                              {msg.text}
-                            </div>
-                            {msg.actions && msg.actions.length > 0 && (
-                              <div className="studio-chat-actions">
-                                {msg.actions.map((action, ai) => (
-                                  action.result?.output_path && (
-                                    <img key={ai} src={action.result.output_path}
-                                      className="studio-chat-action-image"
-                                      alt="Generated"
-                                      onClick={() => studioAddToTimeline(action.result.output_path, action.result.absolute_path || action.result.output_path)}
-                                    />
-                                  )
-                                ))}
-                              </div>
-                            )}
+                      <div className="stage-gallery avatar-thumb-gallery">
+                        {dsAvatarImages.map(img => (
+                          <div key={img.filename}
+                            className={`stage-item avatar-thumb-item${dsCharImagePath === img.path ? ' selected' : ''}`}
+                            onClick={() => handleDsAvatarSelect(img)}>
+                            <img src={img.url} alt={img.filename} />
                           </div>
                         ))}
-                        {chatLoading && (
-                          <div className="studio-chat-typing">
-                            <span /><span /><span />
+                        <label className="stage-item avatar-thumb-item stage-upload-btn">
+                          <input type="file" accept="image/*" onChange={handleDsCharImageUpload} style={{ display: 'none' }} />
+                          <span>+ Upload</span>
+                        </label>
+                      </div>
+                      {dsCharImagePreview && (
+                        <div className="ds-char-viewer" onDoubleClick={() => {
+                          const img = dsAvatarImages.find(i => i.path === dsCharImagePath);
+                          if (img) setAvatarPopup({ url: img.url, filename: img.filename, group: dsAvatarSelectedGroup, img, source: 'danceshorts' });
+                        }} title="Double-click to enlarge">
+                          <img src={dsCharImagePreview} alt="Character" />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Avatar Name */}
+                    <div className="form-group">
+                      <label>{t('studioAvatarName')}</label>
+                      <input type="text" value={studioAvatarName}
+                        onChange={e => setStudioAvatarName(e.target.value)}
+                        placeholder="e.g. Lina, Yuna..." />
+                    </div>
+
+                    {/* Stage Selection */}
+                    <div className="form-group">
+                      <label>{t('studioStageSelect')}</label>
+                      <div className="stage-gallery">
+                        {studioStages.map(stage => (
+                          <div key={stage.filename}
+                            className={`stage-item${studioSelectedStage?.filename === stage.filename ? ' selected' : ''}`}
+                            onClick={() => setStudioSelectedStage(stage)}>
+                            <img src={stage.url} alt={stage.filename} />
+                            <button className="stage-delete-btn"
+                              onClick={e => { e.stopPropagation(); handleStudioStageDelete(stage.filename); }}
+                              title={t('galleryDelete')}>×</button>
+                          </div>
+                        ))}
+                        <label className="stage-item stage-upload-btn">
+                          <input type="file" accept="image/*" onChange={handleStudioStageUpload} style={{ display: 'none' }} />
+                          <span>+ {t('studioStageUpload')}</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Scene Description */}
+                    <div className="form-group">
+                      <label>{t('studioSceneDesc')}</label>
+                      <textarea value={studioScenePrompt} onChange={e => setStudioScenePrompt(e.target.value)} rows={2} />
+                    </div>
+
+                    {/* Ref Video Source */}
+                    <div className="sub-tabs" style={{ marginBottom: 12 }}>
+                      <button className={studioRefVideoMode === 'youtube' ? 'active' : ''}
+                        onClick={() => setStudioRefVideoMode('youtube')}>{t('wfVideoYoutube')}</button>
+                      <button className={studioRefVideoMode === 'upload' ? 'active' : ''}
+                        onClick={() => setStudioRefVideoMode('upload')}>{t('wfVideoUpload')}</button>
+                    </div>
+
+                    {studioRefVideoMode === 'upload' && (
+                      <div className="form-group">
+                        <label>{t('studioRefVideo')}</label>
+                        <div className="upload-area">
+                          <input type="file" accept="video/*" onChange={studioHandleRefVideoUpload} />
+                          <p>{t('dropVideo')}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {studioRefVideoMode === 'youtube' && (
+                      <div className="form-group youtube-input">
+                        <input type="text" placeholder="YouTube URL"
+                          value={studioYoutubeUrl} onChange={e => setStudioYoutubeUrl(e.target.value)} />
+                        <button className="btn btn-youtube-dl" disabled={studioYoutubeDownloading}
+                          onClick={studioHandleYoutubeDownload}>
+                          {studioYoutubeDownloading ? t('wfDownloading') : t('wfDownloadBtn')}
+                        </button>
+                      </div>
+                    )}
+
+                    {studioRefVideoPreview && (
+                      <video controls src={studioRefVideoPreview} style={{ width: '100%', marginTop: 8, borderRadius: 8 }} />
+                    )}
+
+                    <div className="form-group">
+                      <label>{t('studioAspectRatio')}</label>
+                      <div className="aspect-ratio-btns">
+                        {['portrait', 'landscape', 'square'].map(ar => (
+                          <button key={ar}
+                            className={`btn${studioFluxAspectRatio === ar ? ' primary' : ' secondary'}`}
+                            onClick={() => setStudioFluxAspectRatio(ar)}
+                          >{t(`flux${ar.charAt(0).toUpperCase() + ar.slice(1)}`)}</button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Generate + Cancel + Queue buttons */}
+                    <div className="wf-btn-row" style={{ marginTop: 16 }}>
+                      {studioIsGenerating ? (
+                        <button className="btn cancel-btn" onClick={handleDsCancel} style={{ flex: 1 }}>
+                          {t('wfCancelBtn')}
+                        </button>
+                      ) : (
+                        <button className="btn generate-btn-green"
+                          disabled={!dsCharImagePath || !studioRefVideoPath}
+                          onClick={studioHandleChangeCharacter} style={{ flex: 1 }}>
+                          {t('studioCreateVideo')}
+                        </button>
+                      )}
+                      <button className="btn secondary" onClick={handleDsQueueAdd} style={{ flex: 1 }}>
+                        {t('wfAddToQueue')}
+                      </button>
+                    </div>
+
+                    {/* Status */}
+                    {studioStatus && (
+                      <div className="status-box" style={{ marginTop: 16 }}>
+                        <p>{studioStatus}</p>
+                        {studioIsGenerating && (
+                          <div className="progress-bar">
+                            <div className="progress-fill" style={{ width: `${studioProgress}%` }} />
                           </div>
                         )}
-                      </div>
-                      <div className="studio-chat-input-area">
-                        <input
-                          className="studio-chat-input"
-                          value={chatInput}
-                          onChange={e => setChatInput(e.target.value)}
-                          onKeyDown={e => e.key === 'Enter' && !e.shiftKey && studioHandleChatSend()}
-                          placeholder="Ask AI to create a video..."
-                        />
-                        <button className="studio-chat-send" disabled={chatLoading || !chatInput.trim()}
-                          onClick={studioHandleChatSend}>▶</button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right Panel - Timeline & Output (reused from manual mode) */}
-                  <div className="panel">
-                    <div className="card">
-                      <h3>{t('studioStep2')}</h3>
-                      <div className="studio-timeline">
-                        {studioTimeline.length === 0 ? (
-                          <p className="model-note" style={{ margin: 'auto' }}>{t('studioMinImages')}</p>
-                        ) : (
-                          studioTimeline.map((item, idx) => (
-                            <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start' }}>
-                              {idx > 0 && <span className="studio-timeline-connector">→</span>}
-                              <div className={`studio-timeline-item${studioDragIndex === idx ? ' dragging' : ''}`}
-                                draggable onDragStart={e => studioHandleDragStart(e, idx)}
-                                onDragOver={e => studioHandleDragOver(e, idx)} onDragEnd={studioHandleDragEnd}>
-                                <button className="studio-timeline-remove" onClick={() => studioRemoveFromTimeline(idx)}>×</button>
-                                <img src={item.imageUrl} alt={`Frame ${idx + 1}`} />
-                                <input type="number" className="studio-segment-input" value={item.segmentLength}
-                                  onChange={e => studioUpdateSegmentLength(idx, parseInt(e.target.value) || 33)} min={17} max={81} />
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                    {studioOutputVideo && (
-                      <div className="card" style={{ marginTop: 16 }}>
-                        <h3>{t('output')}</h3>
-                        <video controls src={studioOutputVideo} style={{ width: '100%', borderRadius: 8 }} />
                       </div>
                     )}
                   </div>
                 </div>
-              )}
 
-              {/* Gallery Picker Modal */}
-              {studioGalleryOpen && (
-                <div className="modal-overlay" onClick={() => setStudioGalleryOpen(false)}>
-                  <div className="modal-content" onClick={e => e.stopPropagation()}>
-                    <h3>{t('studioSelectFromGallery')}</h3>
-                    <div className="gallery-grid">
-                      {studioGalleryImages.map(img => (
-                        <div key={img.filename} className="gallery-item" style={{ cursor: 'pointer' }}
-                          onClick={() => {
-                            studioAddToTimeline(img.url, img.path || img.url);
-                            setStudioGalleryOpen(false);
-                          }}>
-                          <img src={img.url} alt={img.filename} className="gallery-item-img" />
-                          <span className="gallery-item-name">{img.filename}</span>
-                        </div>
-                      ))}
+                {/* Right Column - YouTube Settings & Output */}
+                <div className="column">
+                  {/* YouTube Shorts Settings */}
+                  <div className="card yt-meta-card">
+                    <h3>{t('studioYtSettings')}</h3>
+                    <div className="yt-meta-fields">
+                      <label className="yt-meta-label">{t('studioYtChannel')}
+                        <input type="text" className="yt-meta-input"
+                          value={studioYtChannel}
+                          onChange={e => setStudioYtChannel(e.target.value)} />
+                      </label>
+                      <label className="yt-meta-label">{t('studioYtChannelName')}
+                        <input type="text" className="yt-meta-input"
+                          value={studioYtChannelName}
+                          onChange={e => setStudioYtChannelName(e.target.value)} />
+                      </label>
+                      <label className="yt-meta-label">{t('ytTitle')}
+                        <input type="text" className="yt-meta-input"
+                          placeholder={`${studioAvatarName || 'Avatar'} #shorts - YYYY:MM:DD:HH:MM`}
+                          value={studioYtTitle}
+                          onChange={e => setStudioYtTitle(e.target.value)} />
+                      </label>
+                      <label className="yt-meta-label">{t('ytDescription')}
+                        <textarea className="yt-meta-textarea" rows={2}
+                          placeholder={`${studioYtChannelName || `Dancing ${studioAvatarName || 'Avatar'}`} 많이 사랑해 주세요. 구독 좋아요 부탁드립니다.`}
+                          value={studioYtDescription}
+                          onChange={e => setStudioYtDescription(e.target.value)} />
+                      </label>
+                      <label className="yt-meta-label">{t('ytHashtags')}
+                        <input type="text" className="yt-meta-input"
+                          placeholder={`#${studioYtChannelName} #dancecover`}
+                          value={studioYtHashtags}
+                          onChange={e => setStudioYtHashtags(e.target.value)} />
+                      </label>
                     </div>
-                    <button className="btn secondary" style={{ marginTop: 12 }}
-                      onClick={() => setStudioGalleryOpen(false)}>Close</button>
                   </div>
+
+                  {/* Output Video & YouTube Upload */}
+                  <div className="card" style={{ marginTop: 16 }}>
+                    <h3>{t('output')}</h3>
+                    {studioIsGenerating && (
+                      <div className="progress-container">
+                        <div className="progress-bar">
+                          <div className="progress-fill" style={{ width: `${studioProgress}%` }} />
+                        </div>
+                        <span className="progress-text">{studioProgress}%</span>
+                      </div>
+                    )}
+                    {studioStatus && <p className="status-msg">{studioStatus}</p>}
+                    {studioOutputVideo && !studioIsGenerating && (
+                      <div className="output-container">
+                        <video controls src={studioOutputVideo} style={{ width: '100%', borderRadius: 8 }} />
+                        <div style={{ marginTop: 12 }}>
+                          {studioYtUploadStatus === 'success' ? (
+                            <div style={{ textAlign: 'center', padding: 8, background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                              <p style={{ color: 'var(--success)', fontWeight: 600, marginBottom: 6 }}>{t('galleryYtSuccess')}</p>
+                              <a href={studioYtUploadResult} target="_blank" rel="noopener noreferrer"
+                                style={{ color: 'var(--primary)', wordBreak: 'break-all' }}>{studioYtUploadResult}</a>
+                            </div>
+                          ) : studioYtUploadStatus === 'error' ? (
+                            <div style={{ textAlign: 'center', padding: 8, background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                              <p style={{ color: 'var(--danger)', marginBottom: 6 }}>{studioYtUploadResult}</p>
+                              <button className="btn btn-youtube-dl" onClick={handleStudioYtUpload}>
+                                {t('studioYtUploadBtn')}
+                              </button>
+                            </div>
+                          ) : (
+                            <button className="btn btn-youtube-dl" style={{ width: '100%' }}
+                              disabled={studioYtUploadStatus === 'uploading'}
+                              onClick={handleStudioYtUpload}>
+                              {studioYtUploadStatus === 'uploading' ? t('studioYtUploading') : t('studioYtUploadBtn')}
+                            </button>
+                          )}
+                        </div>
+                        <a href={studioOutputVideo} download className="btn secondary" style={{ marginTop: 8, display: 'inline-block' }}>
+                          {t('download')}
+                        </a>
+                      </div>
+                    )}
+                    {!studioOutputVideo && !studioIsGenerating && (
+                      <p style={{ color: '#888', textAlign: 'center', padding: 40 }}>
+                        {t('noOutputYet')}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Queue Panel */}
+                  {(() => {
+                    const queue = wfQueue['change_character'];
+                    const items = queue?.items || [];
+                    const isProcessing = queue?.isProcessing || false;
+                    const pendingCount = items.filter(i => i.status === 'pending').length;
+                    return (
+                      <div className="card queue-card" style={{ marginTop: 16 }}>
+                        <h3>{t('wfQueue')} {items.length > 0 && `(${items.length})`}</h3>
+                        {items.length === 0 && (
+                          <p className="queue-empty">{t('wfQueueEmpty')}</p>
+                        )}
+                        <div className="queue-list">
+                          {items.map(item => (
+                            <div key={item.id} className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}`}>
+                              <div className="queue-item-top">
+                                {(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) && (
+                                  <div className="queue-item-thumbs">
+                                    {item.previews?.ref_image && (
+                                      <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar" />
+                                    )}
+                                    {item.previews?.ref_video && (
+                                      <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata" />
+                                    )}
+                                    {item.previews?.bg_image && (
+                                      <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg" />
+                                    )}
+                                  </div>
+                                )}
+                                <div className="queue-item-info">
+                                  <div className="queue-item-title-row">
+                                    <span className="queue-item-status">
+                                      {item.status === 'completed' ? '\u2705' : item.status === 'running' ? '\u23f3' : item.status === 'failed' ? '\u274c' : '\u23f8'}
+                                    </span>
+                                    <span className="queue-item-label" title={item.ytTitle || item.inputs?.prompt || ''}>
+                                      {item.ytTitle || item.label}
+                                    </span>
+                                    {item.status !== 'running' && (
+                                      <button className="queue-item-remove" onClick={() => handleWfQueueRemove('change_character', item.id)}>&times;</button>
+                                    )}
+                                  </div>
+                                  {item.ytTitle && item.label && (
+                                    <div className="queue-item-sublabel">{item.label}</div>
+                                  )}
+                                  {item.status === 'running' && (
+                                    <div className="queue-item-progress">
+                                      <div className="queue-progress-bar">
+                                        <div className="queue-progress-fill" style={{ width: `${item.progress}%` }} />
+                                      </div>
+                                      <span className="queue-progress-text">{item.progress}%</span>
+                                    </div>
+                                  )}
+                                  {item.status === 'pending' && (
+                                    <span className="queue-item-pending">{t('wfQueuePending')}</span>
+                                  )}
+                                  {item.status === 'completed' && item.outputVideo && (
+                                    <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
+                                  )}
+                                  {item.status === 'failed' && item.error && (
+                                    <span className="queue-item-error" title={item.error}>Error</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        {items.length > 0 && (
+                          <div className="queue-actions">
+                            <button className="btn" onClick={() => handleWfQueueStart('change_character')}
+                              disabled={isProcessing || pendingCount === 0}>
+                              {isProcessing ? t('wfQueueRunning') : t('wfStartQueue')}
+                            </button>
+                            <button className="btn secondary" onClick={() => handleWfQueueClear('change_character')}
+                              disabled={isProcessing}>
+                              {t('wfClearQueue')}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
-              )}
+              </div>
             </div>
           )}
 
+          
           {/* ============ GALLERY ============ */}
           {activeMenu === 'gallery' && (
             <div className="page-content">
@@ -4580,7 +4642,17 @@ function App() {
             {avatarPopup.img && (
               <div className="avatar-popup-footer">
                 <button className="btn cancel-btn" onClick={async () => {
-                  await handleWfAvatarDelete(avatarPopup.wfId, avatarPopup.group, avatarPopup.img);
+                  if (!window.confirm(`Delete "${avatarPopup.filename}" from ${avatarPopup.group}?`)) return;
+                  if (avatarPopup.source === 'danceshorts') {
+                    await deleteAvatarImage(avatarPopup.group, avatarPopup.img.filename);
+                    await loadDsAvatarImages(avatarPopup.group);
+                    if (dsCharImagePath === avatarPopup.img.path) {
+                      setDsCharImagePath('');
+                      setDsCharImagePreview(null);
+                    }
+                  } else {
+                    await handleWfAvatarDelete(avatarPopup.wfId, avatarPopup.group, avatarPopup.img);
+                  }
                   setAvatarPopup(null);
                 }}>
                   {t('galleryDelete')}

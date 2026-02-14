@@ -54,7 +54,7 @@ const translations = {
     status: 'Status',
     seedOutput: 'Used Seed',
     // Gallery
-    galleryTitle: 'Generated Videos',
+    galleryTitle: 'Assets',
     galleryEmpty: 'No videos generated yet',
     galleryDelete: 'Delete',
     galleryDeleteConfirm: 'Delete this video?',
@@ -137,6 +137,7 @@ const translations = {
     // Gallery
     galleryImages: 'Images',
     galleryVideos: 'Videos',
+    galleryStages: 'Stages',
     // Output picker
     selectFromOutputs: 'Select from generated outputs',
     noOutputs: 'No generated outputs available',
@@ -236,6 +237,7 @@ const translations = {
     studioAvatarName: 'Avatar Name',
     studioStageSelect: 'Select Stage',
     studioStageUpload: 'Upload Stage',
+    studioBgEffect: 'Background Effect',
     studioStageDeleteConfirm: 'Delete this stage?',
     studioYtChannel: 'YouTube Channel URL',
     studioYtChannelName: 'Channel Name',
@@ -279,7 +281,7 @@ const translations = {
     menuGallery: '갤러리',
     status: '상태',
     seedOutput: '사용된 시드',
-    galleryTitle: '생성된 비디오',
+    galleryTitle: '에셋',
     galleryEmpty: '아직 생성된 비디오가 없습니다',
     galleryDelete: '삭제',
     galleryDeleteConfirm: '이 비디오를 삭제하시겠습니까?',
@@ -360,6 +362,7 @@ const translations = {
     // Gallery
     galleryImages: '이미지',
     galleryVideos: '동영상',
+    galleryStages: '스테이지',
     // Output picker
     selectFromOutputs: '생성된 결과에서 선택',
     noOutputs: '생성된 결과가 없습니다',
@@ -459,6 +462,7 @@ const translations = {
     studioAvatarName: '아바타 이름',
     studioStageSelect: '스테이지 선택',
     studioStageUpload: '스테이지 업로드',
+    studioBgEffect: '배경 효과',
     studioStageDeleteConfirm: '이 스테이지를 삭제하시겠습니까?',
     studioYtChannel: 'YouTube 채널 URL',
     studioYtChannelName: '채널명',
@@ -502,7 +506,7 @@ const translations = {
     menuGallery: '画廊',
     status: '状态',
     seedOutput: '使用的种子',
-    galleryTitle: '已生成的视频',
+    galleryTitle: '资源',
     galleryEmpty: '尚未生成任何视频',
     galleryDelete: '删除',
     galleryDeleteConfirm: '确定删除此视频？',
@@ -583,6 +587,7 @@ const translations = {
     // Gallery
     galleryImages: '图片',
     galleryVideos: '视频',
+    galleryStages: '舞台',
     // Output picker
     selectFromOutputs: '从生成结果中选择',
     noOutputs: '没有生成结果',
@@ -682,6 +687,7 @@ const translations = {
     studioAvatarName: '角色名称',
     studioStageSelect: '选择舞台',
     studioStageUpload: '上传舞台',
+    studioBgEffect: '背景效果',
     studioStageDeleteConfirm: '确定删除此舞台？',
     studioYtChannel: 'YouTube频道链接',
     studioYtChannelName: '频道名称',
@@ -850,15 +856,22 @@ function App() {
   const [workflowStates, setWorkflowStates] = useState({});
   const [wfQueue, setWfQueue] = useState(() => {
     const saved = loadQueueFromStorage();
-    // Restore: mark any 'running' items as 'pending' (server state lost on refresh)
+    // Restore: keep running items with taskId alive, revert others to pending
     for (const wfId of Object.keys(saved)) {
       if (!saved[wfId]) { delete saved[wfId]; continue; }
-      saved[wfId].isProcessing = false;
       if (saved[wfId].items) {
+        const hasRunningWithTask = saved[wfId].items.some(i => i.status === 'running' && i.taskId);
+        saved[wfId].isProcessing = hasRunningWithTask;
         saved[wfId].items = saved[wfId].items
           .filter(i => i.status !== 'completed' && i.status !== 'failed')
-          .map(i => i.status === 'running' ? { ...i, status: 'pending', progress: 0 } : i);
+          .map(i => {
+            if (i.status === 'running' && i.taskId) return i;
+            if (i.status === 'running') return { ...i, status: 'pending', progress: 0 };
+            return i;
+          });
         if (saved[wfId].items.length === 0) delete saved[wfId];
+      } else {
+        saved[wfId].isProcessing = false;
       }
     }
     return saved;
@@ -867,6 +880,7 @@ function App() {
   const videoRefsMap = useRef({});
   const timelineRefsMap = useRef({});
   const tasksRestoredRef = useRef(false);
+  const queueRestoredRef = useRef(false);
 
   // ============ Studio state ============
   const [studioMode, setStudioMode] = useState('manual'); // 'manual' | 'auto'
@@ -930,6 +944,15 @@ function App() {
   const [studioYoutubeDownloading, setStudioYoutubeDownloading] = useState(false);
   const [studioScenePrompt, setStudioScenePrompt] = useState('The character is dancing in the room');
 
+  // Dance Shorts - Video Timeline / Trim
+  const [dsVideoDuration, setDsVideoDuration] = useState(0);
+  const [dsTrimStart, setDsTrimStart] = useState(0);
+  const [dsTrimEnd, setDsTrimEnd] = useState(0);
+  const [dsTrimming, setDsTrimming] = useState(false);
+  const [dsPlayheadPosition, setDsPlayheadPosition] = useState(0);
+  const dsVideoRef = useRef(null);
+  const dsTimelineRef = useRef(null);
+
   // Dance Shorts - Character Image (direct upload or avatar gallery)
   const [dsCharImagePath, setDsCharImagePath] = useState('');
   const [dsCharImagePreview, setDsCharImagePreview] = useState(null);
@@ -941,6 +964,7 @@ function App() {
   const [studioAvatarName, setStudioAvatarName] = useState('');
   const [studioStages, setStudioStages] = useState([]);
   const [studioSelectedStage, setStudioSelectedStage] = useState(null);
+  const [studioBgPrompt, setStudioBgPrompt] = useState('light color and strength keep changing');
 
   // Dance Shorts - YouTube Settings
   const DEFAULT_YT_CHANNEL = 'https://www.youtube.com/channel/UCYcITGLPC3qv9txSM4GB70w';
@@ -1220,6 +1244,43 @@ function App() {
     });
   }, [workflowStates, updateWfState, t]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ─── Restore queue processing tasks after page refresh ───
+  useEffect(() => {
+    if (queueRestoredRef.current) return;
+    queueRestoredRef.current = true;
+    for (const [wfId, q] of Object.entries(wfQueue)) {
+      if (!q?.items) continue;
+      const runningItem = q.items.find(i => i.status === 'running' && i.taskId);
+      if (!runningItem) continue;
+      const { id: itemId, taskId } = runningItem;
+      // Resume polling for the running queue item
+      const poll = setInterval(async () => {
+        try {
+          const s = await getTaskStatus(taskId);
+          updateQueueItem(wfId, itemId, { progress: Math.round((s.progress || 0) * 100) });
+          if (s.status === 'completed') {
+            clearInterval(poll);
+            updateQueueItem(wfId, itemId, { status: 'completed', progress: 100, outputVideo: s.output_url || s.output_path, taskId: null });
+            // Continue processing remaining pending items
+            setTimeout(() => handleWfQueueStart(wfId), 500);
+          } else if (s.status === 'failed') {
+            clearInterval(poll);
+            updateQueueItem(wfId, itemId, { status: 'failed', error: s.message || 'Failed', taskId: null });
+            setTimeout(() => handleWfQueueStart(wfId), 500);
+          } else if (s.status === 'cancelled') {
+            clearInterval(poll);
+            updateQueueItem(wfId, itemId, { status: 'failed', error: 'Cancelled', taskId: null });
+            setTimeout(() => handleWfQueueStart(wfId), 500);
+          }
+        } catch (err) {
+          clearInterval(poll);
+          updateQueueItem(wfId, itemId, { status: 'failed', error: err.message, taskId: null });
+          setTimeout(() => handleWfQueueStart(wfId), 500);
+        }
+      }, 3000);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ============ Studio Handlers ============
   const studioHandleContentTypeChange = (type) => {
     setStudioContentType(type);
@@ -1373,46 +1434,56 @@ function App() {
     }
   };
 
-  // Dance Shorts generation
-  const studioHandleChangeCharacter = async () => {
+  // Dance Shorts generation — add to queue and auto-start
+  const studioHandleChangeCharacter = () => {
     if (!dsCharImagePath) return alert(t('dsNeedImage'));
     if (!studioRefVideoPath) return alert(t('studioNeedRefVideo'));
-    setStudioIsGenerating(true);
-    setStudioProgress(0);
-    setStudioStatus('Starting Dance Shorts...');
-    setStudioYtUploadStatus(null);
-    setStudioYtUploadResult(null);
     const defaults = getStudioYtDefaults();
-    try {
-      const { task_id } = await startWorkflowGeneration({
-        workflow_id: 'change_character',
-        inputs: {
-          ref_image: dsCharImagePath,
-          ref_video: studioRefVideoPath,
-          prompt: studioScenePrompt,
-          aspect_ratio: studioFluxAspectRatio,
-          bg_image: studioSelectedStage?.path || '',
+    const ytTitle = studioYtTitle.trim() || defaults.title;
+    const ytDesc = studioYtDescription.trim() || defaults.description;
+    const ytHash = studioYtHashtags.trim() || defaults.hashtags;
+    const item = {
+      id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+      label: `Job ${(wfQueue['change_character']?.items?.length || 0) + 1}`,
+      inputs: {
+        ref_image: dsCharImagePath,
+        ref_video: studioRefVideoPath,
+        prompt: studioScenePrompt,
+        aspect_ratio: studioFluxAspectRatio,
+        bg_image: studioSelectedStage?.path || '',
+        bg_prompt: studioBgPrompt,
+      },
+      filePaths: {},
+      previews: {
+        ref_image: dsCharImagePreview,
+        ref_video: studioRefVideoPreview,
+        bg_image: studioSelectedStage?.url || null,
+      },
+      gallerySelected: {},
+      ytTitle,
+      ytDescription: ytDesc,
+      ytHashtags: ytHash,
+      status: 'pending',
+      progress: 0,
+      outputVideo: null,
+      error: null,
+    };
+    setWfQueue(prev => {
+      const updated = {
+        ...prev,
+        change_character: {
+          ...prev.change_character,
+          items: [...(prev.change_character?.items || []), item],
+          isProcessing: prev.change_character?.isProcessing || false,
         },
-        yt_title: studioYtTitle.trim() || defaults.title,
-        yt_description: studioYtDescription.trim() || defaults.description,
-        yt_hashtags: studioYtHashtags.trim() || defaults.hashtags,
-        yt_upload: true,
-      });
-      setStudioCurrentTaskId(task_id);
-      pollStudioTask(task_id);
-    } catch (err) {
-      setStudioIsGenerating(false);
-      setStudioStatus(`Error: ${err.message}`);
-    }
-  };
-
-  // Dance Shorts cancel
-  const handleDsCancel = async () => {
-    if (!studioCurrentTaskId) return;
-    try { await cancelGeneration(studioCurrentTaskId); } catch {}
-    setStudioIsGenerating(false);
-    setStudioStatus(t('wfCancelled'));
-    setStudioCurrentTaskId(null);
+      };
+      // Auto-start queue if not already processing
+      if (!updated.change_character.isProcessing) {
+        setTimeout(() => handleWfQueueStart('change_character'), 300);
+      }
+      return updated;
+    });
+    setStudioStatus(`\u2705 Added & starting: ${item.label}`);
   };
 
   // Dance Shorts - Add to Queue
@@ -1432,6 +1503,7 @@ function App() {
         prompt: studioScenePrompt,
         aspect_ratio: studioFluxAspectRatio,
         bg_image: studioSelectedStage?.path || '',
+        bg_prompt: studioBgPrompt,
       },
       filePaths: {},
       previews: {
@@ -1467,16 +1539,6 @@ function App() {
     } catch (err) { console.error('Failed to load stages:', err); }
   }, []);
 
-  const handleStudioStageUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-      await uploadBackground(file);
-      await loadStudioStages();
-    } catch (err) { alert(`Upload failed: ${err.message}`); }
-    e.target.value = '';
-  };
-
   const handleStudioStageDelete = async (filename) => {
     if (!window.confirm(t('studioStageDeleteConfirm'))) return;
     try {
@@ -1497,9 +1559,17 @@ function App() {
     return {
       title: `${name} #shorts - ${dateStr}`,
       description: `${chName} 많이 사랑해 주세요. 구독 좋아요 부탁드립니다.`,
-      hashtags: `#dancing${name.toLowerCase()} #dancecover`,
+      hashtags: `#${chName} #dancecover`,
     };
   }, [studioAvatarName, studioYtChannelName]);
+
+  // Auto-fill YouTube metadata fields when avatar name or channel name changes
+  useEffect(() => {
+    const defaults = getStudioYtDefaults();
+    setStudioYtTitle(defaults.title);
+    setStudioYtDescription(defaults.description);
+    setStudioYtHashtags(defaults.hashtags);
+  }, [getStudioYtDefaults]);
 
   const handleStudioYtUpload = async () => {
     if (!studioOutputVideo) return;
@@ -1545,16 +1615,6 @@ function App() {
     } catch (err) { console.error('Failed to load avatar images:', err); }
   }, []);
 
-  const handleDsCharImageUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-      const data = await uploadImage(file);
-      setDsCharImagePath(data.path || data.filename);
-      setDsCharImagePreview(data.url || URL.createObjectURL(file));
-    } catch (err) { alert(`Upload failed: ${err.message}`); }
-    e.target.value = '';
-  };
 
   const handleDsAvatarSelect = (img) => {
     setDsCharImagePath(img.path);
@@ -1562,6 +1622,81 @@ function App() {
     setStudioAvatarName(dsAvatarSelectedGroup);
     setStudioYtChannelName(`Dancing ${dsAvatarSelectedGroup}`);
   };
+
+  const handleDsAvatarThumbDelete = async (img) => {
+    if (!confirm(`Delete ${img.filename}?`)) return;
+    try {
+      await deleteAvatarImage(dsAvatarSelectedGroup, img.filename);
+      await loadDsAvatarImages(dsAvatarSelectedGroup);
+      if (dsCharImagePath === img.path) {
+        setDsCharImagePath('');
+        setDsCharImagePreview(null);
+      }
+    } catch (err) { alert(`Delete failed: ${err.message}`); }
+  };
+
+  // Keyboard arrow navigation: Left/Right for character images, Up/Down for stages
+  useEffect(() => {
+    if (activeMenu !== 'danceshorts') return;
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (dsAvatarImages.length === 0) return;
+        e.preventDefault();
+        const currentIndex = dsAvatarImages.findIndex(img => img.path === dsCharImagePath);
+        let newIndex;
+        if (e.key === 'ArrowLeft') {
+          newIndex = currentIndex <= 0 ? dsAvatarImages.length - 1 : currentIndex - 1;
+        } else {
+          newIndex = currentIndex >= dsAvatarImages.length - 1 ? 0 : currentIndex + 1;
+        }
+        handleDsAvatarSelect(dsAvatarImages[newIndex]);
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        if (studioStages.length === 0) return;
+        e.preventDefault();
+        const currentIndex = studioStages.findIndex(s => s.filename === studioSelectedStage?.filename);
+        let newIndex;
+        if (e.key === 'ArrowUp') {
+          newIndex = currentIndex <= 0 ? studioStages.length - 1 : currentIndex - 1;
+        } else {
+          newIndex = currentIndex >= studioStages.length - 1 ? 0 : currentIndex + 1;
+        }
+        setStudioSelectedStage(studioStages[newIndex]);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeMenu, dsAvatarImages, dsCharImagePath, studioStages, studioSelectedStage]);
+
+  // Avatar popup: navigate to prev/next image
+  const avatarPopupNavigate = useCallback((direction) => {
+    if (!avatarPopup) return;
+    const images = avatarPopup.source === 'danceshorts' ? dsAvatarImages
+      : (workflowStates[avatarPopup.wfId]?.avatarImages?.[avatarPopup.group] || []);
+    if (images.length <= 1) return;
+    const idx = images.findIndex(i => i.filename === avatarPopup.filename);
+    if (idx === -1) return;
+    const next = direction === 'right'
+      ? images[(idx + 1) % images.length]
+      : images[(idx - 1 + images.length) % images.length];
+    setAvatarPopup(prev => ({ ...prev, url: next.url, filename: next.filename, img: next }));
+    if (avatarPopup.source === 'danceshorts') {
+      setDsCharImagePath(next.path);
+      setDsCharImagePreview(next.url);
+    }
+  }, [avatarPopup, dsAvatarImages, workflowStates]);
+
+  // Avatar popup: Left/Right arrow key browsing
+  useEffect(() => {
+    if (!avatarPopup) return;
+    const handler = (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      avatarPopupNavigate(e.key === 'ArrowRight' ? 'right' : 'left');
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [avatarPopup, avatarPopupNavigate]);
 
   // Studio task polling (shared)
   const pollStudioTask = (taskId) => {
@@ -1627,6 +1762,90 @@ function App() {
       setStudioRefVideoPreview(URL.createObjectURL(file));
     } catch (err) {
       alert(`Upload failed: ${err.message}`);
+    }
+  };
+
+  // Dance Shorts - Video Timeline handlers
+  const handleDsVideoMeta = (e) => {
+    const dur = e.target.duration;
+    if (dur && isFinite(dur)) {
+      const rounded = Math.round(dur * 100) / 100;
+      setDsVideoDuration(rounded);
+      setDsTrimStart(0);
+      setDsTrimEnd(rounded);
+      setDsPlayheadPosition(0);
+    }
+  };
+
+  const handleDsVideoTimeUpdate = useCallback((e) => {
+    setDsPlayheadPosition(Math.round(e.target.currentTime * 100) / 100);
+  }, []);
+
+  const dsStateRef = useRef({ duration: 0, trimStart: 0, trimEnd: 0 });
+  useEffect(() => {
+    dsStateRef.current = { duration: dsVideoDuration, trimStart: dsTrimStart, trimEnd: dsTrimEnd };
+  }, [dsVideoDuration, dsTrimStart, dsTrimEnd]);
+
+  const handleDsTimelineDragStart = useCallback((handleType, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const timelineEl = dsTimelineRef.current;
+    if (!timelineEl) return;
+
+    const onMouseMove = (moveEvent) => {
+      const rect = timelineEl.getBoundingClientRect();
+      const x = Math.max(0, Math.min(moveEvent.clientX - rect.left, rect.width));
+      const { duration, trimStart, trimEnd } = dsStateRef.current;
+      if (!duration) return;
+      const time = Math.round(((x / rect.width) * duration) * 100) / 100;
+      if (handleType === 'start') {
+        const newStart = Math.max(0, Math.min(time, trimEnd - 0.1));
+        setDsTrimStart(newStart);
+        setDsPlayheadPosition(newStart);
+        if (dsVideoRef.current) dsVideoRef.current.currentTime = newStart;
+      } else {
+        const newEnd = Math.min(duration, Math.max(time, trimStart + 0.1));
+        setDsTrimEnd(newEnd);
+        setDsPlayheadPosition(newEnd);
+        if (dsVideoRef.current) dsVideoRef.current.currentTime = newEnd;
+      }
+    };
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, []);
+
+  const handleDsRulerClick = useCallback((e) => {
+    const timelineEl = dsTimelineRef.current;
+    if (!timelineEl) return;
+    const rect = timelineEl.getBoundingClientRect();
+    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const { duration } = dsStateRef.current;
+    if (!duration) return;
+    const time = Math.round(((x / rect.width) * duration) * 100) / 100;
+    if (dsVideoRef.current) dsVideoRef.current.currentTime = time;
+    setDsPlayheadPosition(time);
+  }, []);
+
+  const handleDsTrim = async () => {
+    if (!studioRefVideoPath || !dsVideoDuration) return;
+    if (dsTrimEnd <= dsTrimStart) return;
+    setDsTrimming(true);
+    try {
+      const result = await trimVideo(studioRefVideoPath, dsTrimStart, dsTrimEnd);
+      setStudioRefVideoPath(result.path);
+      setStudioRefVideoPreview(result.url);
+      setDsVideoDuration(result.duration);
+      setDsTrimStart(0);
+      setDsTrimEnd(result.duration);
+      setDsPlayheadPosition(0);
+    } catch (err) {
+      alert(`Trim error: ${err.message}`);
+    } finally {
+      setDsTrimming(false);
     }
   };
 
@@ -1788,7 +2007,7 @@ function App() {
       // Direct registration (copy image to avatar directory)
       await registerAvatar(img.path, group.trim());
 
-      // Refresh avatar groups in all workflows
+      // Refresh avatar groups in all workflows + Dance Shorts
       const refreshed = await listAvatarGroups();
       const newGroups = refreshed.groups || [];
       setWorkflowStates(prev => {
@@ -1798,8 +2017,32 @@ function App() {
         }
         return next;
       });
+      // Refresh Dance Shorts avatar list
+      await loadDsAvatarGroups();
+      if (dsAvatarSelectedGroup) await loadDsAvatarImages(dsAvatarSelectedGroup);
       alert(`Avatar registered in "${group.trim()}"`);
     } catch (err) { console.error('Failed to register avatar:', err); alert('Failed: ' + (err.response?.data?.detail || err.message)); }
+  };
+
+  const handleRegisterAsStage = async (img) => {
+    try {
+      const resp = await fetch(img.url);
+      const blob = await resp.blob();
+      const file = new File([blob], img.filename, { type: blob.type });
+      await uploadBackground(file);
+      await loadStudioStages();
+      alert(`Stage registered: ${img.filename}`);
+    } catch (err) { alert(`Failed: ${err.message}`); }
+  };
+
+  const handleGalleryStageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      await uploadBackground(file);
+      await loadStudioStages();
+    } catch (err) { alert(`Upload failed: ${err.message}`); }
+    e.target.value = '';
   };
 
   const handleYtUploadOpen = (filename) => {
@@ -2476,7 +2719,19 @@ function App() {
     });
   };
 
+  // Generate via queue: add item + auto-start (for change_character)
+  const handleWfGenerateViaQueue = (wfId) => {
+    handleWfQueueAdd(wfId);
+    setTimeout(() => {
+      const q = wfQueueRef.current[wfId];
+      if (q && !q.isProcessing) handleWfQueueStart(wfId);
+    }, 300);
+  };
+
   const handleWfGenerate = async (wfId) => {
+    // Route workflows through queue for persistence and sequential execution
+    if (wfId === 'change_character' || wfId === 'face_swap') return handleWfGenerateViaQueue(wfId);
+
     const wfState = workflowStates[wfId];
     const wfDef = workflows.find(w => w.id === wfId);
     if (!wfDef || !wfState) return;
@@ -2659,7 +2914,7 @@ function App() {
   };
 
   const handleWfQueueStart = async (wfId) => {
-    const queue = wfQueue[wfId];
+    const queue = wfQueueRef.current[wfId];
     if (!queue?.items?.length || queue.isProcessing) return;
 
     setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: true } }));
@@ -2706,6 +2961,7 @@ function App() {
           yt_upload: !!(currentItem.ytTitle || currentItem.ytDescription || currentItem.ytHashtags),
         });
         const taskId = data.task_id;
+        updateQueueItem(wfId, itemId, { taskId });
 
         // Poll until done
         await new Promise((resolve) => {
@@ -2719,25 +2975,25 @@ function App() {
                 clearInterval(poll);
                 updateQueueItem(wfId, itemId, {
                   status: 'completed', progress: 100,
-                  outputVideo: s.output_url || s.output_path,
+                  outputVideo: s.output_url || s.output_path, taskId: null,
                 });
                 resolve();
               } else if (s.status === 'failed') {
                 clearInterval(poll);
                 updateQueueItem(wfId, itemId, {
-                  status: 'failed', error: s.message || 'Failed',
+                  status: 'failed', error: s.message || 'Failed', taskId: null,
                 });
                 resolve();
               } else if (s.status === 'cancelled') {
                 clearInterval(poll);
                 updateQueueItem(wfId, itemId, {
-                  status: 'failed', error: 'Cancelled',
+                  status: 'failed', error: 'Cancelled', taskId: null,
                 });
                 resolve();
               }
             } catch (err) {
               clearInterval(poll);
-              updateQueueItem(wfId, itemId, { status: 'failed', error: err.message });
+              updateQueueItem(wfId, itemId, { status: 'failed', error: err.message, taskId: null });
               resolve();
             }
           }, 3000);
@@ -2768,11 +3024,16 @@ function App() {
     }, 10000);
   };
 
-  const handleWfQueueRemove = (wfId, itemId) => {
+  const handleWfQueueRemove = async (wfId, itemId) => {
+    const q = wfQueueRef.current[wfId];
+    const item = q?.items?.find(i => i.id === itemId);
+    if (item?.status === 'running' && item?.taskId) {
+      try { await cancelGeneration(item.taskId); } catch {}
+    }
     setWfQueue(prev => {
       const q = prev[wfId];
       if (!q) return prev;
-      return { ...prev, [wfId]: { ...q, items: q.items.filter(i => i.id !== itemId || i.status === 'running') } };
+      return { ...prev, [wfId]: { ...q, items: q.items.filter(i => i.id !== itemId) } };
     });
   };
 
@@ -4054,9 +4315,7 @@ function App() {
                                           <span className="queue-item-label" title={item.ytTitle || item.inputs?.prompt || item.inputs?.fashion_prompt || ''}>
                                             {item.ytTitle || item.label}
                                           </span>
-                                          {item.status !== 'running' && (
-                                            <button className="queue-item-remove" onClick={() => handleWfQueueRemove(wf.id, item.id)}>&times;</button>
-                                          )}
+                                          <button className="queue-item-remove" onClick={() => handleWfQueueRemove(wf.id, item.id)}>&times;</button>
                                         </div>
                                         {item.ytTitle && item.label && (
                                           <div className="queue-item-sublabel">{item.label}</div>
@@ -4132,12 +4391,11 @@ function App() {
                             className={`stage-item avatar-thumb-item${dsCharImagePath === img.path ? ' selected' : ''}`}
                             onClick={() => handleDsAvatarSelect(img)}>
                             <img src={img.url} alt={img.filename} />
+                            <button className="stage-delete-btn"
+                              onClick={e => { e.stopPropagation(); handleDsAvatarThumbDelete(img); }}
+                              title={t('galleryDelete')}>×</button>
                           </div>
                         ))}
-                        <label className="stage-item avatar-thumb-item stage-upload-btn">
-                          <input type="file" accept="image/*" onChange={handleDsCharImageUpload} style={{ display: 'none' }} />
-                          <span>+ Upload</span>
-                        </label>
                       </div>
                       {dsCharImagePreview && (
                         <div className="ds-char-viewer" onDoubleClick={() => {
@@ -4171,11 +4429,14 @@ function App() {
                               title={t('galleryDelete')}>×</button>
                           </div>
                         ))}
-                        <label className="stage-item stage-upload-btn">
-                          <input type="file" accept="image/*" onChange={handleStudioStageUpload} style={{ display: 'none' }} />
-                          <span>+ {t('studioStageUpload')}</span>
-                        </label>
                       </div>
+                    </div>
+
+                    {/* Background Effect */}
+                    <div className="form-group">
+                      <label>{t('studioBgEffect')}</label>
+                      <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={2}
+                        placeholder="e.g. neon lights, foggy atmosphere, colorful stage lighting..." />
                     </div>
 
                     {/* Scene Description */}
@@ -4214,34 +4475,82 @@ function App() {
                     )}
 
                     {studioRefVideoPreview && (
-                      <video controls src={studioRefVideoPreview} style={{ width: '100%', marginTop: 8, borderRadius: 8 }} />
+                      <div className="video-editor-card" style={{ marginTop: 8 }}>
+                        <video ref={dsVideoRef} controls src={studioRefVideoPreview}
+                          style={{ width: '100%', borderRadius: 8 }}
+                          onLoadedMetadata={handleDsVideoMeta}
+                          onTimeUpdate={handleDsVideoTimeUpdate} />
+                        {dsVideoDuration > 0 && (
+                          <>
+                            <div className="video-timeline-container" style={{ marginTop: 8 }}>
+                              <div className="video-timeline-ruler" onClick={handleDsRulerClick}>
+                                {generateRulerTicks(dsVideoDuration).map(tick => (
+                                  <div key={tick} className="ruler-tick"
+                                    style={{ left: `${(tick / dsVideoDuration) * 100}%` }}>
+                                    <span>{formatTime(tick)}</span>
+                                  </div>
+                                ))}
+                                <div className="timeline-playhead"
+                                  style={{ left: `${(dsPlayheadPosition / dsVideoDuration) * 100}%` }} />
+                              </div>
+                              <div className="video-timeline-track" ref={dsTimelineRef}>
+                                <div className="timeline-region-dimmed"
+                                  style={{ left: 0, width: `${(dsTrimStart / dsVideoDuration) * 100}%` }} />
+                                <div className="timeline-region-active"
+                                  style={{ left: `${(dsTrimStart / dsVideoDuration) * 100}%`,
+                                    width: `${((dsTrimEnd - dsTrimStart) / dsVideoDuration) * 100}%` }} />
+                                <div className="timeline-region-dimmed"
+                                  style={{ left: `${(dsTrimEnd / dsVideoDuration) * 100}%`,
+                                    width: `${((dsVideoDuration - dsTrimEnd) / dsVideoDuration) * 100}%` }} />
+                                <div className="timeline-handle timeline-handle-left"
+                                  style={{ left: `${(dsTrimStart / dsVideoDuration) * 100}%` }}
+                                  onMouseDown={(e) => handleDsTimelineDragStart('start', e)} />
+                                <div className="timeline-handle timeline-handle-right"
+                                  style={{ left: `${(dsTrimEnd / dsVideoDuration) * 100}%` }}
+                                  onMouseDown={(e) => handleDsTimelineDragStart('end', e)} />
+                              </div>
+                            </div>
+                            <div className="video-editor-controls" style={{ marginTop: 8 }}>
+                              <div className="trim-controls-vertical">
+                                <div className="trim-duration">{t('wfDuration')}: {formatTime(dsVideoDuration)}</div>
+                                <label>Start:
+                                  <input type="number" className="trim-input" min={0} max={dsVideoDuration} step={0.1}
+                                    value={dsTrimStart} onChange={e => {
+                                      const v = parseFloat(e.target.value) || 0;
+                                      setDsTrimStart(Math.max(0, Math.min(v, dsTrimEnd - 0.1)));
+                                    }} />
+                                  <span className="trim-unit">s</span>
+                                </label>
+                                <label>End:
+                                  <input type="number" className="trim-input" min={0} max={dsVideoDuration} step={0.1}
+                                    value={dsTrimEnd} onChange={e => {
+                                      const v = parseFloat(e.target.value) || 0;
+                                      setDsTrimEnd(Math.min(dsVideoDuration, Math.max(v, dsTrimStart + 0.1)));
+                                    }} />
+                                  <span className="trim-unit">s</span>
+                                </label>
+                                <div className="trim-selection-info">
+                                  {formatTime(dsTrimStart)} - {formatTime(dsTrimEnd)} ({formatTime(dsTrimEnd - dsTrimStart)} selected)
+                                </div>
+                              </div>
+                              <div className="trim-btn-row">
+                                <button className="trim-btn" onClick={handleDsTrim} disabled={dsTrimming}>
+                                  {dsTrimming ? 'Trimming...' : 'Apply Trim'}
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     )}
 
-                    <div className="form-group">
-                      <label>{t('studioAspectRatio')}</label>
-                      <div className="aspect-ratio-btns">
-                        {['portrait', 'landscape', 'square'].map(ar => (
-                          <button key={ar}
-                            className={`btn${studioFluxAspectRatio === ar ? ' primary' : ' secondary'}`}
-                            onClick={() => setStudioFluxAspectRatio(ar)}
-                          >{t(`flux${ar.charAt(0).toUpperCase() + ar.slice(1)}`)}</button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Generate + Cancel + Queue buttons */}
+                    {/* Generate + Queue buttons */}
                     <div className="wf-btn-row" style={{ marginTop: 16 }}>
-                      {studioIsGenerating ? (
-                        <button className="btn cancel-btn" onClick={handleDsCancel} style={{ flex: 1 }}>
-                          {t('wfCancelBtn')}
-                        </button>
-                      ) : (
-                        <button className="btn generate-btn-green"
-                          disabled={!dsCharImagePath || !studioRefVideoPath}
-                          onClick={studioHandleChangeCharacter} style={{ flex: 1 }}>
-                          {t('studioCreateVideo')}
-                        </button>
-                      )}
+                      <button className="btn generate-btn-green"
+                        disabled={!dsCharImagePath || !studioRefVideoPath}
+                        onClick={studioHandleChangeCharacter} style={{ flex: 1 }}>
+                        {t('studioCreateVideo')}
+                      </button>
                       <button className="btn secondary" onClick={handleDsQueueAdd} style={{ flex: 1 }}>
                         {t('wfAddToQueue')}
                       </button>
@@ -4251,11 +4560,6 @@ function App() {
                     {studioStatus && (
                       <div className="status-box" style={{ marginTop: 16 }}>
                         <p>{studioStatus}</p>
-                        {studioIsGenerating && (
-                          <div className="progress-bar">
-                            <div className="progress-fill" style={{ width: `${studioProgress}%` }} />
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
@@ -4279,19 +4583,16 @@ function App() {
                       </label>
                       <label className="yt-meta-label">{t('ytTitle')}
                         <input type="text" className="yt-meta-input"
-                          placeholder={`${studioAvatarName || 'Avatar'} #shorts - YYYY:MM:DD:HH:MM`}
                           value={studioYtTitle}
                           onChange={e => setStudioYtTitle(e.target.value)} />
                       </label>
                       <label className="yt-meta-label">{t('ytDescription')}
                         <textarea className="yt-meta-textarea" rows={2}
-                          placeholder={`${studioYtChannelName || `Dancing ${studioAvatarName || 'Avatar'}`} 많이 사랑해 주세요. 구독 좋아요 부탁드립니다.`}
                           value={studioYtDescription}
                           onChange={e => setStudioYtDescription(e.target.value)} />
                       </label>
                       <label className="yt-meta-label">{t('ytHashtags')}
                         <input type="text" className="yt-meta-input"
-                          placeholder={`#${studioYtChannelName} #dancecover`}
                           value={studioYtHashtags}
                           onChange={e => setStudioYtHashtags(e.target.value)} />
                       </label>
@@ -4384,9 +4685,7 @@ function App() {
                                     <span className="queue-item-label" title={item.ytTitle || item.inputs?.prompt || ''}>
                                       {item.ytTitle || item.label}
                                     </span>
-                                    {item.status !== 'running' && (
-                                      <button className="queue-item-remove" onClick={() => handleWfQueueRemove('change_character', item.id)}>&times;</button>
-                                    )}
+                                    <button className="queue-item-remove" onClick={() => handleWfQueueRemove('change_character', item.id)}>&times;</button>
                                   </div>
                                   {item.ytTitle && item.label && (
                                     <div className="queue-item-sublabel">{item.label}</div>
@@ -4472,6 +4771,9 @@ function App() {
                   <button className={galleryTab === 'videos' ? 'active' : ''} onClick={() => setGalleryTab('videos')}>
                     {t('galleryVideos')} ({videos.length})
                   </button>
+                  <button className={galleryTab === 'stages' ? 'active' : ''} onClick={() => { setGalleryTab('stages'); loadStudioStages(); }}>
+                    {t('galleryStages')} ({studioStages.length})
+                  </button>
                 </div>
 
                 {galleryTab === 'images' && (
@@ -4494,6 +4796,7 @@ function App() {
                               ) : (
                                 <button className="btn primary small" onClick={() => handleRegisterAsAvatar(img)}>Avatar</button>
                               )}
+                              <button className="btn small" onClick={() => handleRegisterAsStage(img)}>Stage</button>
                               <button className="btn danger small" onClick={() => handleDeleteOutput(img.filename)}>{t('galleryDelete')}</button>
                             </div>
                           </div>
@@ -4560,6 +4863,34 @@ function App() {
                       ))}
                     </div>
                   )
+                )}
+
+                {galleryTab === 'stages' && (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                      <label className="btn primary small" style={{ cursor: 'pointer' }}>
+                        <input type="file" accept="image/*" onChange={handleGalleryStageUpload} style={{ display: 'none' }} />
+                        + {t('studioStageUpload')}
+                      </label>
+                    </div>
+                    {studioStages.length === 0 ? (
+                      <div className="gallery-empty"><p>{t('galleryEmpty')}</p></div>
+                    ) : (
+                      <div className="gallery-grid">
+                        {studioStages.map(stage => (
+                          <div key={stage.filename} className="gallery-item">
+                            <img src={stage.url} alt={stage.filename} className="gallery-item-img" />
+                            <div className="gallery-item-info">
+                              <span className="gallery-item-name" title={stage.filename}>{stage.filename}</span>
+                              <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                                <button className="btn danger small" onClick={() => handleStudioStageDelete(stage.filename)}>{t('galleryDelete')}</button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -4629,8 +4960,13 @@ function App() {
       </div>
 
       {/* Avatar Image Popup Viewer */}
-      {avatarPopup && (
+      {avatarPopup && (() => {
+        const popupImages = avatarPopup.source === 'danceshorts' ? dsAvatarImages
+          : (workflowStates[avatarPopup.wfId]?.avatarImages?.[avatarPopup.group] || []);
+        const showNav = popupImages.length > 1;
+        return (
         <div className="avatar-popup-overlay" onClick={() => setAvatarPopup(null)}>
+          {showNav && <button className="avatar-popup-nav avatar-popup-nav-left" onClick={(e) => { e.stopPropagation(); avatarPopupNavigate('left'); }}>&#10094;</button>}
           <div className="avatar-popup" onClick={e => e.stopPropagation()}>
             <div className="avatar-popup-header">
               <span className="avatar-popup-name">{avatarPopup.filename?.replace(/\.[^.]+$/, '') || ''}</span>
@@ -4660,8 +4996,10 @@ function App() {
               </div>
             )}
           </div>
+          {showNav && <button className="avatar-popup-nav avatar-popup-nav-right" onClick={(e) => { e.stopPropagation(); avatarPopupNavigate('right'); }}>&#10095;</button>}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

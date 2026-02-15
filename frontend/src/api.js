@@ -170,6 +170,16 @@ export const startWorkflowGeneration = async (params) => {
   return response.data;
 };
 
+export const submitBatchQueue = async (workflowId, items) => {
+  const response = await api.post('/queue/submit-batch', { workflow_id: workflowId, items });
+  return response.data;
+};
+
+export const getQueueStatus = async () => {
+  const response = await api.get('/queue/status');
+  return response.data;
+};
+
 export const getWorkflowStatus = async () => {
   const response = await api.get('/workflow/status');
   return response.data;

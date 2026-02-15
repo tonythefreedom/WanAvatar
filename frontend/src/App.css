@@ -2148,8 +2148,8 @@ video.picker-thumb {
 }
 
 .queue-thumb {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 64px;
   border-radius: 4px;
   object-fit: cover;
 }

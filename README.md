@@ -50,6 +50,75 @@ AI 비디오 프로덕션 스튜디오 — 텍스트, 이미지, 음성에서 �
 - **다국어 UI**: 한국어, 영어, 중국어 지원
 - **LoRA 파인튜닝**: 특정 인물에 대한 립싱크 품질 향상
 
+## Change Character V1.1 최적 설정 (Production)
+
+> **2026-02-15 확정** — 얼굴 디테일, 손가락 형태, 전체 품질 모두 최상의 결과를 보인 설정.
+> 이 설정을 변경할 때는 반드시 품질 비교 테스트를 수행할 것.
+
+### 모델 및 양자화
+
+| 항목 | 값 | 비고 |
+|------|-----|------|
+| **모델** | `Wan22Animate/wan2.2_animate_14B_bf16.safetensors` | 33GB bf16 원본 모델 |
+| **양자화** | `fp8_e4m3fn` | 런타임 FP8 양자화. `fp8_e4m3fn_scaled`는 사용 불가 (모델에 pre-scaled 가중치 없음) |
+| **base_precision** | `bf16` | |
+| **attention_mode** | `sageattn` | SageAttention 메모리 효율 어텐션 |
+| **rms_norm_function** | `pytorch` | cuDNN 대신 PyTorch native |
+| **load_device** | `offload_device` | |
+
+### 샘플러 설정
+
+| 항목 | 값 | 비고 |
+|------|-----|------|
+| **스케줄러** | `euler` | FlowMatchEulerDiscreteScheduler. float 타임스텝 [1000.0, 979.77, ...] |
+| **스텝** | `14` | LightX2V distill LoRA 사용 시 최적 (8=최소, 12=밸런스, 14=최적 품질) |
+| **CFG** | `1.0` | **반드시 1.0 유지**. CFG 5.0은 얼굴 블러 유발 (Wan Animate는 CFG 1.0이 공식 권장) |
+| **shift** | `8.0` | 공식 기본값은 5.0이나 8.0에서 더 다이나믹한 모션 |
+
+### TeaCache
+
+| 항목 | 값 | 비고 |
+|------|-----|------|
+| **rel_l1_thresh** | `0.15` | 0.3은 너무 공격적 → 품질 저하. 0.15가 속도/품질 균형점 |
+| **start_step** | `1` | 첫 스텝은 구도 결정이므로 캐시 스킵 |
+| **use_coefficients** | `true` | |
+| **cache_device** | `offload_device` | |
+
+### LoRA (5개, 런타임 어댑터)
+
+| LoRA | 강도 | 용도 |
+|------|------|------|
+| `lightx2v_elite_it2v_animate_face` | **1.0** | Distill 가속 (1.2는 아티팩트 유발) |
+| `WAN22_MoCap_fullbodyCOPY_ED` | 0.4 | 모션 캡처 |
+| `Wan2.2-Fun-A14B-InP-Fusion-Elite` | 0.65 | InPaint Fusion |
+| `FullDynamic_Ultimate_Fusion_Elite` | 0.7 | 다이나믹 퓨전 |
+| `WanAnimate_relight_lora_fp16` | 0.7 | 리라이팅 |
+
+### 해상도 및 메모리
+
+| 항목 | 값 | 비고 |
+|------|-----|------|
+| **해상도** | `720x1280` | 얼굴 디테일 유지 최소 해상도. 480x832는 눈 블러 발생 |
+| **blocks_to_swap** | `20` | 40블록 중 20블록을 RAM으로 스왑 (VRAM 절약) |
+| **frame_window_size** | `77` | 공식 기본값, 시간 일관성 최적 |
+
+### 품질 문제 원인 기록
+
+| 증상 | 원인 | 해결 |
+|------|------|------|
+| 얼굴 블러/뭉개짐 | CFG 5.0 | **CFG 1.0으로 변경** |
+| 손가락 기형/뿌옇게 | GGUF Q4_K_M 양자화 (4bit) | **bf16 + fp8_e4m3fn으로 변경** |
+| 전체 디테일 부족 | 스텝 수 부족 (4-8 스텝) | **14 스텝으로 증가** |
+| TeaCache 품질 저하 | rel_l1_thresh 0.3 (너무 공격적) | **0.15로 감소** |
+| LightX2V 아티팩트 | 강도 1.2 (과도) | **1.0으로 감소** |
+| `fp8_e4m3fn_scaled` 에러 | bf16 모델에 pre-scaled 가중치 없음 | **`fp8_e4m3fn` 사용** |
+
+### 성능
+
+- 스텝당 약 37초 (TeaCache 히트 시 ~17초)
+- 77 프레임 청크당 약 5-8분
+- 265 프레임 (4 청크) 영상 약 25-35분
+
 ## 시스템 요구사항
 
 | 항목 | 요구사항 |

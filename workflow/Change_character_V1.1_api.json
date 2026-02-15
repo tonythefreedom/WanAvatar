@@ -41,7 +41,7 @@
   "123": {
     "class_type": "Int",
     "inputs": {
-      "value": 1080
+      "value": 720
     },
     "_meta": {
       "title": "Int"
@@ -50,7 +50,7 @@
   "124": {
     "class_type": "Int",
     "inputs": {
-      "value": 1920
+      "value": 1280
     },
     "_meta": {
       "title": "Int"
@@ -381,14 +381,18 @@
   "205": {
     "class_type": "WanVideoModelLoader",
     "inputs": {
-      "model": "Wan22Animate/Wan22Animate_merged_loras-Q4_K_M.gguf",
+      "model": "Wan22Animate/wan2.2_animate_14B_bf16.safetensors",
       "base_precision": "bf16",
-      "quantization": "disabled",
+      "quantization": "fp8_e4m3fn",
       "load_device": "offload_device",
       "attention_mode": "sageattn",
       "rms_norm_function": "pytorch",
       "block_swap_args": [
         "207",
+        0
+      ],
+      "lora": [
+        "208",
         0
       ]
     },
@@ -400,7 +404,7 @@
     "class_type": "WanVideoLoraSelectMulti",
     "inputs": {
       "lora_0": "lightx2v_elite_it2v_animate_face.safetensors",
-      "strength_0": 1.2000000000000002,
+      "strength_0": 1.0,
       "lora_1": "WAN22_MoCap_fullbodyCOPY_ED.safetensors",
       "strength_1": 0.4000000000000001,
       "lora_2": "Wan2.2-Fun-A14B-InP-Fusion-Elite.safetensors",
@@ -408,7 +412,7 @@
       "lora_3": "FullDynamic_Ultimate_Fusion_Elite.safetensors",
       "strength_3": 0.7000000000000002,
       "lora_4": "WanAnimate_relight_lora_fp16.safetensors",
-      "strength_4": 0.7000000000000002,
+      "strength_4": 0.85,
       "low_mem_load": false,
       "merge_loras": true
     },
@@ -434,7 +438,7 @@
     "inputs": {
       "model_name": "models_t5_umt5-xxl-enc-bf16_fully_uncensored.safetensors",
       "precision": "bf16",
-      "positive_prompt": "The character is dancing in the room",
+      "positive_prompt": "Hard lighting, side lighting, the character is dancing in the room, cinematic shadows cast on the floor, dramatic lighting",
       "negative_prompt": "\u8272\u8c03\u8273\u4e3d\uff0c\u8fc7\u66dd\uff0c\u9759\u6001\uff0c\u7ec6\u8282\u6a21\u7cca\u4e0d\u6e05\uff0c\u5b57\u5e55\uff0c\u98ce\u683c\uff0c\u4f5c\u54c1\uff0c\u753b\u4f5c\uff0c\u753b\u9762\uff0c\u9759\u6b62\uff0c\u6574\u4f53\u53d1\u7070\uff0c\u6700\u5dee\u8d28\u91cf\uff0c\u4f4e\u8d28\u91cf\uff0cJPEG\u538b\u7f29\u6b8b\u7559\uff0c\u4e11\u964b\u7684\uff0c\u6b8b\u7f3a\u7684\uff0c\u591a\u4f59\u7684\u624b\u6307\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u624b\u90e8\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u8138\u90e8\uff0c\u7578\u5f62\u7684\uff0c\u6bc1\u5bb9\u7684\uff0c\u5f62\u6001\u7578\u5f62\u7684\u80a2\u4f53\uff0c\u624b\u6307\u878d\u5408\uff0c\u9759\u6b62\u4e0d\u52a8\u7684\u753b\u9762\uff0c\u6742\u4e71\u7684\u80cc\u666f\uff0c\u4e09\u6761\u817f\uff0c\u80cc\u666f\u4eba\u5f88\u591a\uff0c\u5012\u7740\u8d70",
       "quantization": "disabled",
       "use_disk_cache": false,
@@ -941,12 +945,12 @@
   "234": {
     "class_type": "WanVideoSampler",
     "inputs": {
-      "steps": 4,
+      "steps": 14,
       "cfg": 1.0000000000000002,
       "shift": 8.000000000000002,
       "seed": 39397516397036,
       "force_offload": true,
-      "scheduler": "flowmatch_distill",
+      "scheduler": "euler",
       "riflex_freq_index": 0,
       "denoise_strength": 1,
       "batched_cfg": false,
@@ -1066,7 +1070,7 @@
   "260": {
     "class_type": "WanVideoTeaCache",
     "inputs": {
-      "rel_l1_thresh": 0.3,
+      "rel_l1_thresh": 0.15,
       "start_step": 1,
       "end_step": -1,
       "cache_device": "offload_device",

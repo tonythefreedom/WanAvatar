@@ -31,6 +31,8 @@ import {
   prepareAvatar,
   getFashionStyles,
   cancelGeneration,
+  submitBatchQueue,
+  getQueueStatus,
   authLogin,
   authGoogle,
   authMe,
@@ -175,6 +177,7 @@ const translations = {
     wfQueueRunning: 'Processing queue...',
     wfQueuePending: 'Pending',
     ytMeta: 'YouTube Shorts',
+    ytUploadEnabled: 'Upload to YouTube',
     ytTitle: 'Title',
     ytDescription: 'Description',
     ytHashtags: 'Hashtags',
@@ -400,6 +403,7 @@ const translations = {
     wfQueueRunning: '큐 처리 중...',
     wfQueuePending: '대기 중',
     ytMeta: 'YouTube Shorts',
+    ytUploadEnabled: '유튜브 업로드',
     ytTitle: '제목',
     ytDescription: '설명',
     ytHashtags: '해시태그',
@@ -625,6 +629,7 @@ const translations = {
     wfQueueRunning: '队列处理中...',
     wfQueuePending: '等待中',
     ytMeta: 'YouTube Shorts',
+    ytUploadEnabled: '上传到YouTube',
     ytTitle: '标题',
     ytDescription: '描述',
     ytHashtags: '标签',
@@ -863,10 +868,11 @@ function App() {
         const hasRunningWithTask = saved[wfId].items.some(i => i.status === 'running' && i.taskId);
         saved[wfId].isProcessing = hasRunningWithTask;
         saved[wfId].items = saved[wfId].items
-          .filter(i => i.status !== 'completed' && i.status !== 'failed')
+          .filter(i => i.status !== 'completed')
           .map(i => {
             if (i.status === 'running' && i.taskId) return i;
-            if (i.status === 'running') return { ...i, status: 'pending', progress: 0 };
+            // Reset running without taskId or failed items back to pending
+            if (i.status === 'running' || i.status === 'failed') return { ...i, status: 'pending', progress: 0, error: null, taskId: null };
             return i;
           });
         if (saved[wfId].items.length === 0) delete saved[wfId];
@@ -965,11 +971,13 @@ function App() {
   const [studioStages, setStudioStages] = useState([]);
   const [studioSelectedStage, setStudioSelectedStage] = useState(null);
   const [studioBgPrompt, setStudioBgPrompt] = useState('light color and strength keep changing');
+  const [stagePopup, setStagePopup] = useState(null); // { url, filename }
 
   // Dance Shorts - YouTube Settings
   const DEFAULT_YT_CHANNEL = 'https://www.youtube.com/channel/UCYcITGLPC3qv9txSM4GB70w';
   const [studioYtChannel, setStudioYtChannel] = useState(DEFAULT_YT_CHANNEL);
   const [studioYtChannelName, setStudioYtChannelName] = useState('');
+  const [studioYtUpload, setStudioYtUpload] = useState(false);
   const [studioYtTitle, setStudioYtTitle] = useState('');
   const [studioYtDescription, setStudioYtDescription] = useState('');
   const [studioYtHashtags, setStudioYtHashtags] = useState('');
@@ -1244,41 +1252,56 @@ function App() {
     });
   }, [workflowStates, updateWfState, t]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Restore queue processing tasks after page refresh ───
+  // ─── Restore queue from server after page refresh ───
   useEffect(() => {
     if (queueRestoredRef.current) return;
     queueRestoredRef.current = true;
-    for (const [wfId, q] of Object.entries(wfQueue)) {
-      if (!q?.items) continue;
-      const runningItem = q.items.find(i => i.status === 'running' && i.taskId);
-      if (!runningItem) continue;
-      const { id: itemId, taskId } = runningItem;
-      // Resume polling for the running queue item
-      const poll = setInterval(async () => {
-        try {
-          const s = await getTaskStatus(taskId);
-          updateQueueItem(wfId, itemId, { progress: Math.round((s.progress || 0) * 100) });
-          if (s.status === 'completed') {
-            clearInterval(poll);
-            updateQueueItem(wfId, itemId, { status: 'completed', progress: 100, outputVideo: s.output_url || s.output_path, taskId: null });
-            // Continue processing remaining pending items
-            setTimeout(() => handleWfQueueStart(wfId), 500);
-          } else if (s.status === 'failed') {
-            clearInterval(poll);
-            updateQueueItem(wfId, itemId, { status: 'failed', error: s.message || 'Failed', taskId: null });
-            setTimeout(() => handleWfQueueStart(wfId), 500);
-          } else if (s.status === 'cancelled') {
-            clearInterval(poll);
-            updateQueueItem(wfId, itemId, { status: 'failed', error: 'Cancelled', taskId: null });
-            setTimeout(() => handleWfQueueStart(wfId), 500);
+
+    // Check if any items have taskIds (were submitted to server)
+    const hasServerItems = Object.entries(wfQueue).some(([, q]) =>
+      q?.items?.some(i => i.taskId)
+    );
+    if (!hasServerItems) return;
+
+    (async () => {
+      try {
+        const data = await getQueueStatus();
+        const serverTasks = data.tasks || {};
+
+        for (const [wfId, q] of Object.entries(wfQueue)) {
+          if (!q?.items) continue;
+          let hasActiveItems = false;
+
+          for (const item of q.items) {
+            if (!item.taskId) continue;
+            const st = serverTasks[item.taskId];
+            if (!st) {
+              updateQueueItem(wfId, item.id, { status: 'failed', error: 'Task lost (server restarted)', taskId: null });
+              continue;
+            }
+            if (st.status === 'completed') {
+              updateQueueItem(wfId, item.id, { status: 'completed', progress: 100, outputVideo: st.output_path, taskId: null });
+            } else if (st.status === 'failed') {
+              updateQueueItem(wfId, item.id, { status: 'failed', error: st.message || 'Failed', taskId: null });
+            } else if (st.status === 'cancelled') {
+              updateQueueItem(wfId, item.id, { status: 'failed', error: 'Cancelled', taskId: null });
+            } else {
+              hasActiveItems = true;
+              const progress = Math.round((st.progress || 0) * 100);
+              const displayStatus = st.status === 'queued' ? 'pending' : 'running';
+              updateQueueItem(wfId, item.id, { status: displayStatus, progress });
+            }
           }
-        } catch (err) {
-          clearInterval(poll);
-          updateQueueItem(wfId, itemId, { status: 'failed', error: err.message, taskId: null });
-          setTimeout(() => handleWfQueueStart(wfId), 500);
+
+          if (hasActiveItems) {
+            setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: true } }));
+            startQueuePolling(wfId);
+          }
         }
-      }, 3000);
-    }
+      } catch (err) {
+        console.error('Failed to restore queue from server:', err);
+      }
+    })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ============ Studio Handlers ============
@@ -1460,6 +1483,7 @@ function App() {
         bg_image: studioSelectedStage?.url || null,
       },
       gallerySelected: {},
+      ytUpload: studioYtUpload || false,
       ytTitle,
       ytDescription: ytDesc,
       ytHashtags: ytHash,
@@ -1512,6 +1536,7 @@ function App() {
         bg_image: studioSelectedStage?.url || null,
       },
       gallerySelected: {},
+      ytUpload: studioYtUpload || false,
       ytTitle,
       ytDescription: ytDesc,
       ytHashtags: ytHash,
@@ -1554,10 +1579,8 @@ function App() {
   const getStudioYtDefaults = useCallback(() => {
     const name = studioAvatarName || 'Avatar';
     const chName = studioYtChannelName || `Dancing ${name}`;
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}:${String(now.getMonth() + 1).padStart(2, '0')}:${String(now.getDate()).padStart(2, '0')}:${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     return {
-      title: `${name} #shorts - ${dateStr}`,
+      title: `${name} #shorts`,
       description: `${chName} 많이 사랑해 주세요. 구독 좋아요 부탁드립니다.`,
       hashtags: `#${chName} #dancecover`,
     };
@@ -1640,6 +1663,7 @@ function App() {
     if (activeMenu !== 'danceshorts') return;
     const handleKeyDown = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      if (avatarPopup || stagePopup) return; // popup has its own navigation
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         if (dsAvatarImages.length === 0) return;
         e.preventDefault();
@@ -1666,7 +1690,40 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeMenu, dsAvatarImages, dsCharImagePath, studioStages, studioSelectedStage]);
+  }, [activeMenu, dsAvatarImages, dsCharImagePath, studioStages, studioSelectedStage, avatarPopup, stagePopup]);
+
+  // Keyboard arrow navigation: Left/Right for workflow avatar images (e.g. Face Swap)
+  useEffect(() => {
+    if (activeMenu !== 'video_studio' || !activeWorkflowId) return;
+    const wfState = workflowStates[activeWorkflowId];
+    if (!wfState) return;
+    const currentGroup = wfState.avatarSelectedGroup?._current || '';
+    const avatarImgs = wfState.avatarImages?.[currentGroup] || [];
+    if (avatarImgs.length === 0) return;
+    // Find the avatar_gallery input key
+    const wfDef = workflows.find(w => w.id === activeWorkflowId);
+    const avatarInput = wfDef?.inputs?.find(inp => inp.avatar_gallery);
+    if (!avatarInput) return;
+    const selectedPath = wfState.filePaths?.[avatarInput.key];
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (avatarPopup || stagePopup) return; // popup has its own navigation
+      e.preventDefault();
+      const idx = avatarImgs.findIndex(img => img.path === selectedPath);
+      let newIdx;
+      if (e.key === 'ArrowLeft') {
+        newIdx = idx <= 0 ? avatarImgs.length - 1 : idx - 1;
+      } else {
+        newIdx = idx >= avatarImgs.length - 1 ? 0 : idx + 1;
+      }
+      const img = avatarImgs[newIdx];
+      updateWfFilePath(activeWorkflowId, avatarInput.key, img.path);
+      updateWfPreview(activeWorkflowId, avatarInput.key, img.url);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeMenu, activeWorkflowId, workflowStates, avatarPopup, stagePopup]);
 
   // Avatar popup: navigate to prev/next image
   const avatarPopupNavigate = useCallback((direction) => {
@@ -1686,17 +1743,62 @@ function App() {
     }
   }, [avatarPopup, dsAvatarImages, workflowStates]);
 
-  // Avatar popup: Left/Right arrow key browsing
+  // Avatar popup: Left/Right arrow key browsing + Enter to select
   useEffect(() => {
     if (!avatarPopup) return;
     const handler = (e) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      e.preventDefault();
-      avatarPopupNavigate(e.key === 'ArrowRight' ? 'right' : 'left');
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        avatarPopupNavigate(e.key === 'ArrowRight' ? 'right' : 'left');
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (avatarPopup.source === 'danceshorts' && avatarPopup.img) {
+          setDsCharImagePath(avatarPopup.img.path);
+          setDsCharImagePreview(avatarPopup.img.url);
+        } else if (avatarPopup.wfId && avatarPopup.img) {
+          const wfDef = workflows.find(w => w.id === avatarPopup.wfId);
+          const avatarInput = wfDef?.inputs?.find(inp => inp.avatar_gallery);
+          if (avatarInput) {
+            updateWfFilePath(avatarPopup.wfId, avatarInput.key, avatarPopup.img.path);
+            updateWfPreview(avatarPopup.wfId, avatarInput.key, avatarPopup.img.url);
+          }
+        }
+        setAvatarPopup(null);
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [avatarPopup, avatarPopupNavigate]);
+
+  // Stage popup: navigate to prev/next
+  const stagePopupNavigate = useCallback((direction) => {
+    if (!stagePopup || studioStages.length <= 1) return;
+    const idx = studioStages.findIndex(s => s.filename === stagePopup.filename);
+    if (idx === -1) return;
+    const next = direction === 'right'
+      ? studioStages[(idx + 1) % studioStages.length]
+      : studioStages[(idx - 1 + studioStages.length) % studioStages.length];
+    setStagePopup({ url: next.url, filename: next.filename });
+    setStudioSelectedStage(next);
+  }, [stagePopup, studioStages]);
+
+  // Stage popup: Left/Right arrow key browsing
+  useEffect(() => {
+    if (!stagePopup) return;
+    const handler = (e) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        stagePopupNavigate(e.key === 'ArrowRight' ? 'right' : 'left');
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const stage = studioStages.find(s => s.filename === stagePopup.filename);
+        if (stage) setStudioSelectedStage(stage);
+        setStagePopup(null);
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [stagePopup, stagePopupNavigate, studioStages]);
 
   // Studio task polling (shared)
   const pollStudioTask = (taskId) => {
@@ -2285,8 +2387,8 @@ function App() {
     } catch {}
   };
 
-  const handleWfAvatarDelete = async (wfId, group, img) => {
-    if (!window.confirm(`Delete "${img.filename}" from ${group}?`)) return;
+  const handleWfAvatarDelete = async (wfId, group, img, skipConfirm = false) => {
+    if (!skipConfirm && !window.confirm(`Delete "${img.filename}" from ${group}?`)) return;
     try {
       await deleteAvatarImage(group, img.filename);
       // Refresh avatar images for ALL workflows that share this group
@@ -2442,7 +2544,7 @@ function App() {
           filePaths: { ...wfState.filePaths },
           previews: { ...wfState.previews },
           gallerySelected: { ...wfState.gallerySelected },
-          ytTitle: '', ytDescription: '', ytHashtags: '',
+          ytUpload: false, ytTitle: '', ytDescription: '', ytHashtags: '',
           status: 'pending', progress: 0, outputVideo: null, error: null,
         };
         if (img) {
@@ -2893,6 +2995,7 @@ function App() {
       filePaths: { ...wfState.filePaths },
       previews: { ...wfState.previews },
       gallerySelected: { ...wfState.gallerySelected },
+      ytUpload: wfState.ytUpload || false,
       ytTitle: wfState.ytTitle || '',
       ytDescription: wfState.ytDescription || '',
       ytHashtags: wfState.ytHashtags || '',
@@ -2913,121 +3016,125 @@ function App() {
     updateWfState(wfId, { status: `\u2705 Added: ${item.label}` });
   };
 
+  const queuePollIntervals = useRef({});
+
+  const startQueuePolling = useCallback((wfId) => {
+    if (queuePollIntervals.current[wfId]) {
+      clearInterval(queuePollIntervals.current[wfId]);
+    }
+    const poll = setInterval(async () => {
+      try {
+        const data = await getQueueStatus();
+        const serverTasks = data.tasks || {};
+        const currentQueue = wfQueueRef.current[wfId];
+        if (!currentQueue?.items) return;
+
+        let allDone = true;
+        for (const item of currentQueue.items) {
+          if (!item.taskId) continue;
+          const st = serverTasks[item.taskId];
+          if (!st) continue;
+          if (st.status === 'completed') {
+            updateQueueItem(wfId, item.id, { status: 'completed', progress: 100, outputVideo: st.output_path, taskId: null });
+          } else if (st.status === 'failed') {
+            updateQueueItem(wfId, item.id, { status: 'failed', error: st.message || 'Failed', taskId: null });
+          } else if (st.status === 'cancelled') {
+            updateQueueItem(wfId, item.id, { status: 'failed', error: 'Cancelled', taskId: null });
+          } else {
+            allDone = false;
+            const progress = Math.round((st.progress || 0) * 100);
+            const displayStatus = st.status === 'queued' ? 'pending' : 'running';
+            updateQueueItem(wfId, item.id, { progress, status: displayStatus });
+          }
+        }
+
+        if (allDone) {
+          clearInterval(poll);
+          delete queuePollIntervals.current[wfId];
+          setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: false } }));
+          setTimeout(() => {
+            setWfQueue(prev => {
+              const q = prev[wfId];
+              if (!q) return prev;
+              const remaining = q.items.filter(i => i.status === 'pending' || i.status === 'running');
+              if (remaining.length === q.items.length) return prev;
+              return { ...prev, [wfId]: { ...q, items: remaining } };
+            });
+          }, 10000);
+        }
+      } catch (err) {
+        console.error('Queue poll error:', err);
+      }
+    }, 3000);
+    queuePollIntervals.current[wfId] = poll;
+  }, [updateQueueItem]);
+
   const handleWfQueueStart = async (wfId) => {
     const queue = wfQueueRef.current[wfId];
     if (!queue?.items?.length || queue.isProcessing) return;
 
+    const wfDef = workflows.find(w => w.id === wfId);
+    if (!wfDef) return;
+
+    const pendingItems = queue.items.filter(i => i.status === 'pending');
+    if (pendingItems.length === 0) return;
+
     setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: true } }));
 
-    const wfDef = workflows.find(w => w.id === wfId);
-
-    // Process pending items, including any newly added during execution
-    const processNextPending = async () => {
-      const currentQueue = wfQueueRef.current[wfId];
-      if (!currentQueue) return null;
-      return currentQueue.items.find(i => i.status === 'pending');
-    };
-
-    let nextItem = await processNextPending();
-    while (nextItem) {
-      const itemId = nextItem.id;
-      updateQueueItem(wfId, itemId, { status: 'running', progress: 0 });
-
-      // Re-read from ref to get latest data
-      const currentItem = wfQueueRef.current[wfId]?.items?.find(i => i.id === itemId);
-      if (!currentItem) { nextItem = await processNextPending(); continue; }
-
-      try {
-        // Build payload
-        const payload = { ...currentItem.inputs };
-        for (const [key, path] of Object.entries(currentItem.filePaths)) {
-          if (!Array.isArray(path)) payload[key] = path;
-        }
-        for (const inp of wfDef.inputs) {
-          if (inp.type === 'gallery_select') {
-            const sel = (currentItem.gallerySelected[inp.key] || []).map(i => i.path);
-            if (sel.length > 0) {
+    // Build batch payload
+    const batchItems = [];
+    for (const item of pendingItems) {
+      const payload = { ...item.inputs };
+      for (const [key, path] of Object.entries(item.filePaths || {})) {
+        if (!Array.isArray(path)) payload[key] = path;
+      }
+      for (const inp of wfDef.inputs) {
+        if (inp.type === 'gallery_select') {
+          const sel = (item.gallerySelected?.[inp.key] || []).map(i => i.path);
+          if (sel.length > 0) {
+            try {
               const result = await prepareWorkflowImages(sel);
               payload[inp.key] = result.folder_path;
+            } catch (err) {
+              updateQueueItem(wfId, item.id, { status: 'failed', error: `Prepare images: ${err.message}` });
+              continue;
             }
           }
         }
-
-        const data = await startWorkflowGeneration({
-          workflow_id: wfId, inputs: payload,
-          yt_title: currentItem.ytTitle || '',
-          yt_description: currentItem.ytDescription || '',
-          yt_hashtags: currentItem.ytHashtags || '',
-          yt_upload: !!(currentItem.ytTitle || currentItem.ytDescription || currentItem.ytHashtags),
-        });
-        const taskId = data.task_id;
-        updateQueueItem(wfId, itemId, { taskId });
-
-        // Poll until done
-        await new Promise((resolve) => {
-          const poll = setInterval(async () => {
-            try {
-              const s = await getTaskStatus(taskId);
-              updateQueueItem(wfId, itemId, {
-                progress: Math.round((s.progress || 0) * 100),
-              });
-              if (s.status === 'completed') {
-                clearInterval(poll);
-                updateQueueItem(wfId, itemId, {
-                  status: 'completed', progress: 100,
-                  outputVideo: s.output_url || s.output_path, taskId: null,
-                });
-                resolve();
-              } else if (s.status === 'failed') {
-                clearInterval(poll);
-                updateQueueItem(wfId, itemId, {
-                  status: 'failed', error: s.message || 'Failed', taskId: null,
-                });
-                resolve();
-              } else if (s.status === 'cancelled') {
-                clearInterval(poll);
-                updateQueueItem(wfId, itemId, {
-                  status: 'failed', error: 'Cancelled', taskId: null,
-                });
-                resolve();
-              }
-            } catch (err) {
-              clearInterval(poll);
-              updateQueueItem(wfId, itemId, { status: 'failed', error: err.message, taskId: null });
-              resolve();
-            }
-          }, 3000);
-        });
-      } catch (err) {
-        updateQueueItem(wfId, itemId, { status: 'failed', error: err.message });
       }
-
-      // Check for next pending item (including newly added ones)
-      nextItem = await processNextPending();
+      batchItems.push({
+        client_item_id: item.id,
+        inputs: payload,
+        yt_title: item.ytTitle || '',
+        yt_description: item.ytDescription || '',
+        yt_hashtags: item.ytHashtags || '',
+        yt_upload: item.ytUpload || false,
+      });
     }
 
-    // Queue done: remove completed/failed items from storage (keep in UI briefly)
-    setWfQueue(prev => {
-      const q = prev[wfId];
-      if (!q) return { ...prev, [wfId]: { isProcessing: false, items: [] } };
-      return { ...prev, [wfId]: { ...q, isProcessing: false } };
-    });
-    // Auto-clear completed/failed after 10 seconds
-    setTimeout(() => {
-      setWfQueue(prev => {
-        const q = prev[wfId];
-        if (!q) return prev;
-        const remaining = q.items.filter(i => i.status === 'pending' || i.status === 'running');
-        if (remaining.length === q.items.length) return prev;
-        return { ...prev, [wfId]: { ...q, items: remaining } };
-      });
-    }, 10000);
+    if (batchItems.length === 0) {
+      setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: false } }));
+      return;
+    }
+
+    try {
+      const data = await submitBatchQueue(wfId, batchItems);
+      for (const mapping of data.tasks) {
+        updateQueueItem(wfId, mapping.client_item_id, { taskId: mapping.task_id, progress: 0 });
+      }
+      startQueuePolling(wfId);
+    } catch (err) {
+      for (const item of pendingItems) {
+        updateQueueItem(wfId, item.id, { status: 'failed', error: `Submit failed: ${err.message}` });
+      }
+      setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: false } }));
+    }
   };
 
   const handleWfQueueRemove = async (wfId, itemId) => {
     const q = wfQueueRef.current[wfId];
     const item = q?.items?.find(i => i.id === itemId);
-    if (item?.status === 'running' && item?.taskId) {
+    if (item?.taskId) {
       try { await cancelGeneration(item.taskId); } catch {}
     }
     setWfQueue(prev => {
@@ -3256,6 +3363,7 @@ function App() {
                     <input type="text" placeholder="YouTube URL"
                       value={wfState.youtubeUrl?.[inputDef.key] || ''}
                       onChange={e => updateWfState(wfId, { youtubeUrl: { ...wfState.youtubeUrl, [inputDef.key]: e.target.value } })}
+                      onKeyDown={e => { if (e.key === 'Enter' && wfState.youtubeUrl?.[inputDef.key]?.trim() && !wfState.youtubeDownloading?.[inputDef.key]) handleWfYoutubeDownload(wfId, inputDef.key); }}
                       disabled={wfState.youtubeDownloading?.[inputDef.key]} />
                     <button className="btn btn-youtube-dl" onClick={() => handleWfYoutubeDownload(wfId, inputDef.key)}
                       disabled={wfState.youtubeDownloading?.[inputDef.key] || !wfState.youtubeUrl?.[inputDef.key]?.trim()}>
@@ -4200,6 +4308,12 @@ function App() {
                         {wf.output_type !== 'image' && wf.id !== 'change_character' && <div className="card yt-meta-card">
                           <h3>{t('ytMeta')}</h3>
                           <div className="yt-meta-fields">
+                            <label className="yt-meta-label" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                              <input type="checkbox"
+                                checked={wfState.ytUpload || false}
+                                onChange={e => updateWfState(wf.id, { ytUpload: e.target.checked })} />
+                              {t('ytUploadEnabled')}
+                            </label>
                             <label className="yt-meta-label">{t('ytTitle')}
                               <input type="text" className="yt-meta-input"
                                 placeholder={t('ytTitlePlaceholder')}
@@ -4422,7 +4536,8 @@ function App() {
                         {studioStages.map(stage => (
                           <div key={stage.filename}
                             className={`stage-item${studioSelectedStage?.filename === stage.filename ? ' selected' : ''}`}
-                            onClick={() => setStudioSelectedStage(stage)}>
+                            onClick={() => setStudioSelectedStage(stage)}
+                            onDoubleClick={() => setStagePopup({ url: stage.url, filename: stage.filename })}>
                             <img src={stage.url} alt={stage.filename} />
                             <button className="stage-delete-btn"
                               onClick={e => { e.stopPropagation(); handleStudioStageDelete(stage.filename); }}
@@ -4466,7 +4581,8 @@ function App() {
                     {studioRefVideoMode === 'youtube' && (
                       <div className="form-group youtube-input">
                         <input type="text" placeholder="YouTube URL"
-                          value={studioYoutubeUrl} onChange={e => setStudioYoutubeUrl(e.target.value)} />
+                          value={studioYoutubeUrl} onChange={e => setStudioYoutubeUrl(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter' && studioYoutubeUrl.trim() && !studioYoutubeDownloading) studioHandleYoutubeDownload(); }} />
                         <button className="btn btn-youtube-dl" disabled={studioYoutubeDownloading}
                           onClick={studioHandleYoutubeDownload}>
                           {studioYoutubeDownloading ? t('wfDownloading') : t('wfDownloadBtn')}
@@ -4544,24 +4660,6 @@ function App() {
                       </div>
                     )}
 
-                    {/* Generate + Queue buttons */}
-                    <div className="wf-btn-row" style={{ marginTop: 16 }}>
-                      <button className="btn generate-btn-green"
-                        disabled={!dsCharImagePath || !studioRefVideoPath}
-                        onClick={studioHandleChangeCharacter} style={{ flex: 1 }}>
-                        {t('studioCreateVideo')}
-                      </button>
-                      <button className="btn secondary" onClick={handleDsQueueAdd} style={{ flex: 1 }}>
-                        {t('wfAddToQueue')}
-                      </button>
-                    </div>
-
-                    {/* Status */}
-                    {studioStatus && (
-                      <div className="status-box" style={{ marginTop: 16 }}>
-                        <p>{studioStatus}</p>
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -4581,6 +4679,12 @@ function App() {
                           value={studioYtChannelName}
                           onChange={e => setStudioYtChannelName(e.target.value)} />
                       </label>
+                      <label className="yt-meta-label" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <input type="checkbox"
+                          checked={studioYtUpload || false}
+                          onChange={e => setStudioYtUpload(e.target.checked)} />
+                        {t('ytUploadEnabled')}
+                      </label>
                       <label className="yt-meta-label">{t('ytTitle')}
                         <input type="text" className="yt-meta-input"
                           value={studioYtTitle}
@@ -4599,6 +4703,18 @@ function App() {
                     </div>
                   </div>
 
+                  {/* Generate + Queue buttons */}
+                  <div className="wf-btn-row" style={{ marginTop: 16 }}>
+                    <button className="btn generate-btn-green"
+                      disabled={!dsCharImagePath || !studioRefVideoPath}
+                      onClick={studioHandleChangeCharacter} style={{ flex: 1 }}>
+                      {t('studioCreateVideo')}
+                    </button>
+                    <button className="btn secondary" onClick={handleDsQueueAdd} style={{ flex: 1 }}>
+                      {t('wfAddToQueue')}
+                    </button>
+                  </div>
+
                   {/* Output Video & YouTube Upload */}
                   <div className="card" style={{ marginTop: 16 }}>
                     <h3>{t('output')}</h3>
@@ -4614,35 +4730,35 @@ function App() {
                     {studioOutputVideo && !studioIsGenerating && (
                       <div className="output-container">
                         <video controls src={studioOutputVideo} style={{ width: '100%', borderRadius: 8 }} />
-                        <div style={{ marginTop: 12 }}>
+                        <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           {studioYtUploadStatus === 'success' ? (
-                            <div style={{ textAlign: 'center', padding: 8, background: 'var(--bg-secondary)', borderRadius: 8 }}>
-                              <p style={{ color: 'var(--success)', fontWeight: 600, marginBottom: 6 }}>{t('galleryYtSuccess')}</p>
+                            <div style={{ flex: 1, textAlign: 'center', padding: 6, background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                              <p style={{ color: 'var(--success)', fontWeight: 600, marginBottom: 4, fontSize: 13 }}>{t('galleryYtSuccess')}</p>
                               <a href={studioYtUploadResult} target="_blank" rel="noopener noreferrer"
-                                style={{ color: 'var(--primary)', wordBreak: 'break-all' }}>{studioYtUploadResult}</a>
+                                style={{ color: 'var(--primary)', wordBreak: 'break-all', fontSize: 12 }}>{studioYtUploadResult}</a>
                             </div>
                           ) : studioYtUploadStatus === 'error' ? (
-                            <div style={{ textAlign: 'center', padding: 8, background: 'var(--bg-secondary)', borderRadius: 8 }}>
-                              <p style={{ color: 'var(--danger)', marginBottom: 6 }}>{studioYtUploadResult}</p>
+                            <div style={{ flex: 1, textAlign: 'center', padding: 6, background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                              <p style={{ color: 'var(--danger)', marginBottom: 4, fontSize: 13 }}>{studioYtUploadResult}</p>
                               <button className="btn btn-youtube-dl" onClick={handleStudioYtUpload}>
                                 {t('studioYtUploadBtn')}
                               </button>
                             </div>
                           ) : (
-                            <button className="btn btn-youtube-dl" style={{ width: '100%' }}
+                            <button className="btn btn-youtube-dl" style={{ flex: 1 }}
                               disabled={studioYtUploadStatus === 'uploading'}
                               onClick={handleStudioYtUpload}>
                               {studioYtUploadStatus === 'uploading' ? t('studioYtUploading') : t('studioYtUploadBtn')}
                             </button>
                           )}
+                          <a href={studioOutputVideo} download className="btn secondary">
+                            {t('download')}
+                          </a>
                         </div>
-                        <a href={studioOutputVideo} download className="btn secondary" style={{ marginTop: 8, display: 'inline-block' }}>
-                          {t('download')}
-                        </a>
                       </div>
                     )}
                     {!studioOutputVideo && !studioIsGenerating && (
-                      <p style={{ color: '#888', textAlign: 'center', padding: 40 }}>
+                      <p style={{ color: '#888', textAlign: 'center', padding: 20 }}>
                         {t('noOutputYet')}
                       </p>
                     )}
@@ -4959,6 +5075,26 @@ function App() {
         </main>
       </div>
 
+      {/* Stage Popup Viewer */}
+      {stagePopup && (() => {
+        const showNav = studioStages.length > 1;
+        return (
+        <div className="avatar-popup-overlay" onClick={() => setStagePopup(null)}>
+          {showNav && <button className="avatar-popup-nav avatar-popup-nav-left" onClick={(e) => { e.stopPropagation(); stagePopupNavigate('left'); }}>&#10094;</button>}
+          <div className="avatar-popup" onClick={e => e.stopPropagation()}>
+            <div className="avatar-popup-header">
+              <span className="avatar-popup-name">{stagePopup.filename?.replace(/\.[^.]+$/, '') || ''}</span>
+              <button className="avatar-popup-close" onClick={() => setStagePopup(null)}>&times;</button>
+            </div>
+            <div className="avatar-popup-body">
+              <img src={stagePopup.url} alt={stagePopup.filename || ''} />
+            </div>
+          </div>
+          {showNav && <button className="avatar-popup-nav avatar-popup-nav-right" onClick={(e) => { e.stopPropagation(); stagePopupNavigate('right'); }}>&#10095;</button>}
+        </div>
+        );
+      })()}
+
       {/* Avatar Image Popup Viewer */}
       {avatarPopup && (() => {
         const popupImages = avatarPopup.source === 'danceshorts' ? dsAvatarImages
@@ -4987,7 +5123,7 @@ function App() {
                       setDsCharImagePreview(null);
                     }
                   } else {
-                    await handleWfAvatarDelete(avatarPopup.wfId, avatarPopup.group, avatarPopup.img);
+                    await handleWfAvatarDelete(avatarPopup.wfId, avatarPopup.group, avatarPopup.img, true);
                   }
                   setAvatarPopup(null);
                 }}>

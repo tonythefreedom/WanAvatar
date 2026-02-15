@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import threading
 import time as _time
+import collections
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -84,10 +85,16 @@ FLUX_MODEL_ID = "black-forest-labs/FLUX.2-klein-9B"
 FLUX_CACHE_DIR = "/mnt/models"
 REALESRGAN_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "RealESRGAN_x2plus.pth")
 
-# ComfyUI configuration
+# ComfyUI configuration — dual GPU instances
 COMFYUI_DIR = Path("/home/ubuntu/ComfyUI")
-COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188")
-COMFYUI_WS_URL = os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws")
+COMFYUI_INSTANCES = [
+    {"url": "http://127.0.0.1:8188", "ws_url": "ws://127.0.0.1:8188/ws",
+     "port": "8188", "cuda_env": {}, "log": "/tmp/comfyui.log"},
+    {"url": "http://127.0.0.1:8189", "ws_url": "ws://127.0.0.1:8189/ws",
+     "port": "8189", "cuda_env": {"CUDA_VISIBLE_DEVICES": "1"}, "log": "/tmp/comfyui_gpu1.log"},
+]
+COMFYUI_URL = COMFYUI_INSTANCES[0]["url"]  # backward compat for non-queue code paths
+COMFYUI_WS_URL = COMFYUI_INSTANCES[0]["ws_url"]
 WORKFLOW_DIR = Path(__file__).parent / "workflow"
 
 # YouTube / Slack configuration
@@ -132,9 +139,9 @@ WORKFLOW_REGISTRY = {
              "default": "portrait",
              "label": {"en": "Aspect Ratio", "ko": "비율", "zh": "比例"},
              "options": [
-                 {"value": "portrait", "label": {"en": "Portrait (9:16)", "ko": "세로 (9:16)", "zh": "竖屏 (9:16)"}, "params": {"width": 1080, "height": 1920}},
-                 {"value": "landscape", "label": {"en": "Landscape (16:9)", "ko": "가로 (16:9)", "zh": "横屏 (16:9)"}, "params": {"width": 1920, "height": 1080}},
-                 {"value": "square", "label": {"en": "Square (1:1)", "ko": "정사각 (1:1)", "zh": "正方形 (1:1)"}, "params": {"width": 1080, "height": 1080}},
+                 {"value": "portrait", "label": {"en": "Portrait (9:16)", "ko": "세로 (9:16)", "zh": "竖屏 (9:16)"}, "params": {"width": 720, "height": 1280}},
+                 {"value": "landscape", "label": {"en": "Landscape (16:9)", "ko": "가로 (16:9)", "zh": "横屏 (16:9)"}, "params": {"width": 1280, "height": 720}},
+                 {"value": "square", "label": {"en": "Square (1:1)", "ko": "정사각 (1:1)", "zh": "正方形 (1:1)"}, "params": {"width": 720, "height": 720}},
              ]},
             {"key": "bg_image", "type": "image", "node_id": "__custom_bg__",
              "field": "inputs.image", "upload_to_comfyui": True, "required": False,
@@ -473,6 +480,12 @@ gpu0_lock = threading.Lock()  # I2V (cuda:0) / S2V (both GPUs)
 gpu1_lock = threading.Lock()  # FLUX (cuda:1) / S2V (both GPUs)
 executor = ThreadPoolExecutor(max_workers=2)  # Allow concurrent I2V + FLUX
 
+# Server-side batch queue — dual GPU workers
+server_queue = collections.OrderedDict()  # task_id -> {workflow_id, params, client_item_id, submitted_at}
+server_queue_lock = threading.Lock()
+queue_worker_threads = [None, None]  # One worker thread per GPU
+queue_worker_event = threading.Event()  # Shared event to wake both workers
+
 # Distributed / Sequence Parallel setup
 USE_SP = False
 LOCAL_RANK = 0
@@ -664,8 +677,69 @@ async def sync_background_files():
             logging.info(f"Background sync: +{added} -{removed}")
 
 
+def restart_comfyui():
+    """Kill and restart all ComfyUI instances."""
+    import signal
+    comfyui_python = COMFYUI_DIR.parent / "WanAvatar" / "venv" / "bin" / "python3"
+    comfyui_main = COMFYUI_DIR / "main.py"
+    for inst in COMFYUI_INSTANCES:
+        port = inst["port"]
+        # Kill existing process for this port
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["pgrep", "-f", f"main.py.*--port {port}"],
+                capture_output=True, text=True
+            )
+            for pid_str in result.stdout.strip().split("\n"):
+                if pid_str.strip():
+                    try:
+                        os.kill(int(pid_str.strip()), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+            if result.stdout.strip():
+                import time
+                time.sleep(3)
+        except Exception as e:
+            logging.warning(f"Error killing ComfyUI port {port}: {e}")
+        # Start ComfyUI instance
+        try:
+            import subprocess
+            log_file = open(inst["log"], "w")
+            env = os.environ.copy()
+            env.update(inst["cuda_env"])
+            cuda_device = "0" if inst["cuda_env"].get("CUDA_VISIBLE_DEVICES") else ""
+            cmd = [str(comfyui_python), str(comfyui_main),
+                   "--listen", "0.0.0.0", "--port", port, "--disable-auto-launch"]
+            if cuda_device:
+                cmd.extend(["--cuda-device", "0"])  # device 0 within CUDA_VISIBLE_DEVICES scope
+            subprocess.Popen(
+                cmd, cwd=str(COMFYUI_DIR),
+                stdout=log_file, stderr=log_file,
+                start_new_session=True, env=env,
+            )
+            logging.info(f"ComfyUI restart initiated on port {port}")
+        except Exception as e:
+            logging.error(f"Failed to start ComfyUI port {port}: {e}")
+    # Wait for all instances to be ready
+    import time
+    for inst in COMFYUI_INSTANCES:
+        for _ in range(30):
+            time.sleep(2)
+            try:
+                resp = http_requests.get(f"{inst['url']}/system_stats", timeout=3)
+                if resp.status_code == 200:
+                    logging.info(f"ComfyUI port {inst['port']} is ready")
+                    break
+            except Exception:
+                pass
+        else:
+            logging.warning(f"ComfyUI port {inst['port']} did not become ready within 60s")
+
+
 @app.on_event("startup")
 async def on_startup():
+    restart_comfyui()
     await init_db()
     await migrate_existing_files()
     await sync_background_files()
@@ -2361,16 +2435,27 @@ async def get_status(task_id: str, user=Depends(get_current_user)):
 
 @app.post("/api/cancel/{task_id}")
 async def cancel_task(task_id: str, user=Depends(get_current_user)):
-    """Cancel a running generation task."""
+    """Cancel a running or queued generation task."""
     if task_id not in generation_status:
         raise HTTPException(404, "Task not found")
     status = generation_status[task_id]
     if status["status"] in ("completed", "failed", "cancelled"):
         return {"ok": True, "message": "Task already finished"}
-    # Interrupt ComfyUI and clear queue
+    # If task is still queued (not yet started), just remove from server_queue
+    with server_queue_lock:
+        if task_id in server_queue and status["status"] == "queued":
+            server_queue.pop(task_id)
+            generation_status[task_id].update({
+                "status": "cancelled",
+                "message": "Removed from queue by user",
+            })
+            return {"ok": True, "message": "Task removed from queue"}
+    # If task is actively processing, interrupt the correct ComfyUI instance
+    task_gpu = status.get("gpu_id", 0)
+    cancel_url = COMFYUI_INSTANCES[task_gpu]["url"] if task_gpu < len(COMFYUI_INSTANCES) else COMFYUI_URL
     try:
-        http_requests.post(f"{COMFYUI_URL}/interrupt", timeout=5)
-        http_requests.post(f"{COMFYUI_URL}/queue", json={"clear": True}, timeout=5)
+        http_requests.post(f"{cancel_url}/interrupt", timeout=5)
+        http_requests.post(f"{cancel_url}/queue", json={"clear": True}, timeout=5)
     except Exception:
         pass
     generation_status[task_id].update({
@@ -2741,11 +2826,12 @@ class YouTubeDownloadRequest(BaseModel):
     url: str
 
 
-def ensure_comfyui_running():
-    """Ensure ComfyUI server is running, start if needed."""
+def ensure_comfyui_running(gpu_id: int = 0):
+    """Ensure ComfyUI instance for gpu_id is running, start if needed."""
     global comfyui_process
+    inst = COMFYUI_INSTANCES[gpu_id]
     try:
-        resp = http_requests.get(f"{COMFYUI_URL}/system_stats", timeout=3)
+        resp = http_requests.get(f"{inst['url']}/system_stats", timeout=3)
         if resp.status_code == 200:
             return
     except Exception:
@@ -2754,25 +2840,29 @@ def ensure_comfyui_running():
     if not COMFYUI_DIR.exists():
         raise Exception(f"ComfyUI not installed at {COMFYUI_DIR}")
 
-    logging.info("Starting ComfyUI server...")
-    comfyui_log = open("/tmp/comfyui.log", "w")
+    logging.info(f"Starting ComfyUI server on port {inst['port']} (GPU {gpu_id})...")
+    comfyui_log = open(inst["log"], "w")
+    env = os.environ.copy()
+    env.update(inst["cuda_env"])
+    cmd = [sys.executable, str(COMFYUI_DIR / "main.py"),
+           "--listen", "0.0.0.0", "--port", inst["port"],
+           "--disable-auto-launch", "--preview-method", "none"]
+    if inst["cuda_env"].get("CUDA_VISIBLE_DEVICES"):
+        cmd.extend(["--cuda-device", "0"])
     comfyui_process = subprocess.Popen(
-        [sys.executable, str(COMFYUI_DIR / "main.py"),
-         "--listen", "127.0.0.1", "--port", "8188",
-         "--disable-auto-launch", "--preview-method", "none"],
-        cwd=str(COMFYUI_DIR),
-        stdout=comfyui_log, stderr=comfyui_log,
+        cmd, cwd=str(COMFYUI_DIR),
+        stdout=comfyui_log, stderr=comfyui_log, env=env,
     )
     for _ in range(180):
         try:
-            resp = http_requests.get(f"{COMFYUI_URL}/system_stats", timeout=2)
+            resp = http_requests.get(f"{inst['url']}/system_stats", timeout=2)
             if resp.status_code == 200:
-                logging.info("ComfyUI server is ready!")
+                logging.info(f"ComfyUI server on port {inst['port']} is ready!")
                 return
         except Exception:
             pass
         _time.sleep(1)
-    raise Exception("ComfyUI failed to start within 3 minutes")
+    raise Exception(f"ComfyUI (port {inst['port']}) failed to start within 3 minutes")
 
 
 def crop_face_head(image_path: str, padding_ratio: float = 2.5) -> str:
@@ -2931,12 +3021,13 @@ def composite_face_onto_body(swapped_path: str, original_body_path: str, feather
     logging.info(f"composite_face_onto_body: face at ({fx},{fy},{fw},{fh}), ellipse ({rx},{ry}), feather={feather}")
 
 
-def upload_to_comfyui(local_path: str, subfolder: str = "") -> str:
+def upload_to_comfyui(local_path: str, subfolder: str = "", comfyui_url: str = None) -> str:
     """Upload a file to ComfyUI's input directory."""
+    url = comfyui_url or COMFYUI_URL
     filename = os.path.basename(local_path)
     with open(local_path, 'rb') as f:
         resp = http_requests.post(
-            f"{COMFYUI_URL}/upload/image",
+            f"{url}/upload/image",
             files={"image": (filename, f, "application/octet-stream")},
             data={"overwrite": "true", "subfolder": subfolder},
         )
@@ -3294,37 +3385,54 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             else:
                 logging.info(f"Fashion change: reference mode (no Try-On LoRA found): {clothing_ref}")
 
-    # --- Change Character: dynamic frame_load_cap ---
-    # Calculate frame_load_cap from video duration to match original length.
-    # WanVideo processes at ~16fps internally. VHS_LoadVideo with format="Wan"
-    # auto-converts to this rate. We compute: duration * 16fps, rounded to 4k+1.
-    # Max 481 frames (~30s) to prevent RAM explosion (37s video used 174GB at cap=0).
+    # --- Change Character: dynamic frame_load_cap + force_rate ---
+    # format="Wan" does NOT resample to 16fps - it only handles downscale ratio and frame alignment.
+    # We must explicitly set force_rate=16 to resample the input video to 16fps.
+    # frame_load_cap=0 loads all frames, then force_rate resamples them.
+    MAX_DURATION = 37.5  # seconds
     MAX_FRAMES = 601  # ~37.5 seconds at 16fps, 4k+1 aligned
     if workflow_id == "change_character" and "114" in workflow:
         video_path = workflow["114"]["inputs"].get("video", "")
-        frame_cap = MAX_FRAMES
-        # Try to get actual duration from the uploaded video
+        # Load all frames and resample to 16fps (Wan model expects 16fps input)
+        workflow["114"]["inputs"]["frame_load_cap"] = 0
+        workflow["114"]["inputs"]["force_rate"] = 16
+        # Probe video to log info and check if trimming needed
         for search_dir in [UPLOAD_DIR, Path(COMFYUI_DIR) / "input"]:
             vp = search_dir / video_path if not os.path.isabs(video_path) else Path(video_path)
             if vp.exists():
                 try:
                     probe = subprocess.run(
-                        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                         "-show_entries", "stream=r_frame_rate,duration",
+                         "-show_entries", "format=duration",
                          "-of", "default=noprint_wrappers=1:nokey=1", str(vp)],
                         capture_output=True, text=True, timeout=10)
                     if probe.returncode == 0:
-                        duration = float(probe.stdout.strip())
-                        # WanVideo uses 16fps, frame count must be 4k+1
-                        raw_frames = int(duration * 16)
-                        frame_cap = ((raw_frames - 1) // 4) * 4 + 1
-                        frame_cap = min(frame_cap, MAX_FRAMES)
-                        frame_cap = max(frame_cap, 81)  # minimum 5 seconds
-                        logging.info(f"Change character: video duration={duration:.1f}s, calculated frames={frame_cap}")
+                        lines = [l.strip() for l in probe.stdout.strip().split('\n') if l.strip()]
+                        # Parse fps (format: "60/1" or "30000/1001")
+                        fps_str = lines[0] if lines else "30/1"
+                        if '/' in fps_str:
+                            num, den = fps_str.split('/')
+                            orig_fps = float(num) / float(den)
+                        else:
+                            orig_fps = float(fps_str)
+                        # Duration from stream or format
+                        duration = float(lines[-1]) if len(lines) > 1 else 30.0
+                        wan_frames = int(duration * 16)
+                        wan_frames = ((wan_frames - 1) // 4) * 4 + 1
+                        wan_frames = max(wan_frames, 81)
+                        logging.info(f"Change character: video duration={duration:.1f}s, orig_fps={orig_fps:.1f}, wan_frames={wan_frames} (force_rate=16 resamples to 16fps)")
+                        if duration > MAX_DURATION:
+                            logging.warning(f"Change character: video exceeds {MAX_DURATION}s, will use first {MAX_DURATION}s")
+                            # frame_load_cap is applied BEFORE force_rate resampling, so use orig_fps
+                            trim_frames = int(MAX_DURATION * orig_fps)
+                            workflow["114"]["inputs"]["frame_load_cap"] = trim_frames
+                            logging.info(f"Change character: frame_load_cap set to {trim_frames} (trimmed at orig {orig_fps:.0f}fps, then resampled to 16fps)")
                 except Exception as e:
-                    logging.warning(f"Could not probe video duration: {e}")
+                    logging.warning(f"Could not probe video: {e}")
                 break
-        workflow["114"]["inputs"]["frame_load_cap"] = frame_cap
-        logging.info(f"Change character: frame_load_cap set to {frame_cap}")
+        if workflow["114"]["inputs"]["frame_load_cap"] == 0:
+            logging.info("Change character: frame_load_cap=0 (load all frames), force_rate=16 (resample to 16fps)")
 
     # --- Face Swap: seed randomization ---
     # Ethnicity injection DISABLED — specific facial feature descriptions
@@ -3344,11 +3452,12 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
     return workflow
 
 
-def monitor_comfyui_progress(task_id: str, prompt_id: str, client_id: str):
+def monitor_comfyui_progress(task_id: str, prompt_id: str, client_id: str, comfyui_ws_url: str = None):
     """Monitor ComfyUI execution via WebSocket."""
+    ws_url = comfyui_ws_url or COMFYUI_WS_URL
     ws = ws_client.WebSocket()
     ws.settimeout(1800)  # 30 min timeout
-    ws.connect(f"{COMFYUI_WS_URL}?clientId={client_id}")
+    ws.connect(f"{ws_url}?clientId={client_id}")
     import json as json_mod
 
     completed_nodes = 0
@@ -3385,10 +3494,11 @@ def monitor_comfyui_progress(task_id: str, prompt_id: str, client_id: str):
         ws.close()
 
 
-def retrieve_comfyui_output(prompt_id: str) -> str:
+def retrieve_comfyui_output(prompt_id: str, comfyui_url: str = None) -> str:
     """Retrieve the output video from ComfyUI history."""
     import json as json_mod
-    resp = http_requests.get(f"{COMFYUI_URL}/history/{prompt_id}")
+    _url = comfyui_url or COMFYUI_URL
+    resp = http_requests.get(f"{_url}/history/{prompt_id}")
     history = resp.json()
 
     outputs = history.get(prompt_id, {}).get("outputs", {})
@@ -3402,7 +3512,7 @@ def retrieve_comfyui_output(prompt_id: str) -> str:
                 file_type = gif.get("type", "temp")
 
                 view_resp = http_requests.get(
-                    f"{COMFYUI_URL}/view",
+                    f"{_url}/view",
                     params={"filename": filename, "subfolder": subfolder, "type": file_type},
                 )
                 if view_resp.status_code != 200:
@@ -3416,6 +3526,27 @@ def retrieve_comfyui_output(prompt_id: str) -> str:
 
                 return f"/outputs/{output_filename}"
 
+    # Pass 1.5: Check temp videos (VHS_VideoCombine with save_output=false)
+    for node_id, node_output in outputs.items():
+        if "images" in node_output:
+            for img in node_output["images"]:
+                filename = img.get("filename", "")
+                if img.get("type") == "temp" and filename.endswith((".mp4", ".webm", ".gif")):
+                    subfolder = img.get("subfolder", "")
+                    view_resp = http_requests.get(
+                        f"{_url}/view",
+                        params={"filename": filename, "subfolder": subfolder, "type": "temp"},
+                    )
+                    if view_resp.status_code != 200:
+                        continue
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    ext = os.path.splitext(filename)[1] or ".mp4"
+                    output_filename = f"workflow_{timestamp}{ext}"
+                    output_path = OUTPUT_DIR / output_filename
+                    with open(output_path, 'wb') as f:
+                        f.write(view_resp.content)
+                    return f"/outputs/{output_filename}"
+
     # Pass 2: Fall back to final output images (skip temp previews)
     for node_id, node_output in outputs.items():
         if "images" in node_output:
@@ -3427,7 +3558,7 @@ def retrieve_comfyui_output(prompt_id: str) -> str:
                 file_type = img.get("type", "output")
 
                 view_resp = http_requests.get(
-                    f"{COMFYUI_URL}/view",
+                    f"{_url}/view",
                     params={"filename": filename, "subfolder": subfolder, "type": file_type},
                 )
                 if view_resp.status_code != 200:
@@ -3516,32 +3647,37 @@ def download_youtube_video(url: str) -> dict:
     }
 
 
-def workflow_generate_task(task_id: str, params: dict):
-    """Background task for ComfyUI workflow execution."""
+def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
+    """Background task for ComfyUI workflow execution on a specific GPU."""
     import json as json_mod
 
-    gpu0_lock.acquire()
-    gpu1_lock.acquire()
+    inst = COMFYUI_INSTANCES[gpu_id]
+    _comfyui_url = inst["url"]
+    _comfyui_ws_url = inst["ws_url"]
+    gpu_lock = gpu0_lock if gpu_id == 0 else gpu1_lock
+
+    gpu_lock.acquire()
 
     try:
         workflow_id = params["workflow_id"]
         user_inputs = dict(params.get("inputs", {}))
         wf_config = WORKFLOW_REGISTRY[workflow_id]
 
-        # Step 1: Offload all WanAvatar models
+        # Step 1: Offload all WanAvatar models (only needed for GPU 0)
         generation_status[task_id].update({
             "status": "processing", "progress": 0.02,
-            "message": "Offloading models for ComfyUI...",
+            "message": f"Starting on GPU {gpu_id}...",
         })
-        _offload_s2v()
-        _offload_i2v()
-        _offload_flux()
-        gc.collect()
-        torch.cuda.empty_cache()
+        if gpu_id == 0:
+            _offload_s2v()
+            _offload_i2v()
+            _offload_flux()
+            gc.collect()
+            torch.cuda.empty_cache()
 
         # Step 2: Ensure ComfyUI is running
-        generation_status[task_id].update({"progress": 0.05, "message": "Starting ComfyUI..."})
-        ensure_comfyui_running()
+        generation_status[task_id].update({"progress": 0.05, "message": f"Starting ComfyUI (GPU {gpu_id})..."})
+        ensure_comfyui_running(gpu_id)
 
         # Step 3: Upload files to ComfyUI as needed
         # For face_swap: crop avatar face to head-only to prevent clothing bleed
@@ -3555,7 +3691,7 @@ def workflow_generate_task(task_id: str, params: dict):
             key = input_def["key"]
             if input_def.get("upload_to_comfyui") and key in user_inputs and user_inputs[key]:
                 generation_status[task_id].update({"progress": 0.08, "message": f"Uploading {key}..."})
-                user_inputs[key] = upload_to_comfyui(user_inputs[key])
+                user_inputs[key] = upload_to_comfyui(user_inputs[key], comfyui_url=_comfyui_url)
 
         # Clean up cropped temp file after upload
         if cropped_tmp and os.path.exists(cropped_tmp):
@@ -3566,26 +3702,28 @@ def workflow_generate_task(task_id: str, params: dict):
 
         # Step 4: Prepare workflow
         generation_status[task_id].update({"progress": 0.12, "message": "Preparing workflow..."})
-        logging.info(f"[{workflow_id}] user_inputs before prepare: { {k:v for k,v in user_inputs.items() if isinstance(v, str) and len(v) < 200} }")
+        logging.info(f"[{workflow_id}] GPU{gpu_id} user_inputs before prepare: { {k:v for k,v in user_inputs.items() if isinstance(v, str) and len(v) < 200} }")
         workflow = prepare_comfyui_workflow(workflow_id, user_inputs)
         if workflow_id == "face_swap":
             logging.info(f"[face_swap] node10(Picture1/body)={workflow.get('10',{}).get('inputs',{}).get('image','?')}  node11(Picture2/face)={workflow.get('11',{}).get('inputs',{}).get('image','?')}")
 
         # Step 5: Submit workflow
-        generation_status[task_id].update({"progress": 0.15, "message": "Submitting workflow..."})
+        generation_status[task_id].update({"progress": 0.15, "message": f"Submitting workflow to GPU {gpu_id}..."})
         client_id = str(uuid.uuid4())
         resp = http_requests.post(
-            f"{COMFYUI_URL}/prompt",
+            f"{_comfyui_url}/prompt",
             json={"prompt": workflow, "client_id": client_id},
         )
         if resp.status_code != 200:
-            raise Exception(f"ComfyUI rejected workflow: {resp.text}")
+            raise Exception(f"ComfyUI (GPU {gpu_id}) rejected workflow: {resp.text}")
         prompt_id = resp.json()["prompt_id"]
+        # Track which GPU this task is on for cancel routing
+        generation_status[task_id]["gpu_id"] = gpu_id
 
         # Step 6: Monitor progress
-        generation_status[task_id].update({"message": "Executing workflow..."})
+        generation_status[task_id].update({"message": f"Executing on GPU {gpu_id}..."})
         try:
-            monitor_comfyui_progress(task_id, prompt_id, client_id)
+            monitor_comfyui_progress(task_id, prompt_id, client_id, comfyui_ws_url=_comfyui_ws_url)
         except Exception as monitor_err:
             # WebSocket timeout — poll ComfyUI history as fallback
             logging.warning(f"Monitor timed out, polling ComfyUI for completion: {monitor_err}")
@@ -3594,7 +3732,7 @@ def workflow_generate_task(task_id: str, params: dict):
             for _attempt in range(60):  # poll up to 10 min (60 × 10s)
                 _time.sleep(10)
                 try:
-                    _hist = http_requests.get(f"{COMFYUI_URL}/history/{prompt_id}").json()
+                    _hist = http_requests.get(f"{_comfyui_url}/history/{prompt_id}").json()
                     _outs = _hist.get(prompt_id, {}).get("outputs", {})
                     if _outs:
                         logging.info(f"ComfyUI completed (detected via polling after {_attempt*10}s)")
@@ -3606,7 +3744,7 @@ def workflow_generate_task(task_id: str, params: dict):
 
         # Step 7: Retrieve output
         generation_status[task_id].update({"progress": 0.92, "message": "Retrieving output..."})
-        output_path = retrieve_comfyui_output(prompt_id)
+        output_path = retrieve_comfyui_output(prompt_id, comfyui_url=_comfyui_url)
 
         # Step 7.5: Post-processing — face composite for face_swap (DISABLED)
         # The BFS model + Precise prompt already preserves body/clothing well.
@@ -3626,7 +3764,7 @@ def workflow_generate_task(task_id: str, params: dict):
                 try:
                     import json as json_mod2
                     # Upload character result to ComfyUI; scene_bg is already uploaded
-                    char_comfyui = upload_to_comfyui(abs_output_for_scene)
+                    char_comfyui = upload_to_comfyui(abs_output_for_scene, comfyui_url=_comfyui_url)
                     bg_comfyui = scene_bg  # already uploaded via upload_to_comfyui in Step 3
 
                     # Load scene composite workflow
@@ -3642,25 +3780,25 @@ def workflow_generate_task(task_id: str, params: dict):
                     generation_status[task_id].update({"progress": 0.95, "message": "Scene composite: generating..."})
                     client_id_sc = str(uuid.uuid4())
                     resp_sc = http_requests.post(
-                        f"{COMFYUI_URL}/prompt",
+                        f"{_comfyui_url}/prompt",
                         json={"prompt": scene_wf, "client_id": client_id_sc},
                     )
                     if resp_sc.status_code == 200:
                         prompt_id_sc = resp_sc.json()["prompt_id"]
                         try:
-                            monitor_comfyui_progress(task_id, prompt_id_sc, client_id_sc)
+                            monitor_comfyui_progress(task_id, prompt_id_sc, client_id_sc, comfyui_ws_url=_comfyui_ws_url)
                         except Exception:
                             import time as _time_sc
                             for _ in range(60):
                                 _time_sc.sleep(10)
                                 try:
-                                    h_sc = http_requests.get(f"{COMFYUI_URL}/history/{prompt_id_sc}").json()
+                                    h_sc = http_requests.get(f"{_comfyui_url}/history/{prompt_id_sc}").json()
                                     if h_sc.get(prompt_id_sc, {}).get("outputs", {}):
                                         break
                                 except Exception:
                                     pass
 
-                        scene_output = retrieve_comfyui_output(prompt_id_sc)
+                        scene_output = retrieve_comfyui_output(prompt_id_sc, comfyui_url=_comfyui_url)
                         # Replace the original output with scene composite result
                         import shutil
                         shutil.copy2(str(OUTPUT_DIR / os.path.basename(scene_output)), abs_output_for_scene)
@@ -3761,8 +3899,44 @@ def workflow_generate_task(task_id: str, params: dict):
             "message": str(e), "output_path": None,
         })
     finally:
-        gpu1_lock.release()
-        gpu0_lock.release()
+        gpu_lock.release()
+
+
+def queue_worker_loop(gpu_id: int):
+    """Background thread that processes server_queue items on a specific GPU."""
+    logging.info(f"Queue worker for GPU {gpu_id} started")
+    while True:
+        queue_worker_event.wait(timeout=5)  # Periodic wake to avoid missing events
+        _time.sleep(0.1 * gpu_id)  # Slight stagger so GPU 0 picks first
+        while True:
+            task_id = None
+            params = None
+            with server_queue_lock:
+                for tid, entry in server_queue.items():
+                    status = generation_status.get(tid, {}).get("status")
+                    if status == "queued":
+                        task_id = tid
+                        params = entry["params"]
+                        # Mark as processing immediately to prevent other worker from picking it
+                        generation_status[task_id].update({
+                            "status": "processing",
+                            "progress": 0.01,
+                            "message": f"Starting on GPU {gpu_id}...",
+                            "gpu_id": gpu_id,
+                        })
+                        break
+            if task_id is None:
+                break  # Back to outer loop, will wait() again
+            try:
+                workflow_generate_task(task_id, params, gpu_id=gpu_id)
+            except Exception as e:
+                logging.error(f"Queue worker GPU{gpu_id} error for {task_id}: {e}")
+                generation_status[task_id].update({
+                    "status": "failed", "progress": 0,
+                    "message": str(e), "output_path": None,
+                })
+            with server_queue_lock:
+                server_queue.pop(task_id, None)
 
 
 @app.post("/api/workflow/generate")
@@ -3808,6 +3982,123 @@ async def start_workflow_generation(request: WorkflowGenerateRequest, user=Depen
     params["_user_id"] = user["id"]
     executor.submit(workflow_generate_task, task_id, params)
     return {"task_id": task_id}
+
+
+class QueueBatchItem(BaseModel):
+    inputs: dict = {}
+    yt_title: str = ""
+    yt_description: str = ""
+    yt_hashtags: str = ""
+    yt_upload: bool = False
+    client_item_id: str = ""
+
+
+class QueueBatchRequest(BaseModel):
+    workflow_id: str
+    items: list  # list of QueueBatchItem dicts
+
+
+@app.post("/api/queue/submit-batch")
+async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_current_user)):
+    """Submit multiple items to the server-side queue at once."""
+    wf_config = WORKFLOW_REGISTRY.get(request.workflow_id)
+    if not wf_config:
+        raise HTTPException(400, f"Unknown workflow: {request.workflow_id}")
+
+    api_path = WORKFLOW_DIR / wf_config["api_json"]
+    if not api_path.exists():
+        raise HTTPException(503, f"Workflow API JSON not found: {wf_config['api_json']}")
+
+    results = []
+    with server_queue_lock:
+        for item_data in request.items:
+            item = QueueBatchItem(**item_data) if isinstance(item_data, dict) else item_data
+            task_id = str(uuid.uuid4())
+
+            params = {
+                "workflow_id": request.workflow_id,
+                "inputs": item.inputs,
+                "yt_title": item.yt_title,
+                "yt_description": item.yt_description,
+                "yt_hashtags": item.yt_hashtags,
+                "yt_upload": item.yt_upload,
+            }
+
+            # Save reference video path for audio extraction
+            for input_def in wf_config["inputs"]:
+                if input_def["type"] == "video" and input_def["key"] in params["inputs"]:
+                    ref_path = params["inputs"][input_def["key"]]
+                    if ref_path:
+                        abs_ref = ref_path if os.path.isabs(ref_path) else str(Path(ref_path).resolve())
+                        params["_ref_video_original"] = abs_ref
+                        break
+
+            custom_audio = params["inputs"].get("custom_audio")
+            if custom_audio:
+                abs_audio = custom_audio if os.path.isabs(custom_audio) else str(Path(custom_audio).resolve())
+                params["_custom_audio_path"] = abs_audio
+
+            params["_user_id"] = user["id"]
+
+            generation_status[task_id] = {
+                "status": "queued",
+                "progress": 0,
+                "message": "Waiting in server queue...",
+                "output_path": None,
+                "workflow_id": request.workflow_id,
+            }
+
+            server_queue[task_id] = {
+                "workflow_id": request.workflow_id,
+                "params": params,
+                "client_item_id": item.client_item_id,
+                "submitted_at": datetime.datetime.now().isoformat(),
+            }
+
+            results.append({
+                "task_id": task_id,
+                "client_item_id": item.client_item_id,
+            })
+
+    # Ensure worker threads are running (one per GPU)
+    for gpu_id in range(len(COMFYUI_INSTANCES)):
+        if queue_worker_threads[gpu_id] is None or not queue_worker_threads[gpu_id].is_alive():
+            queue_worker_threads[gpu_id] = threading.Thread(
+                target=queue_worker_loop, args=(gpu_id,), daemon=True,
+                name=f"queue-worker-gpu{gpu_id}",
+            )
+            queue_worker_threads[gpu_id].start()
+
+    queue_worker_event.set()
+    logging.info(f"Batch queue: {len(results)} items submitted for {request.workflow_id}")
+    return {"tasks": results}
+
+
+@app.get("/api/queue/status")
+async def get_queue_status(user=Depends(get_current_user)):
+    """Return status of all server-queue tasks."""
+    result = {}
+
+    # Items still in server_queue (queued or processing)
+    with server_queue_lock:
+        for task_id, entry in server_queue.items():
+            status_data = generation_status.get(task_id, {})
+            result[task_id] = {
+                **status_data,
+                "task_id": task_id,
+                "workflow_id": entry["workflow_id"],
+                "client_item_id": entry.get("client_item_id", ""),
+            }
+
+    # Also include recently completed/failed tasks that have workflow_id
+    for task_id, status_data in generation_status.items():
+        if task_id not in result and "workflow_id" in status_data:
+            result[task_id] = {
+                **status_data,
+                "task_id": task_id,
+            }
+
+    return {"tasks": result}
 
 
 @app.get("/api/workflows")

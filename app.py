@@ -182,7 +182,16 @@ def generate_video(
             value_range=(-1, 1)
         )
 
+        # Frame interpolation (16fps → 30fps) using RIFE AI
+        progress(0.85, desc="RIFE frame interpolation (16→30fps)...")
+        try:
+            from rife_interpolate import interpolate_video_rife
+            interpolate_video_rife(video_path, target_fps=30)
+        except Exception as e:
+            logging.warning(f"RIFE frame interpolation error: {e}, using original 16fps")
+
         # Merge audio (overwrites video_path with audio)
+        progress(0.9, desc="Merging audio...")
         merge_video_audio(video_path, audio_path)
         output_path = video_path  # Now contains audio
 
@@ -596,7 +605,7 @@ def create_interface():
                                     minimum=0.05,
                                     maximum=1.0,
                                     step=0.05,
-                                    value=0.3,
+                                    value=0.15,
                                 )
 
                         generate_btn = gr.Button(

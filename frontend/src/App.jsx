@@ -1465,9 +1465,11 @@ function App() {
     const ytTitle = studioYtTitle.trim() || defaults.title;
     const ytDesc = studioYtDescription.trim() || defaults.description;
     const ytHash = studioYtHashtags.trim() || defaults.hashtags;
+    const dsItems = (wfQueue['change_character']?.items || []).filter(i => i.category === 'dance_shorts');
     const item = {
       id: Math.random().toString(36).slice(2) + Date.now().toString(36),
-      label: `Job ${(wfQueue['change_character']?.items?.length || 0) + 1}`,
+      category: 'dance_shorts',
+      label: `Dance ${dsItems.length + 1}`,
       inputs: {
         ref_image: dsCharImagePath,
         ref_video: studioRefVideoPath,
@@ -1518,9 +1520,11 @@ function App() {
     const ytTitle = studioYtTitle.trim() || defaults.title;
     const ytDesc = studioYtDescription.trim() || defaults.description;
     const ytHash = studioYtHashtags.trim() || defaults.hashtags;
+    const dsItems = (wfQueue['change_character']?.items || []).filter(i => i.category === 'dance_shorts');
     const item = {
       id: Math.random().toString(36).slice(2) + Date.now().toString(36),
-      label: `Job ${(wfQueue['change_character']?.items?.length || 0) + 1}`,
+      category: 'dance_shorts',
+      label: `Dance ${dsItems.length + 1}`,
       inputs: {
         ref_image: dsCharImagePath,
         ref_video: studioRefVideoPath,
@@ -2990,6 +2994,7 @@ function App() {
 
     const item = {
       id: Math.random().toString(36).slice(2) + Date.now().toString(36),
+      category: 'video_studio',
       label: queueLabel,
       inputs: { ...wfState.inputs },
       filePaths: { ...wfState.filePaths },
@@ -3044,7 +3049,13 @@ function App() {
             allDone = false;
             const progress = Math.round((st.progress || 0) * 100);
             const displayStatus = st.status === 'queued' ? 'pending' : 'running';
-            updateQueueItem(wfId, item.id, { progress, status: displayStatus });
+            updateQueueItem(wfId, item.id, {
+              progress, status: displayStatus,
+              comfyuiPromptId: st.comfyui_prompt_id || null,
+              videoDuration: st.video_duration || null,
+              etaSeconds: st.eta_seconds || null,
+              serverMessage: st.message || null,
+            });
           }
         }
 
@@ -4394,7 +4405,7 @@ function App() {
                         {/* Queue Panel */}
                         {(() => {
                           const queue = wfQueue[wf.id];
-                          const items = queue?.items || [];
+                          const items = (queue?.items || []).filter(i => !i.category || i.category === 'video_studio');
                           const isProcessing = queue?.isProcessing || false;
                           const pendingCount = items.filter(i => i.status === 'pending').length;
                           return (
@@ -4436,14 +4447,28 @@ function App() {
                                         )}
                                         {item.status === 'running' && (
                                           <div className="queue-item-progress">
+                                            <div className="queue-item-meta">
+                                              {item.comfyuiPromptId && (
+                                                <span className="queue-meta-tag" title={item.comfyuiPromptId}>ID: {item.comfyuiPromptId.slice(0, 8)}</span>
+                                              )}
+                                              {item.videoDuration != null && (
+                                                <span className="queue-meta-tag">{Math.round(item.videoDuration)}s</span>
+                                              )}
+                                              {item.etaSeconds != null && item.etaSeconds > 0 && (
+                                                <span className="queue-meta-tag">ETA: {item.etaSeconds >= 60 ? `${Math.floor(item.etaSeconds / 60)}m ${item.etaSeconds % 60}s` : `${item.etaSeconds}s`}</span>
+                                              )}
+                                            </div>
                                             <div className="queue-progress-bar">
                                               <div className="queue-progress-fill" style={{ width: `${item.progress}%` }} />
                                             </div>
-                                            <span className="queue-progress-text">{item.progress}%</span>
+                                            <span className="queue-progress-text">{item.progress}%{item.serverMessage ? ` — ${item.serverMessage}` : ''}</span>
                                           </div>
                                         )}
                                         {item.status === 'pending' && (
-                                          <span className="queue-item-pending">{t('wfQueuePending')}</span>
+                                          <span className="queue-item-pending">
+                                            {t('wfQueuePending')}
+                                            {item.videoDuration != null && ` · ${Math.round(item.videoDuration)}s`}
+                                          </span>
                                         )}
                                         {item.status === 'completed' && item.outputVideo && (
                                           <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
@@ -4767,7 +4792,7 @@ function App() {
                   {/* Queue Panel */}
                   {(() => {
                     const queue = wfQueue['change_character'];
-                    const items = queue?.items || [];
+                    const items = (queue?.items || []).filter(i => i.category === 'dance_shorts');
                     const isProcessing = queue?.isProcessing || false;
                     const pendingCount = items.filter(i => i.status === 'pending').length;
                     return (
@@ -4808,14 +4833,28 @@ function App() {
                                   )}
                                   {item.status === 'running' && (
                                     <div className="queue-item-progress">
+                                      <div className="queue-item-meta">
+                                        {item.comfyuiPromptId && (
+                                          <span className="queue-meta-tag" title={item.comfyuiPromptId}>ID: {item.comfyuiPromptId.slice(0, 8)}</span>
+                                        )}
+                                        {item.videoDuration != null && (
+                                          <span className="queue-meta-tag">{Math.round(item.videoDuration)}s</span>
+                                        )}
+                                        {item.etaSeconds != null && item.etaSeconds > 0 && (
+                                          <span className="queue-meta-tag">ETA: {item.etaSeconds >= 60 ? `${Math.floor(item.etaSeconds / 60)}m ${item.etaSeconds % 60}s` : `${item.etaSeconds}s`}</span>
+                                        )}
+                                      </div>
                                       <div className="queue-progress-bar">
                                         <div className="queue-progress-fill" style={{ width: `${item.progress}%` }} />
                                       </div>
-                                      <span className="queue-progress-text">{item.progress}%</span>
+                                      <span className="queue-progress-text">{item.progress}%{item.serverMessage ? ` — ${item.serverMessage}` : ''}</span>
                                     </div>
                                   )}
                                   {item.status === 'pending' && (
-                                    <span className="queue-item-pending">{t('wfQueuePending')}</span>
+                                    <span className="queue-item-pending">
+                                      {t('wfQueuePending')}
+                                      {item.videoDuration != null && ` · ${Math.round(item.videoDuration)}s`}
+                                    </span>
                                   )}
                                   {item.status === 'completed' && item.outputVideo && (
                                     <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>

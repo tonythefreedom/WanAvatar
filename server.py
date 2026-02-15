@@ -1286,6 +1286,10 @@ def generate_video_task(task_id: str, params: dict):
         video_path = str(OUTPUT_DIR / f"{timestamp}.mp4")
         save_videos_grid(video[None], video_path, rescale=True, fps=16)
 
+        generation_status[task_id]["progress"] = 0.88
+        generation_status[task_id]["message"] = "Frame interpolation (16→30fps)..."
+        interpolate_video_fps(video_path, target_fps=30)
+
         generation_status[task_id]["progress"] = 0.9
         generation_status[task_id]["message"] = "Merging audio..."
 
@@ -3175,6 +3179,62 @@ def merge_audio_to_video(video_path: str, audio_source_path: str) -> str:
         return video_path
 
 
+def interpolate_video_fps(video_path: str, target_fps: int = 30) -> str:
+    """
+    Interpolate video using RIFE AI model (Practical-RIFE v4.25).
+    Falls back to ffmpeg minterpolate if RIFE fails.
+    Replaces the file in-place. Returns the video_path.
+    """
+    # Try RIFE first
+    try:
+        from rife_interpolate import interpolate_video_rife
+        return interpolate_video_rife(video_path, target_fps=target_fps)
+    except Exception as rife_err:
+        logging.warning(f"RIFE interpolation failed, falling back to ffmpeg: {rife_err}")
+
+    # Fallback: ffmpeg minterpolate
+    import subprocess
+    tmp_path = video_path.replace(".mp4", "_interp.mp4")
+    if tmp_path == video_path:
+        base, ext = os.path.splitext(video_path)
+        tmp_path = f"{base}_interp{ext}"
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-filter:v", f"minterpolate='fps={target_fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1'",
+            "-c:a", "copy",
+            tmp_path,
+        ], capture_output=True, timeout=300)
+        if result.returncode == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            os.replace(tmp_path, video_path)
+            logging.info(f"Frame interpolation (ffmpeg) to {target_fps}fps completed: {video_path}")
+        else:
+            logging.warning(f"ffmpeg interpolation failed: {result.stderr.decode()[:500]}")
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+    except Exception as e:
+        logging.warning(f"Frame interpolation error: {e}")
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+    return video_path
+
+
+def probe_video_duration(video_path: str) -> Optional[float]:
+    """Probe video file and return duration in seconds, or None on failure."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
 def upload_to_youtube(video_path: str, title: str, description: str = "",
                       tags: list = None) -> Optional[str]:
     """Upload video to YouTube as a Short. Returns video URL or None."""
@@ -3719,6 +3779,7 @@ def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
         prompt_id = resp.json()["prompt_id"]
         # Track which GPU this task is on for cancel routing
         generation_status[task_id]["gpu_id"] = gpu_id
+        generation_status[task_id]["comfyui_prompt_id"] = prompt_id
 
         # Step 6: Monitor progress
         generation_status[task_id].update({"message": f"Executing on GPU {gpu_id}..."})
@@ -3823,6 +3884,11 @@ def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
             merge_audio_to_video(abs_output, ref_video_original)
             logging.info(f"Audio merged from reference video: {ref_video_original}")
 
+        # Step 8.5: Frame interpolation (16fps → 30fps) for video outputs
+        if is_video_output and os.path.exists(abs_output):
+            generation_status[task_id].update({"progress": 0.96, "message": "Frame interpolation (16→30fps)..."})
+            interpolate_video_fps(abs_output, target_fps=30)
+
         # Step 9: Post-processing — YouTube upload + Slack notification
         # Only upload if yt_upload flag is explicitly True
         output_type = wf_config.get("output_type", "video")
@@ -3923,6 +3989,7 @@ def queue_worker_loop(gpu_id: int):
                             "progress": 0.01,
                             "message": f"Starting on GPU {gpu_id}...",
                             "gpu_id": gpu_id,
+                            "started_at": datetime.datetime.now().isoformat(),
                         })
                         break
             if task_id is None:
@@ -4040,12 +4107,19 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
 
             params["_user_id"] = user["id"]
 
+            # Probe reference video duration if available
+            video_duration = None
+            ref_video = params.get("_ref_video_original")
+            if ref_video and os.path.exists(ref_video):
+                video_duration = probe_video_duration(ref_video)
+
             generation_status[task_id] = {
                 "status": "queued",
                 "progress": 0,
                 "message": "Waiting in server queue...",
                 "output_path": None,
                 "workflow_id": request.workflow_id,
+                "video_duration": video_duration,
             }
 
             server_queue[task_id] = {
@@ -4078,16 +4152,34 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
 async def get_queue_status(user=Depends(get_current_user)):
     """Return status of all server-queue tasks."""
     result = {}
+    now = datetime.datetime.now()
+
+    def _calc_eta(status_data):
+        """Calculate ETA in seconds from started_at and current progress."""
+        started_at = status_data.get("started_at")
+        progress = status_data.get("progress", 0)
+        if not started_at or progress <= 0.02:
+            return None
+        try:
+            start_time = datetime.datetime.fromisoformat(started_at)
+            elapsed = (now - start_time).total_seconds()
+            if elapsed > 0 and progress < 1.0:
+                return round(elapsed / progress * (1.0 - progress))
+        except Exception:
+            pass
+        return None
 
     # Items still in server_queue (queued or processing)
     with server_queue_lock:
         for task_id, entry in server_queue.items():
             status_data = generation_status.get(task_id, {})
+            eta_seconds = _calc_eta(status_data) if status_data.get("status") == "processing" else None
             result[task_id] = {
                 **status_data,
                 "task_id": task_id,
                 "workflow_id": entry["workflow_id"],
                 "client_item_id": entry.get("client_item_id", ""),
+                "eta_seconds": eta_seconds,
             }
 
     # Also include recently completed/failed tasks that have workflow_id

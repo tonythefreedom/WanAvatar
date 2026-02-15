@@ -2218,9 +2218,27 @@ video.picker-thumb {
 .queue-item-progress {
   flex: 1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.queue-item-meta {
+  width: 100%;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+
+.queue-meta-tag {
+  font-size: 0.68rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-hover, #f0f0f0);
+  color: var(--text-light);
+  white-space: nowrap;
 }
 
 .queue-progress-bar {

@@ -241,6 +241,8 @@ const translations = {
     studioStageSelect: 'Select Stage',
     studioStageUpload: 'Upload Stage',
     studioBgEffect: 'Background Effect',
+    studioBgAuto: 'Auto (Gemini AI analyzes background)',
+    studioBgManual: 'Custom prompt',
     studioStageDeleteConfirm: 'Delete this stage?',
     studioYtChannel: 'YouTube Channel URL',
     studioYtChannelName: 'Channel Name',
@@ -467,6 +469,8 @@ const translations = {
     studioStageSelect: '스테이지 선택',
     studioStageUpload: '스테이지 업로드',
     studioBgEffect: '배경 효과',
+    studioBgAuto: '자동 (Gemini AI가 배경을 분석)',
+    studioBgManual: '직접 입력',
     studioStageDeleteConfirm: '이 스테이지를 삭제하시겠습니까?',
     studioYtChannel: 'YouTube 채널 URL',
     studioYtChannelName: '채널명',
@@ -693,6 +697,8 @@ const translations = {
     studioStageSelect: '选择舞台',
     studioStageUpload: '上传舞台',
     studioBgEffect: '背景效果',
+    studioBgAuto: '自动 (Gemini AI分析背景)',
+    studioBgManual: '自定义提示',
     studioStageDeleteConfirm: '确定删除此舞台？',
     studioYtChannel: 'YouTube频道链接',
     studioYtChannelName: '频道名称',
@@ -850,6 +856,8 @@ function App() {
 
   // Avatar image popup viewer
   const [avatarPopup, setAvatarPopup] = useState(null); // { url, filename, group, wfId, img }
+  // Queue thumbnail media popup
+  const [queueMediaPopup, setQueueMediaPopup] = useState(null); // { url, type: 'image'|'video', label }
 
   // Image-category LoRA state (separate from mov LoRAs)
   const [imgLoraAdapters, setImgLoraAdapters] = useState([]);
@@ -971,7 +979,8 @@ function App() {
   const [studioAvatarName, setStudioAvatarName] = useState('');
   const [studioStages, setStudioStages] = useState([]);
   const [studioSelectedStage, setStudioSelectedStage] = useState(null);
-  const [studioBgPrompt, setStudioBgPrompt] = useState('light color and strength keep changing');
+  const [studioBgPrompt, setStudioBgPrompt] = useState('');
+  const [studioBgManual, setStudioBgManual] = useState(false); // false = Gemini auto, true = user types
   const [stagePopup, setStagePopup] = useState(null); // { url, filename }
 
   // Dance Shorts - YouTube Settings
@@ -1663,7 +1672,8 @@ function App() {
     } catch (err) { alert(`Delete failed: ${err.message}`); }
   };
 
-  // Keyboard arrow navigation: Left/Right for character images, Up/Down for stages
+  // Keyboard arrow navigation: Left/Right for character images only
+  // Stage (background) selection is click-only to avoid conflicting navigation
   useEffect(() => {
     if (activeMenu !== 'danceshorts') return;
     const handleKeyDown = (e) => {
@@ -1680,22 +1690,11 @@ function App() {
           newIndex = currentIndex >= dsAvatarImages.length - 1 ? 0 : currentIndex + 1;
         }
         handleDsAvatarSelect(dsAvatarImages[newIndex]);
-      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        if (studioStages.length === 0) return;
-        e.preventDefault();
-        const currentIndex = studioStages.findIndex(s => s.filename === studioSelectedStage?.filename);
-        let newIndex;
-        if (e.key === 'ArrowUp') {
-          newIndex = currentIndex <= 0 ? studioStages.length - 1 : currentIndex - 1;
-        } else {
-          newIndex = currentIndex >= studioStages.length - 1 ? 0 : currentIndex + 1;
-        }
-        setStudioSelectedStage(studioStages[newIndex]);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeMenu, dsAvatarImages, dsCharImagePath, studioStages, studioSelectedStage, avatarPopup, stagePopup]);
+  }, [activeMenu, dsAvatarImages, dsCharImagePath, avatarPopup, stagePopup]);
 
   // Keyboard arrow navigation: Left/Right for workflow avatar images (e.g. Face Swap)
   useEffect(() => {
@@ -1752,9 +1751,9 @@ function App() {
   useEffect(() => {
     if (!avatarPopup) return;
     const handler = (e) => {
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
-        avatarPopupNavigate(e.key === 'ArrowRight' ? 'right' : 'left');
+        avatarPopupNavigate(e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 'right' : 'left');
       } else if (e.key === 'Enter') {
         e.preventDefault();
         if (avatarPopup.source === 'danceshorts' && avatarPopup.img) {
@@ -1791,9 +1790,9 @@ function App() {
   useEffect(() => {
     if (!stagePopup) return;
     const handler = (e) => {
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
-        stagePopupNavigate(e.key === 'ArrowRight' ? 'right' : 'left');
+        stagePopupNavigate(e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 'right' : 'left');
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const stage = studioStages.find(s => s.filename === stagePopup.filename);
@@ -3194,6 +3193,7 @@ function App() {
                 <div className="avatar-viewer" style={{ cursor: 'pointer' }}
                   onClick={() => {
                     const selectedImg = avatarImgs.find(img => img.url === wfState.previews[inputDef.key]);
+                    setStagePopup(null);
                     setAvatarPopup({
                       url: wfState.previews[inputDef.key],
                       filename: selectedImg?.filename || '',
@@ -4432,13 +4432,19 @@ function App() {
                                       {(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) && (
                                         <div className="queue-item-thumbs">
                                           {item.previews?.ref_image && (
-                                            <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar" />
+                                            <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar"
+                                              onClick={() => setQueueMediaPopup({ url: item.previews.ref_image, type: 'image', label: 'Avatar' })}
+                                              style={{ cursor: 'pointer' }} />
                                           )}
                                           {item.previews?.ref_video && (
-                                            <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata" />
+                                            <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata"
+                                              onClick={() => setQueueMediaPopup({ url: item.previews.ref_video, type: 'video', label: 'Reference Video' })}
+                                              style={{ cursor: 'pointer' }} />
                                           )}
                                           {item.previews?.bg_image && (
-                                            <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg" />
+                                            <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg"
+                                              onClick={() => setQueueMediaPopup({ url: item.previews.bg_image, type: 'image', label: 'Background' })}
+                                              style={{ cursor: 'pointer' }} />
                                           )}
                                         </div>
                                       )}
@@ -4549,7 +4555,7 @@ function App() {
                       {dsCharImagePreview && (
                         <div className="ds-char-viewer" onDoubleClick={() => {
                           const img = dsAvatarImages.find(i => i.path === dsCharImagePath);
-                          if (img) setAvatarPopup({ url: img.url, filename: img.filename, group: dsAvatarSelectedGroup, img, source: 'danceshorts' });
+                          if (img) { setStagePopup(null); setAvatarPopup({ url: img.url, filename: img.filename, group: dsAvatarSelectedGroup, img, source: 'danceshorts' }); }
                         }} title="Double-click to enlarge">
                           <img src={dsCharImagePreview} alt="Character" />
                         </div>
@@ -4572,7 +4578,7 @@ function App() {
                           <div key={stage.filename}
                             className={`stage-item${studioSelectedStage?.filename === stage.filename ? ' selected' : ''}`}
                             onClick={() => setStudioSelectedStage(stage)}
-                            onDoubleClick={() => setStagePopup({ url: stage.url, filename: stage.filename })}>
+                            onDoubleClick={() => { setAvatarPopup(null); setStagePopup({ url: stage.url, filename: stage.filename }); }}>
                             <img src={stage.url} alt={stage.filename} />
                             <button className="stage-delete-btn"
                               onClick={e => { e.stopPropagation(); handleStudioStageDelete(stage.filename); }}
@@ -4585,8 +4591,15 @@ function App() {
                     {/* Background Effect */}
                     <div className="form-group">
                       <label>{t('studioBgEffect')}</label>
-                      <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={2}
-                        placeholder="e.g. neon lights, foggy atmosphere, colorful stage lighting..." />
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#aaa', marginBottom: 6, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={studioBgManual}
+                          onChange={e => { setStudioBgManual(e.target.checked); if (!e.target.checked) setStudioBgPrompt(''); }} />
+                        {studioBgManual ? t('studioBgManual') : t('studioBgAuto')}
+                      </label>
+                      {studioBgManual && (
+                        <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={2}
+                          placeholder="e.g. neon lights, foggy atmosphere, colorful stage lighting..." />
+                      )}
                     </div>
 
                     {/* Scene Description */}
@@ -5130,6 +5143,25 @@ function App() {
           )}
         </main>
       </div>
+
+      {/* Queue Media Popup */}
+      {queueMediaPopup && (
+        <div className="avatar-popup-overlay" onClick={() => setQueueMediaPopup(null)}>
+          <div className="avatar-popup" onClick={e => e.stopPropagation()} style={{ maxWidth: queueMediaPopup.type === 'video' ? 480 : 600 }}>
+            <div className="avatar-popup-header">
+              <span className="avatar-popup-name">{queueMediaPopup.label || ''}</span>
+              <button className="avatar-popup-close" onClick={() => setQueueMediaPopup(null)}>&times;</button>
+            </div>
+            <div className="avatar-popup-body">
+              {queueMediaPopup.type === 'video' ? (
+                <video src={queueMediaPopup.url} controls autoPlay style={{ width: '100%', borderRadius: 8 }} />
+              ) : (
+                <img src={queueMediaPopup.url} alt={queueMediaPopup.label || ''} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stage Popup Viewer */}
       {stagePopup && (() => {

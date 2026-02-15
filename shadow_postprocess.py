@@ -9,19 +9,27 @@ import numpy as np
 import logging
 import subprocess
 
-_mp_selfie = None
+_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "models", "selfie_segmenter.tflite")
 
 
-def _get_segmentor():
-    """Lazy-load MediaPipe Selfie Segmentation (singleton)."""
-    global _mp_selfie
-    if _mp_selfie is not None:
-        return _mp_selfie
+def _create_segmentor():
+    """Create a NEW MediaPipe Selfie Segmenter instance.
 
-    import mediapipe as mp
-    _mp_selfie = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1)
-    logging.info("MediaPipe Selfie Segmentation loaded (model=1, landscape)")
-    return _mp_selfie
+    Each call creates a fresh instance to avoid thread-safety issues.
+    MediaPipe VIDEO mode maintains internal timestamp state, so sharing
+    a singleton between threads causes non-monotonic timestamp errors.
+    """
+    from mediapipe.tasks.python import vision, BaseOptions
+    opts = vision.ImageSegmenterOptions(
+        base_options=BaseOptions(model_asset_path=_MODEL_PATH),
+        output_category_mask=False,
+        output_confidence_masks=True,
+        running_mode=vision.RunningMode.VIDEO,
+    )
+    segmentor = vision.ImageSegmenter.create_from_options(opts)
+    logging.info("MediaPipe Selfie Segmenter created (Tasks API, VIDEO mode)")
+    return segmentor
 
 
 def _create_floor_shadow(mask: np.ndarray, frame_h: int, frame_w: int,
@@ -125,7 +133,7 @@ def add_shadow_to_video(input_path: str, shadow_opacity: float = 0.45) -> str:
     Returns:
         Path to output video (replaces input in-place).
     """
-    segmentor = _get_segmentor()
+    segmentor = _create_segmentor()
 
     cap = cv2.VideoCapture(input_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -154,12 +162,17 @@ def add_shadow_to_video(input_path: str, shadow_opacity: float = 0.45) -> str:
         if not ret:
             break
 
-        # MediaPipe expects RGB
+        # MediaPipe Tasks API expects RGB mp.Image
+        import mediapipe as mp
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = segmentor.process(rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        timestamp_ms = int(frame_idx * 1000 / fps)
+        result = segmentor.segment_for_video(mp_image, timestamp_ms=timestamp_ms)
 
-        if result.segmentation_mask is not None:
-            mask = result.segmentation_mask  # float32, 0-1, (H, W)
+        if result.confidence_masks and len(result.confidence_masks) > 0:
+            mask = result.confidence_masks[0].numpy_view()  # (H, W, 1) float32
+            if mask.ndim == 3:
+                mask = mask[:, :, 0]  # squeeze to (H, W)
 
             # Create floor shadow
             shadow_alpha = _create_floor_shadow(
@@ -184,7 +197,17 @@ def add_shadow_to_video(input_path: str, shadow_opacity: float = 0.45) -> str:
 
     cap.release()
     writer.release()
+    segmentor.close()
     logging.info(f"Shadow: Processing complete ({frame_idx} frames)")
+
+    # Validate output: must have reasonable size (at least 10% of original)
+    input_size = os.path.getsize(input_path)
+    output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+    if output_size < max(1024, input_size * 0.1):
+        logging.warning(f"Shadow: Output too small ({output_size} bytes vs input {input_size} bytes), keeping original")
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        return input_path
 
     # Re-encode to H.264
     h264_path = output_path.replace("_shadow.mp4", "_shadow_h264.mp4")

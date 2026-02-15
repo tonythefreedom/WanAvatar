@@ -89,9 +89,9 @@ REALESRGAN_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 COMFYUI_DIR = Path("/home/ubuntu/ComfyUI")
 COMFYUI_INSTANCES = [
     {"url": "http://127.0.0.1:8188", "ws_url": "ws://127.0.0.1:8188/ws",
-     "port": "8188", "cuda_env": {}, "log": "/tmp/comfyui.log"},
+     "port": "8188", "cuda_device": "0", "log": "/tmp/comfyui.log"},
     {"url": "http://127.0.0.1:8189", "ws_url": "ws://127.0.0.1:8189/ws",
-     "port": "8189", "cuda_env": {"CUDA_VISIBLE_DEVICES": "1"}, "log": "/tmp/comfyui_gpu1.log"},
+     "port": "8189", "cuda_device": "1", "log": "/tmp/comfyui_gpu1.log"},
 ]
 COMFYUI_URL = COMFYUI_INSTANCES[0]["url"]  # backward compat for non-queue code paths
 COMFYUI_WS_URL = COMFYUI_INSTANCES[0]["ws_url"]
@@ -484,7 +484,7 @@ executor = ThreadPoolExecutor(max_workers=2)  # Allow concurrent I2V + FLUX
 server_queue = collections.OrderedDict()  # task_id -> {workflow_id, params, client_item_id, submitted_at}
 server_queue_lock = threading.Lock()
 queue_worker_threads = [None, None]  # One worker thread per GPU
-queue_worker_event = threading.Event()  # Shared event to wake both workers
+queue_worker_events = [threading.Event(), threading.Event()]  # Per-GPU wake events
 
 # Distributed / Sequence Parallel setup
 USE_SP = False
@@ -707,12 +707,10 @@ def restart_comfyui():
             import subprocess
             log_file = open(inst["log"], "w")
             env = os.environ.copy()
-            env.update(inst["cuda_env"])
-            cuda_device = "0" if inst["cuda_env"].get("CUDA_VISIBLE_DEVICES") else ""
+            cuda_device = inst.get("cuda_device", "0")
             cmd = [str(comfyui_python), str(comfyui_main),
-                   "--listen", "0.0.0.0", "--port", port, "--disable-auto-launch"]
-            if cuda_device:
-                cmd.extend(["--cuda-device", "0"])  # device 0 within CUDA_VISIBLE_DEVICES scope
+                   "--listen", "0.0.0.0", "--port", port, "--disable-auto-launch",
+                   "--cuda-device", cuda_device]
             subprocess.Popen(
                 cmd, cwd=str(COMFYUI_DIR),
                 stdout=log_file, stderr=log_file,
@@ -1988,7 +1986,7 @@ async def upload_to_gallery(file: UploadFile = File(...), user=Depends(get_curre
             raise HTTPException(400, f"Unsupported format. Allowed: {', '.join(sorted(allowed))}")
 
         filename = f"upload_{uuid.uuid4()}{ext}"
-        filepath = OUTPUT_DIR / filename
+        filepath = UPLOAD_DIR / filename
 
         with open(filepath, "wb") as f:
             content = await file.read()
@@ -2006,7 +2004,7 @@ async def upload_to_gallery(file: UploadFile = File(...), user=Depends(get_curre
 
         item = {
             "filename": filename,
-            "url": f"/outputs/{filename}",
+            "url": f"/uploads/{filename}",
             "path": str(filepath),
             "type": "image" if ext in IMAGE_EXTS else "video",
             "size": filepath.stat().st_size,
@@ -2804,8 +2802,10 @@ async def list_outputs(user=Depends(get_current_user)):
         fp = Path(r["file_path"])
         if fp.exists():
             ext = fp.suffix.lower()
+            # Determine URL prefix based on actual file location
+            url_prefix = "/uploads" if "uploads/" in r["file_path"] else "/outputs"
             item = {
-                "filename": r["filename"], "url": f"/outputs/{r['filename']}",
+                "filename": r["filename"], "url": f"{url_prefix}/{r['filename']}",
                 "path": r["file_path"], "type": "image" if ext in IMAGE_EXTS else "video",
                 "size": fp.stat().st_size, "created_at": r["created_at"],
             }
@@ -2855,12 +2855,11 @@ def ensure_comfyui_running(gpu_id: int = 0):
     logging.info(f"Starting ComfyUI server on port {inst['port']} (GPU {gpu_id})...")
     comfyui_log = open(inst["log"], "w")
     env = os.environ.copy()
-    env.update(inst["cuda_env"])
+    cuda_device = inst.get("cuda_device", "0")
     cmd = [sys.executable, str(COMFYUI_DIR / "main.py"),
            "--listen", "0.0.0.0", "--port", inst["port"],
-           "--disable-auto-launch", "--preview-method", "none"]
-    if inst["cuda_env"].get("CUDA_VISIBLE_DEVICES"):
-        cmd.extend(["--cuda-device", "0"])
+           "--disable-auto-launch", "--preview-method", "none",
+           "--cuda-device", cuda_device]
     comfyui_process = subprocess.Popen(
         cmd, cwd=str(COMFYUI_DIR),
         stdout=comfyui_log, stderr=comfyui_log, env=env,
@@ -3424,8 +3423,44 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
         # Custom background image → route through masking pipeline
         # Original flow: input_video(81) → DrawMaskOnImage(15) → bg_images(218)
         # Custom flow:   LoadImage(300) → Resize(301) → Repeat(302) → DrawMaskOnImage(15) → bg_images(218)
+        # Camera flow:   VHS_LoadVideo(300) → Resize(301) → DrawMaskOnImage(15) → bg_images(218)
         # This ensures the character area is properly masked (blacked out) in the custom background
-        if bg_image:
+        bg_motion_video = user_inputs.get("_bg_motion_video")
+        if bg_image and bg_motion_video:
+            # Camera motion detected: load warped background VIDEO (per-frame varying)
+            workflow["300"] = {
+                "class_type": "VHS_LoadVideo",
+                "inputs": {
+                    "video": bg_motion_video,
+                    "force_rate": 0,
+                    "force_size": "Disabled",
+                    "custom_width": 512,
+                    "custom_height": 512,
+                    "frame_load_cap": 0,
+                    "skip_first_frames": 0,
+                    "select_every_nth": 1,
+                },
+            }
+            workflow["301"] = {
+                "class_type": "ImageResizeKJv2",
+                "inputs": {
+                    "width": ["123", 0],
+                    "height": ["124", 0],
+                    "upscale_method": "lanczos",
+                    "keep_proportion": "pad",
+                    "pad_color": "0, 0, 0",
+                    "crop_position": "center",
+                    "divisible_by": 16,
+                    "device": "cpu",
+                    "image": ["300", 0],
+                },
+            }
+            # No RepeatImageBatch needed — video already has per-frame variation
+            if "15" in workflow:
+                workflow["15"]["inputs"]["image"] = ["301", 0]
+                logging.info(f"Camera motion background applied: {bg_motion_video}")
+        elif bg_image:
+            # No camera motion: use static image repeated
             workflow["300"] = {
                 "class_type": "LoadImage",
                 "inputs": {"image": bg_image, "upload": "image"},
@@ -3455,7 +3490,7 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             # Node 15 still applies the character mask, producing bg with character area blacked out
             if "15" in workflow:
                 workflow["15"]["inputs"]["image"] = ["302", 0]
-                logging.info(f"Custom background image applied: {bg_image}")
+                logging.info(f"Custom background image applied (static): {bg_image}")
 
         # Auto-analyze background lighting with Gemini if no manual bg_prompt
         if bg_image and not bg_prompt:
@@ -3832,6 +3867,35 @@ def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
             except OSError:
                 pass
 
+        # Step 3.5: Camera motion extraction for custom backgrounds
+        if workflow_id == "change_character" and user_inputs.get("bg_image"):
+            ref_video_local = params.get("_ref_video_original", "")
+            bg_name = user_inputs["bg_image"]  # already ComfyUI filename after upload
+            # Find local bg image path
+            bg_local = ""
+            for candidate in [
+                str(BACKGROUNDS_DIR / bg_name),
+                os.path.join("/home/ubuntu/ComfyUI/input", bg_name),
+            ]:
+                if os.path.exists(candidate):
+                    bg_local = candidate
+                    break
+            if ref_video_local and bg_local and os.path.exists(ref_video_local):
+                try:
+                    from camera_motion import warp_background_video
+                    generation_status[task_id].update({"progress": 0.10, "message": "Extracting camera motion..."})
+                    warped_path = os.path.join("/tmp", f"bg_warped_{task_id}.mp4")
+                    result_path = warp_background_video(bg_local, ref_video_local, warped_path)
+                    if result_path and os.path.exists(result_path) and os.path.getsize(result_path) > 1024:
+                        warped_comfyui = upload_to_comfyui(result_path, comfyui_url=_comfyui_url)
+                        user_inputs["_bg_motion_video"] = warped_comfyui
+                        logging.info(f"CameraMotion: Warped bg video uploaded as {warped_comfyui}")
+                        os.remove(result_path)
+                    else:
+                        logging.info("CameraMotion: No significant camera motion, using static bg")
+                except Exception as e:
+                    logging.warning(f"CameraMotion: Failed ({e}), falling back to static bg")
+
         # Step 4: Prepare workflow
         generation_status[task_id].update({"progress": 0.12, "message": "Preparing workflow..."})
         logging.info(f"[{workflow_id}] GPU{gpu_id} user_inputs before prepare: { {k:v for k,v in user_inputs.items() if isinstance(v, str) and len(v) < 200} }")
@@ -4052,41 +4116,50 @@ def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
 
 
 def queue_worker_loop(gpu_id: int):
-    """Background thread that processes server_queue items on a specific GPU."""
+    """Background thread that processes server_queue items on a specific GPU.
+
+    Each GPU worker independently picks ONE queued item at a time, processes it
+    fully (ComfyUI generation + post-processing), then picks the next.
+    This ensures work is distributed evenly across GPUs.
+    """
     logging.info(f"Queue worker for GPU {gpu_id} started")
+    my_event = queue_worker_events[gpu_id]
     while True:
-        queue_worker_event.wait(timeout=5)  # Periodic wake to avoid missing events
-        _time.sleep(0.1 * gpu_id)  # Slight stagger so GPU 0 picks first
-        while True:
-            task_id = None
-            params = None
-            with server_queue_lock:
-                for tid, entry in server_queue.items():
-                    status = generation_status.get(tid, {}).get("status")
-                    if status == "queued":
-                        task_id = tid
-                        params = entry["params"]
-                        # Mark as processing immediately to prevent other worker from picking it
-                        generation_status[task_id].update({
-                            "status": "processing",
-                            "progress": 0.01,
-                            "message": f"Starting on GPU {gpu_id}...",
-                            "gpu_id": gpu_id,
-                            "started_at": datetime.datetime.now().isoformat(),
-                        })
-                        break
-            if task_id is None:
-                break  # Back to outer loop, will wait() again
-            try:
-                workflow_generate_task(task_id, params, gpu_id=gpu_id)
-            except Exception as e:
-                logging.error(f"Queue worker GPU{gpu_id} error for {task_id}: {e}")
-                generation_status[task_id].update({
-                    "status": "failed", "progress": 0,
-                    "message": str(e), "output_path": None,
-                })
-            with server_queue_lock:
-                server_queue.pop(task_id, None)
+        my_event.wait(timeout=5)
+        my_event.clear()
+
+        task_id = None
+        params = None
+        with server_queue_lock:
+            for tid, entry in server_queue.items():
+                status = generation_status.get(tid, {}).get("status")
+                if status == "queued":
+                    task_id = tid
+                    params = entry["params"]
+                    # Mark as processing immediately to prevent other worker from picking it
+                    generation_status[task_id].update({
+                        "status": "processing",
+                        "progress": 0.01,
+                        "message": f"Starting on GPU {gpu_id}...",
+                        "gpu_id": gpu_id,
+                        "started_at": datetime.datetime.now().isoformat(),
+                    })
+                    break
+        if task_id is None:
+            continue  # Nothing to do, wait again
+        try:
+            workflow_generate_task(task_id, params, gpu_id=gpu_id)
+        except Exception as e:
+            logging.error(f"Queue worker GPU{gpu_id} error for {task_id}: {e}")
+            generation_status[task_id].update({
+                "status": "failed", "progress": 0,
+                "message": str(e), "output_path": None,
+            })
+        with server_queue_lock:
+            server_queue.pop(task_id, None)
+        # Wake BOTH workers so each can independently pick the next queued item
+        for evt in queue_worker_events:
+            evt.set()
 
 
 @app.post("/api/workflow/generate")
@@ -4226,7 +4299,8 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
             )
             queue_worker_threads[gpu_id].start()
 
-    queue_worker_event.set()
+    for evt in queue_worker_events:
+        evt.set()
     logging.info(f"Batch queue: {len(results)} items submitted for {request.workflow_id}")
     return {"tasks": results}
 

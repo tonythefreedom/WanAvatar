@@ -491,6 +491,15 @@ body {
   background: #dc2626;
 }
 
+.btn.warning {
+  background: #f59e0b;
+  color: white;
+  width: auto;
+}
+.btn.warning:hover:not(:disabled) {
+  background: #d97706;
+}
+
 .btn.btn-youtube-dl {
   background: #dc2626;
   color: white;
@@ -625,19 +634,19 @@ audio {
 }
 
 .gallery-thumb-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 4px;
 }
 
 .gallery-thumb {
-  aspect-ratio: 1;
   overflow: hidden;
   border-radius: 6px;
   cursor: pointer;
   border: 2px solid transparent;
   transition: border-color 0.15s, transform 0.15s;
+  max-width: 120px;
 }
 
 .gallery-thumb:hover {
@@ -647,8 +656,8 @@ audio {
 
 .gallery-thumb img {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  display: block;
 }
 
 .gallery-grid {

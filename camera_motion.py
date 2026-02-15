@@ -9,6 +9,7 @@ This solves the problem where a static background image stays fixed while
 the original video has camera panning/tilting/tracking.
 """
 import os
+import math
 import cv2
 import numpy as np
 import logging
@@ -266,8 +267,10 @@ def warp_background_video(bg_image_path: str, video_path: str,
         return ""
 
     # Calculate expected frame count after resampling to force_rate
+    # Use ceil + buffer to ensure bg video is always >= dance video frames
+    # ComfyUI's VHS_LoadVideo may produce slightly more frames than int() estimate
     duration = total_frames / orig_fps
-    expected_frames = int(duration * force_rate)
+    expected_frames = math.ceil(duration * force_rate) + 10
     expected_frames = max(expected_frames, 1)
 
     logging.info(f"CameraMotion: Video {vid_w}x{vid_h}, {orig_fps:.1f}fps, "

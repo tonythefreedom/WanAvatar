@@ -33,6 +33,7 @@ import {
   cancelGeneration,
   submitBatchQueue,
   getQueueStatus,
+  retryFailedTasks,
   authLogin,
   authGoogle,
   authMe,
@@ -880,8 +881,9 @@ function App() {
           .filter(i => i.status !== 'completed')
           .map(i => {
             if (i.status === 'running' && i.taskId) return i;
-            // Reset running without taskId or failed items back to pending
-            if (i.status === 'running' || i.status === 'failed') return { ...i, status: 'pending', progress: 0, error: null, taskId: null };
+            // Reset running without taskId back to pending; keep failed as-is
+            if (i.status === 'running') return { ...i, status: 'pending', progress: 0, error: null, taskId: null };
+            if (i.status === 'failed') return i;
             return i;
           });
         if (saved[wfId].items.length === 0) delete saved[wfId];
@@ -2127,6 +2129,7 @@ function App() {
       await loadDsAvatarGroups();
       if (dsAvatarSelectedGroup) await loadDsAvatarImages(dsAvatarSelectedGroup);
       alert(`Avatar registered in "${group.trim()}"`);
+      setGalleryPopup(null);
     } catch (err) { console.error('Failed to register avatar:', err); alert('Failed: ' + (err.response?.data?.detail || err.message)); }
   };
 
@@ -2138,6 +2141,7 @@ function App() {
       await uploadBackground(file);
       await loadStudioStages();
       alert(`Stage registered: ${img.filename}`);
+      setGalleryPopup(null);
     } catch (err) { alert(`Failed: ${err.message}`); }
   };
 
@@ -3170,6 +3174,29 @@ function App() {
       if (!q) return prev;
       return { ...prev, [wfId]: { ...q, items: q.items.filter(i => i.status === 'pending' || i.status === 'running') } };
     });
+  };
+
+  const handleRetryFailed = async (wfId) => {
+    try {
+      const data = await retryFailedTasks();
+      // Reset failed items in local queue to pending (works even if server has no failed_tasks,
+      // e.g. after server restart — items only exist in localStorage)
+      const localFailed = (wfQueue[wfId]?.items || []).filter(i => i.status === 'failed').length;
+      if (data.retried > 0 || localFailed > 0) {
+        setWfQueue(prev => {
+          const q = prev[wfId];
+          if (!q) return prev;
+          return { ...prev, [wfId]: { ...q, items: q.items.map(i =>
+            i.status === 'failed' ? { ...i, status: 'pending', progress: 0, error: null, taskId: null } : i
+          )}};
+        });
+        alert(`${data.retried || localFailed} task(s) reset to pending. Click "Start Queue" to re-submit.`);
+      } else {
+        alert('No failed tasks to retry');
+      }
+    } catch (err) {
+      alert(`Retry failed: ${err.message}`);
+    }
   };
 
   // ─── Dynamic form renderer ───
@@ -4418,6 +4445,7 @@ function App() {
                           const items = (queue?.items || []).filter(i => !i.category || i.category === 'video_studio');
                           const isProcessing = queue?.isProcessing || false;
                           const pendingCount = items.filter(i => i.status === 'pending').length;
+                          const failedCount = items.filter(i => i.status === 'failed').length;
                           return (
                             <div className="card queue-card">
                               <h3>{t('wfQueue')} {items.length > 0 && `(${items.length})`}</h3>
@@ -4503,6 +4531,11 @@ function App() {
                                     disabled={isProcessing || pendingCount === 0}>
                                     {isProcessing ? t('wfQueueRunning') : t('wfStartQueue')}
                                   </button>
+                                  {failedCount > 0 && (
+                                    <button className="btn warning" onClick={() => handleRetryFailed(wf.id)}>
+                                      Retry Failed ({failedCount})
+                                    </button>
+                                  )}
                                   <button className="btn secondary" onClick={() => handleWfQueueClear(wf.id)}
                                     disabled={isProcessing}>
                                     {t('wfClearQueue')}
@@ -4818,6 +4851,7 @@ function App() {
                     const items = (queue?.items || []).filter(i => i.category === 'dance_shorts');
                     const isProcessing = queue?.isProcessing || false;
                     const pendingCount = items.filter(i => i.status === 'pending').length;
+                    const failedCount = items.filter(i => i.status === 'failed').length;
                     return (
                       <div className="card queue-card" style={{ marginTop: 16 }}>
                         <h3>{t('wfQueue')} {items.length > 0 && `(${items.length})`}</h3>
@@ -4831,13 +4865,19 @@ function App() {
                                 {(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) && (
                                   <div className="queue-item-thumbs">
                                     {item.previews?.ref_image && (
-                                      <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar" />
+                                      <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar"
+                                        onClick={() => setQueueMediaPopup({ url: item.previews.ref_image, type: 'image', label: 'Avatar' })}
+                                        style={{ cursor: 'pointer' }} />
                                     )}
                                     {item.previews?.ref_video && (
-                                      <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata" />
+                                      <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata"
+                                        onClick={() => setQueueMediaPopup({ url: item.previews.ref_video, type: 'video', label: 'Reference Video' })}
+                                        style={{ cursor: 'pointer' }} />
                                     )}
                                     {item.previews?.bg_image && (
-                                      <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg" />
+                                      <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg"
+                                        onClick={() => setQueueMediaPopup({ url: item.previews.bg_image, type: 'image', label: 'Background' })}
+                                        style={{ cursor: 'pointer' }} />
                                     )}
                                   </div>
                                 )}
@@ -4896,6 +4936,11 @@ function App() {
                               disabled={isProcessing || pendingCount === 0}>
                               {isProcessing ? t('wfQueueRunning') : t('wfStartQueue')}
                             </button>
+                            {failedCount > 0 && (
+                              <button className="btn warning" onClick={() => handleRetryFailed('change_character')}>
+                                Retry Failed ({failedCount})
+                              </button>
+                            )}
                             <button className="btn secondary" onClick={() => handleWfQueueClear('change_character')}
                               disabled={isProcessing}>
                               {t('wfClearQueue')}

@@ -180,6 +180,11 @@ export const getQueueStatus = async () => {
   return response.data;
 };
 
+export const retryFailedTasks = async () => {
+  const response = await api.post('/queue/retry-failed');
+  return response.data;
+};
+
 export const getWorkflowStatus = async () => {
   const response = await api.get('/workflow/status');
   return response.data;

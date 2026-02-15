@@ -485,6 +485,8 @@ server_queue = collections.OrderedDict()  # task_id -> {workflow_id, params, cli
 server_queue_lock = threading.Lock()
 queue_worker_threads = [None, None]  # One worker thread per GPU
 queue_worker_events = [threading.Event(), threading.Event()]  # Per-GPU wake events
+QUEUE_MAX_RETRIES = 2  # Max retry attempts for failed tasks
+failed_tasks = collections.OrderedDict()  # task_id -> {params, workflow_id, client_item_id, error, failed_at}
 
 # Distributed / Sequence Parallel setup
 USE_SP = False
@@ -4111,6 +4113,7 @@ def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
             "status": "failed", "progress": 0,
             "message": str(e), "output_path": None,
         })
+        raise  # Re-raise so queue_worker_loop can handle retry
     finally:
         gpu_lock.release()
 
@@ -4151,10 +4154,38 @@ def queue_worker_loop(gpu_id: int):
             workflow_generate_task(task_id, params, gpu_id=gpu_id)
         except Exception as e:
             logging.error(f"Queue worker GPU{gpu_id} error for {task_id}: {e}")
-            generation_status[task_id].update({
-                "status": "failed", "progress": 0,
-                "message": str(e), "output_path": None,
-            })
+            # Check retry count
+            retry_count = generation_status[task_id].get("_retry_count", 0)
+            if retry_count < QUEUE_MAX_RETRIES:
+                retry_count += 1
+                logging.info(f"Queue worker: Retrying {task_id} (attempt {retry_count}/{QUEUE_MAX_RETRIES})")
+                generation_status[task_id].update({
+                    "status": "queued",
+                    "progress": 0,
+                    "message": f"Retrying ({retry_count}/{QUEUE_MAX_RETRIES})... previous error: {str(e)[:100]}",
+                    "_retry_count": retry_count,
+                })
+                # Keep in server_queue for retry, wake workers
+                for evt in queue_worker_events:
+                    evt.set()
+                continue  # Skip the pop below, re-queue
+            else:
+                generation_status[task_id].update({
+                    "status": "failed", "progress": 0,
+                    "message": f"Failed after {QUEUE_MAX_RETRIES} retries: {str(e)}",
+                    "output_path": None,
+                })
+                # Save to failed_tasks for manual retry
+                with server_queue_lock:
+                    entry = server_queue.get(task_id, {})
+                    failed_tasks[task_id] = {
+                        "params": params,
+                        "workflow_id": entry.get("workflow_id", ""),
+                        "client_item_id": entry.get("client_item_id", ""),
+                        "error": str(e),
+                        "failed_at": datetime.datetime.now().isoformat(),
+                    }
+                logging.info(f"Queue worker: Task {task_id} saved to failed_tasks for manual retry")
         with server_queue_lock:
             server_queue.pop(task_id, None)
         # Wake BOTH workers so each can independently pick the next queued item
@@ -4348,6 +4379,52 @@ async def get_queue_status(user=Depends(get_current_user)):
             }
 
     return {"tasks": result}
+
+
+@app.post("/api/queue/retry-failed")
+async def retry_failed_tasks(user=Depends(get_current_user)):
+    """Re-queue all failed tasks for retry."""
+    if not failed_tasks:
+        return {"retried": 0, "message": "No failed tasks to retry"}
+
+    retried = []
+    with server_queue_lock:
+        for task_id, entry in list(failed_tasks.items()):
+            new_task_id = str(uuid.uuid4())
+            # Re-create queue entry
+            generation_status[new_task_id] = {
+                "status": "queued",
+                "progress": 0,
+                "message": f"Retrying (was {task_id[:8]}...)",
+                "output_path": None,
+                "workflow_id": entry["workflow_id"],
+                "video_duration": entry["params"].get("video_duration"),
+            }
+            server_queue[new_task_id] = {
+                "workflow_id": entry["workflow_id"],
+                "params": entry["params"],
+                "client_item_id": entry.get("client_item_id", ""),
+                "submitted_at": datetime.datetime.now().isoformat(),
+            }
+            retried.append({"old_task_id": task_id, "new_task_id": new_task_id})
+
+    # Clear failed list
+    failed_tasks.clear()
+
+    # Ensure worker threads are running
+    for gpu_id in range(len(COMFYUI_INSTANCES)):
+        if queue_worker_threads[gpu_id] is None or not queue_worker_threads[gpu_id].is_alive():
+            queue_worker_threads[gpu_id] = threading.Thread(
+                target=queue_worker_loop, args=(gpu_id,), daemon=True,
+                name=f"queue-worker-gpu{gpu_id}",
+            )
+            queue_worker_threads[gpu_id].start()
+
+    for evt in queue_worker_events:
+        evt.set()
+
+    logging.info(f"Retry: Re-queued {len(retried)} failed tasks")
+    return {"retried": len(retried), "tasks": retried}
 
 
 @app.get("/api/workflows")

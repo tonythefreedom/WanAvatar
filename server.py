@@ -3457,10 +3457,19 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                     "image": ["300", 0],
                 },
             }
-            # No RepeatImageBatch needed — video already has per-frame variation
+            # Trim bg video to match dance video frame count (prevent batch size mismatch)
+            # Node 96 output 1 = dance video frame count from VHS_VideoInfoLoaded
+            workflow["303"] = {
+                "class_type": "GetImageRangeFromBatch",
+                "inputs": {
+                    "start_index": 0,
+                    "num_frames": ["96", 1],  # dance video frame count
+                    "images": ["301", 0],     # resized bg video
+                },
+            }
             if "15" in workflow:
-                workflow["15"]["inputs"]["image"] = ["301", 0]
-                logging.info(f"Camera motion background applied: {bg_motion_video}")
+                workflow["15"]["inputs"]["image"] = ["303", 0]
+                logging.info(f"Camera motion background applied (trimmed to dance frames): {bg_motion_video}")
         elif bg_image:
             # No camera motion: use static image repeated
             workflow["300"] = {

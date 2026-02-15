@@ -624,6 +624,33 @@ audio {
   color: var(--text-light);
 }
 
+.gallery-thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 6px;
+  padding: 4px;
+}
+
+.gallery-thumb {
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.gallery-thumb:hover {
+  border-color: var(--primary);
+  transform: scale(1.03);
+}
+
+.gallery-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .gallery-grid {
   display: flex;
   flex-direction: column;

@@ -182,13 +182,26 @@ def generate_video(
             value_range=(-1, 1)
         )
 
-        # Frame interpolation (16fps → 30fps) using RIFE AI
-        progress(0.85, desc="RIFE frame interpolation (16→30fps)...")
+        # Add projected floor shadow
+        progress(0.83, desc="Adding floor shadow...")
         try:
-            from rife_interpolate import interpolate_video_rife
-            interpolate_video_rife(video_path, target_fps=30)
-        except Exception as e:
-            logging.warning(f"RIFE frame interpolation error: {e}, using original 16fps")
+            from shadow_postprocess import add_shadow_to_video
+            add_shadow_to_video(video_path, shadow_opacity=0.45)
+        except Exception as shadow_err:
+            logging.warning(f"Shadow post-processing error: {shadow_err}")
+
+        # Frame interpolation (16fps → 64fps) using AMT-G recursive 2x (fallback: RIFE)
+        progress(0.85, desc="AMT-G frame interpolation (16→64fps)...")
+        try:
+            from amt_interpolate import interpolate_video_amt
+            interpolate_video_amt(video_path, target_fps=48)
+        except Exception as amt_err:
+            logging.warning(f"AMT-G frame interpolation error: {amt_err}, falling back to RIFE")
+            try:
+                from rife_interpolate import interpolate_video_rife
+                interpolate_video_rife(video_path, target_fps=48)
+            except Exception as rife_err:
+                logging.warning(f"RIFE also failed: {rife_err}, using original 16fps")
 
         # Merge audio (overwrites video_path with audio)
         progress(0.9, desc="Merging audio...")

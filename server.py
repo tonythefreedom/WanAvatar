@@ -131,7 +131,7 @@ WORKFLOW_REGISTRY = {
              "upload_to_comfyui": True, "required": True, "allow_youtube": True,
              "label": {"en": "Reference Video (Motion)", "ko": "참조 비디오 (모션)", "zh": "参考视频（动作）"}},
             {"key": "prompt", "type": "text", "node_id": "209", "field": "inputs.positive_prompt",
-             "default": "The character is dancing in the room", "rows": 4,
+             "default": "Natural soft lighting, the character is dancing in the room, distinct cast shadow on the floor beneath the person, gentle ambient light", "rows": 4,
              "label": {"en": "Scene Description", "ko": "장면 설명", "zh": "场景描述"}},
             {"key": "aspect_ratio", "type": "select_buttons",
              "node_ids": {"width": "123", "height": "124"},
@@ -1287,8 +1287,8 @@ def generate_video_task(task_id: str, params: dict):
         save_videos_grid(video[None], video_path, rescale=True, fps=16)
 
         generation_status[task_id]["progress"] = 0.88
-        generation_status[task_id]["message"] = "Frame interpolation (16→30fps)..."
-        interpolate_video_fps(video_path, target_fps=30)
+        generation_status[task_id]["message"] = "Frame interpolation (16→64fps)..."
+        interpolate_video_fps(video_path, target_fps=48)
 
         generation_status[task_id]["progress"] = 0.9
         generation_status[task_id]["message"] = "Merging audio..."
@@ -1951,8 +1951,16 @@ async def upload_background(file: UploadFile = File(...), user=Depends(get_curre
             content = await file.read()
             f.write(content)
 
+        # Resize oversized images to match video resolution (1280x720 max)
+        MAX_W, MAX_H = 1280, 720
         with Image.open(filepath) as img:
             width, height = img.size
+            if width > MAX_W * 2 or height > MAX_H * 2:
+                # Resize to fit within 1280x720 while keeping aspect ratio
+                img.thumbnail((MAX_W, MAX_H), Image.LANCZOS)
+                img.save(filepath, quality=95)
+                width, height = img.size
+                logging.info(f"Background resized to {width}x{height}")
 
         await record_user_file(user["id"], "background", filename, str(filepath),
                                file.filename, _json.dumps({"width": width, "height": height}))
@@ -3179,13 +3187,67 @@ def merge_audio_to_video(video_path: str, audio_source_path: str) -> str:
         return video_path
 
 
-def interpolate_video_fps(video_path: str, target_fps: int = 30) -> str:
+def analyze_background_lighting(image_path: str) -> str:
     """
-    Interpolate video using RIFE AI model (Practical-RIFE v4.25).
-    Falls back to ffmpeg minterpolate if RIFE fails.
+    Use Gemini to analyze a background image and generate a lighting description
+    that can be prepended to the positive_prompt for Relight LoRA.
+    Returns an English lighting description string, or empty string on failure.
+    """
+    import google.generativeai as genai
+
+    gemini_key = os.environ.get("GEMINI_KEY", "")
+    if not gemini_key:
+        logging.warning("GEMINI_KEY not set, skipping background lighting analysis")
+        return ""
+
+    if not os.path.exists(image_path):
+        logging.warning(f"Background image not found: {image_path}")
+        return ""
+
+    try:
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel(model_name="gemini-2.0-flash")
+
+        img = Image.open(image_path)
+        # Resize for faster upload (max 512px)
+        img.thumbnail((512, 512))
+
+        response = model.generate_content([
+            img,
+            "Analyze this stage/background image for a dance video. "
+            "Describe ONLY the lighting conditions in one concise English sentence. "
+            "Include: light colors, directions, intensity, and type (neon, spotlight, ambient, etc). "
+            "Example: 'Purple and blue neon lights from the sides, bright white spotlight from above, dark moody atmosphere'. "
+            "Output ONLY the lighting description, nothing else."
+        ])
+
+        lighting_desc = response.text.strip().strip('"').strip("'")
+        # Sanity check: should be short and relevant
+        if len(lighting_desc) > 300:
+            lighting_desc = lighting_desc[:300]
+        logging.info(f"Gemini background analysis: {lighting_desc}")
+        return lighting_desc
+    except Exception as e:
+        logging.warning(f"Gemini background analysis failed: {e}")
+        return ""
+
+
+def interpolate_video_fps(video_path: str, target_fps: int = 48) -> str:
+    """
+    Interpolate video using AI models with cascading fallback:
+    1. AMT-G (highest quality, dual-resolution processing)
+    2. RIFE v4.25 (fast, good quality)
+    3. ffmpeg minterpolate (CPU fallback)
     Replaces the file in-place. Returns the video_path.
     """
-    # Try RIFE first
+    # Try AMT-L first (best quality for fast motion)
+    try:
+        from amt_interpolate import interpolate_video_amt
+        return interpolate_video_amt(video_path, target_fps=target_fps)
+    except Exception as amt_err:
+        logging.warning(f"AMT-L interpolation failed, falling back to RIFE: {amt_err}")
+
+    # Fallback 1: RIFE
     try:
         from rife_interpolate import interpolate_video_rife
         return interpolate_video_rife(video_path, target_fps=target_fps)
@@ -3394,6 +3456,16 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             if "15" in workflow:
                 workflow["15"]["inputs"]["image"] = ["302", 0]
                 logging.info(f"Custom background image applied: {bg_image}")
+
+        # Auto-analyze background lighting with Gemini if no manual bg_prompt
+        if bg_image and not bg_prompt:
+            bg_image_path = str(BACKGROUNDS_DIR / bg_image) if not os.path.isabs(bg_image) else bg_image
+            if not os.path.exists(bg_image_path):
+                # Try ComfyUI input path
+                bg_image_path = os.path.join("/home/ubuntu/ComfyUI/input", bg_image)
+            lighting_desc = analyze_background_lighting(bg_image_path)
+            if lighting_desc:
+                bg_prompt = lighting_desc
 
         # Background prompt → prepend to positive_prompt
         if bg_prompt and "209" in workflow:
@@ -3869,25 +3941,36 @@ def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
                 except Exception as scene_err:
                     logging.warning(f"Scene composite failed (using original result): {scene_err}")
 
-        # Step 8: Post-processing — merge audio (video outputs only)
+        # Step 8: Post-processing (video outputs only)
         abs_output = str(OUTPUT_DIR / os.path.basename(output_path))
         is_video_output = os.path.splitext(output_path)[1].lower() in {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+        # Step 8a: Add projected floor shadow (before interpolation so shadow gets interpolated too)
+        if is_video_output and os.path.exists(abs_output):
+            generation_status[task_id].update({"progress": 0.91, "message": "Adding floor shadow..."})
+            try:
+                from shadow_postprocess import add_shadow_to_video
+                add_shadow_to_video(abs_output, shadow_opacity=0.45)
+            except Exception as shadow_err:
+                logging.warning(f"Shadow post-processing failed (skipping): {shadow_err}")
+
+        # Step 8b: Frame interpolation (16fps → 64fps via recursive 2x) — BEFORE audio merge
+        if is_video_output and os.path.exists(abs_output):
+            generation_status[task_id].update({"progress": 0.93, "message": "Frame interpolation (16→64fps)..."})
+            interpolate_video_fps(abs_output, target_fps=48)
+
+        # Step 8b: Merge audio — AFTER frame interpolation
         # Priority: custom_audio > reference video audio
         custom_audio = params.get("_custom_audio_path")
         ref_video_original = params.get("_ref_video_original")
         if is_video_output and custom_audio and os.path.exists(custom_audio):
-            generation_status[task_id].update({"progress": 0.95, "message": "Merging custom audio..."})
+            generation_status[task_id].update({"progress": 0.96, "message": "Merging custom audio..."})
             merge_audio_to_video(abs_output, custom_audio)
             logging.info(f"Custom audio merged: {custom_audio}")
         elif is_video_output and ref_video_original and os.path.exists(ref_video_original):
-            generation_status[task_id].update({"progress": 0.95, "message": "Merging audio from reference video..."})
+            generation_status[task_id].update({"progress": 0.96, "message": "Merging audio from reference video..."})
             merge_audio_to_video(abs_output, ref_video_original)
             logging.info(f"Audio merged from reference video: {ref_video_original}")
-
-        # Step 8.5: Frame interpolation (16fps → 30fps) for video outputs
-        if is_video_output and os.path.exists(abs_output):
-            generation_status[task_id].update({"progress": 0.96, "message": "Frame interpolation (16→30fps)..."})
-            interpolate_video_fps(abs_output, target_fps=30)
 
         # Step 9: Post-processing — YouTube upload + Slack notification
         # Only upload if yt_upload flag is explicitly True

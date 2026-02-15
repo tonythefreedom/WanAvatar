@@ -839,8 +839,9 @@ function App() {
   const [fluxOutputSeed, setFluxOutputSeed] = useState('');
 
   // Gallery tab state
-  const [galleryTab, setGalleryTab] = useState('videos');
+  const [galleryTab, setGalleryTab] = useState('images');
   const [galleryImages, setGalleryImages] = useState([]);
+  const [galleryPopup, setGalleryPopup] = useState(null); // { index, img }
   const [avatarPreparing, setAvatarPreparing] = useState({}); // { [filename]: { taskId, status, progress } }
   const [ytUploadTarget, setYtUploadTarget] = useState(null); // filename being uploaded
   const [ytUploadForm, setYtUploadForm] = useState({ title: '', description: '', hashtags: '' });
@@ -3060,6 +3061,15 @@ function App() {
         }
 
         if (allDone) {
+          // Check for unsubmitted pending items (added after queue started)
+          const unsubmitted = currentQueue.items.filter(i => i.status === 'pending' && !i.taskId);
+          if (unsubmitted.length > 0) {
+            // Auto-submit new pending items
+            clearInterval(poll);
+            delete queuePollIntervals.current[wfId];
+            handleWfQueueStart(wfId);
+            return;
+          }
           clearInterval(poll);
           delete queuePollIntervals.current[wfId];
           setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: false } }));
@@ -3082,7 +3092,7 @@ function App() {
 
   const handleWfQueueStart = async (wfId) => {
     const queue = wfQueueRef.current[wfId];
-    if (!queue?.items?.length || queue.isProcessing) return;
+    if (!queue?.items?.length) return;
 
     const wfDef = workflows.find(w => w.id === wfId);
     if (!wfDef) return;
@@ -4618,7 +4628,7 @@ function App() {
                     {studioRefVideoPreview && (
                       <div className="video-editor-card" style={{ marginTop: 8 }}>
                         <video ref={dsVideoRef} controls src={studioRefVideoPreview}
-                          style={{ width: '100%', borderRadius: 8 }}
+                          style={{ width: '50%', borderRadius: 8, display: 'block', margin: '0 auto' }}
                           onLoadedMetadata={handleDsVideoMeta}
                           onTimeUpdate={handleDsVideoTimeUpdate} />
                         {dsVideoDuration > 0 && (
@@ -4926,35 +4936,16 @@ function App() {
                   <button className={galleryTab === 'videos' ? 'active' : ''} onClick={() => setGalleryTab('videos')}>
                     {t('galleryVideos')} ({videos.length})
                   </button>
-                  <button className={galleryTab === 'stages' ? 'active' : ''} onClick={() => { setGalleryTab('stages'); loadStudioStages(); }}>
-                    {t('galleryStages')} ({studioStages.length})
-                  </button>
                 </div>
 
                 {galleryTab === 'images' && (
                   galleryImages.length === 0 ? (
                     <div className="gallery-empty"><p>{t('galleryEmpty')}</p></div>
                   ) : (
-                    <div className="gallery-grid">
-                      {galleryImages.map((img) => (
-                        <div key={img.filename} className="gallery-item">
-                          <img src={img.url} alt={img.filename} className="gallery-item-img" />
-                          <div className="gallery-item-info">
-                            <span className="gallery-item-name" title={img.filename}>{img.filename}</span>
-                            <span className="gallery-item-meta">{t('gallerySize')}: {(img.size / 1024 / 1024).toFixed(1)} MB</span>
-                            <span className="gallery-item-meta">{t('galleryDate')}: {new Date(img.created_at).toLocaleString()}</span>
-                            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                              {avatarPreparing[img.filename] ? (
-                                <button className="btn small" disabled style={{ flex: 1, opacity: 0.7 }}>
-                                  {avatarPreparing[img.filename].message || `Preparing... ${avatarPreparing[img.filename].progress}%`}
-                                </button>
-                              ) : (
-                                <button className="btn primary small" onClick={() => handleRegisterAsAvatar(img)}>Avatar</button>
-                              )}
-                              <button className="btn small" onClick={() => handleRegisterAsStage(img)}>Stage</button>
-                              <button className="btn danger small" onClick={() => handleDeleteOutput(img.filename)}>{t('galleryDelete')}</button>
-                            </div>
-                          </div>
+                    <div className="gallery-thumb-grid">
+                      {galleryImages.map((img, idx) => (
+                        <div key={img.filename} className="gallery-thumb" onClick={() => setGalleryPopup({ index: idx, img })}>
+                          <img src={img.url} alt={img.filename} loading="lazy" />
                         </div>
                       ))}
                     </div>
@@ -5020,33 +5011,59 @@ function App() {
                   )
                 )}
 
-                {galleryTab === 'stages' && (
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-                      <label className="btn primary small" style={{ cursor: 'pointer' }}>
-                        <input type="file" accept="image/*" onChange={handleGalleryStageUpload} style={{ display: 'none' }} />
-                        + {t('studioStageUpload')}
-                      </label>
-                    </div>
-                    {studioStages.length === 0 ? (
-                      <div className="gallery-empty"><p>{t('galleryEmpty')}</p></div>
-                    ) : (
-                      <div className="gallery-grid">
-                        {studioStages.map(stage => (
-                          <div key={stage.filename} className="gallery-item">
-                            <img src={stage.url} alt={stage.filename} className="gallery-item-img" />
-                            <div className="gallery-item-info">
-                              <span className="gallery-item-name" title={stage.filename}>{stage.filename}</span>
-                              <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                                <button className="btn danger small" onClick={() => handleStudioStageDelete(stage.filename)}>{t('galleryDelete')}</button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
+                {/* Gallery Image Popup */}
+                {galleryPopup && (() => {
+                  const img = galleryImages[galleryPopup.index];
+                  if (!img) return null;
+                  const navGallery = (dir) => {
+                    setGalleryPopup(prev => {
+                      const next = dir === 'right'
+                        ? (prev.index + 1) % galleryImages.length
+                        : (prev.index - 1 + galleryImages.length) % galleryImages.length;
+                      return { index: next, img: galleryImages[next] };
+                    });
+                  };
+                  return (
+                    <div className="avatar-popup-overlay" onClick={() => setGalleryPopup(null)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'ArrowLeft') navGallery('left');
+                        else if (e.key === 'ArrowRight') navGallery('right');
+                        else if (e.key === 'Escape') setGalleryPopup(null);
+                      }} tabIndex={0} ref={el => el && el.focus()}>
+                      <div className="avatar-popup" onClick={e => e.stopPropagation()} style={{ maxWidth: '85vw' }}>
+                        <div className="avatar-popup-header">
+                          <span style={{ fontSize: 13, opacity: 0.7 }}>{galleryPopup.index + 1} / {galleryImages.length}</span>
+                          <span style={{ fontSize: 13, fontWeight: 500 }}>{img.filename}</span>
+                          <button onClick={() => setGalleryPopup(null)} style={{ background: 'none', border: 'none', color: 'inherit', fontSize: 20, cursor: 'pointer' }}>×</button>
+                        </div>
+                        <div className="avatar-popup-body">
+                          <img src={img.url} alt={img.filename} style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }} />
+                        </div>
+                        <div className="avatar-popup-footer" style={{ display: 'flex', gap: 8, padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
+                          {avatarPreparing[img.filename] ? (
+                            <button className="btn small" disabled style={{ flex: 1, opacity: 0.7 }}>
+                              {avatarPreparing[img.filename].message || `Preparing... ${avatarPreparing[img.filename].progress}%`}
+                            </button>
+                          ) : (
+                            <button className="btn primary small" style={{ flex: 1 }} onClick={() => handleRegisterAsAvatar(img)}>Avatar</button>
+                          )}
+                          <button className="btn small" style={{ flex: 1 }} onClick={() => handleRegisterAsStage(img)}>Stage</button>
+                          <button className="btn danger small" style={{ flex: 1 }} onClick={() => {
+                            handleDeleteOutput(img.filename);
+                            if (galleryImages.length <= 1) setGalleryPopup(null);
+                            else navGallery('right');
+                          }}>{t('galleryDelete')}</button>
+                        </div>
                       </div>
-                    )}
-                  </div>
-                )}
+                      {galleryImages.length > 1 && (
+                        <>
+                          <button className="avatar-popup-nav" style={{ left: 16 }} onClick={e => { e.stopPropagation(); navGallery('left'); }}>‹</button>
+                          <button className="avatar-popup-nav" style={{ right: 16 }} onClick={e => { e.stopPropagation(); navGallery('right'); }}>›</button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}

@@ -255,22 +255,70 @@ def outpaint_background(bg_image_path: str, target_width: int, target_height: in
     # Calculate required final dimensions for camera motion
     required_w = int(target_width * scale_factor)
     required_h = int(target_height * scale_factor)
+    target_aspect = required_w / required_h  # 9:16 비율
+    orig_aspect = orig_w / orig_h
     
-    # Determine if we need to extend the background
+    # Check if aspect ratio is already correct (within 2% tolerance)
+    aspect_diff = abs(orig_aspect - target_aspect) / target_aspect
+    
+    # Case 1: Background is large enough (can downscale) → Crop to aspect ratio + resize
     if orig_w >= required_w and orig_h >= required_h:
-        # Background is already large enough, no outpainting needed
-        logging.info(f"Outpaint: Background {orig_w}x{orig_h} >= required {required_w}x{required_h}, no outpainting needed")
-        return bg_image_path
+        logging.info(f"Outpaint: Background {orig_w}x{orig_h} >= required {required_w}x{required_h}, cropping to aspect ratio")
+        
+        # Calculate crop dimensions to match target aspect ratio
+        if orig_aspect > target_aspect:
+            # Background is wider → crop width
+            crop_h = orig_h
+            crop_w = int(crop_h * target_aspect)
+        else:
+            # Background is taller → crop height
+            crop_w = orig_w
+            crop_h = int(crop_w / target_aspect)
+        
+        # Center crop
+        x = (orig_w - crop_w) // 2
+        y = (orig_h - crop_h) // 2
+        cropped = bg_img[y:y+crop_h, x:x+crop_w]
+        
+        # Resize to required dimensions (downscale)
+        resized = cv2.resize(cropped, (required_w, required_h), interpolation=cv2.INTER_LANCZOS4)
+        cv2.imwrite(cache_path, resized)
+        
+        logging.info(f"Outpaint: Cropped {orig_w}x{orig_h} → {crop_w}x{crop_h} → resized to {required_w}x{required_h}")
+        return cache_path
     
-    # Calculate how much we need to extend
-    final_w = max(orig_w, required_w)
-    final_h = max(orig_h, required_h)
+    # Case 2: Background is too small → Need outpainting (never upscale with resize)
+    # First, ensure correct aspect ratio, then extend to required size
+    
+    if aspect_diff >= 0.02:
+        # Aspect ratio is wrong → First crop to correct aspect ratio
+        logging.info(f"Outpaint: Adjusting aspect ratio from {orig_aspect:.3f} to {target_aspect:.3f}")
+        
+        if orig_aspect > target_aspect:
+            # Too wide → crop width
+            crop_h = orig_h
+            crop_w = int(crop_h * target_aspect)
+        else:
+            # Too tall → crop height
+            crop_w = orig_w
+            crop_h = int(crop_w / target_aspect)
+        
+        # Center crop
+        x = (orig_w - crop_w) // 2
+        y = (orig_h - crop_h) // 2
+        bg_img = bg_img[y:y+crop_h, x:x+crop_w]
+        orig_w, orig_h = crop_w, crop_h
+        logging.info(f"Outpaint: Cropped to correct aspect ratio: {orig_w}x{orig_h}")
+    
+    # Now extend to required size with outpainting
+    final_w = required_w
+    final_h = required_h
     
     # Calculate margins to add
     margin_w = (final_w - orig_w) // 2
     margin_h = (final_h - orig_h) // 2
     
-    logging.info(f"Outpaint: Original {orig_w}x{orig_h}, add margins ({margin_w}px H, {margin_h}px V) → {final_w}x{final_h}")
+    logging.info(f"Outpaint: Extending {orig_w}x{orig_h}, add margins ({margin_w}px H, {margin_h}px V) → {final_w}x{final_h}")
     
     try:
         # Method 1: Use FLUX.2 for AI outpainting
@@ -296,7 +344,7 @@ def outpaint_background(bg_image_path: str, target_width: int, target_height: in
 def _outpaint_with_flux_v2(bg_original: np.ndarray, final_w: int, final_h: int, 
                            margin_w: int, margin_h: int, output_path: str) -> str:
     """
-    V2: AI-powered outpainting using FLUX.2-klein-9B.
+    V2: AI-powered outpainting using FLUX.1 Fill [dev].
     
     Args:
         bg_original: Original background image (keep at original resolution)
@@ -310,152 +358,59 @@ def _outpaint_with_flux_v2(bg_original: np.ndarray, final_w: int, final_h: int,
         Path to outpainted image, or empty string on failure.
     """
     try:
-        from diffusers import Flux2KleinPipeline
+        from diffusers import FluxFillPipeline
         import torch
         from PIL import Image
         import numpy as np
         
-        # Check if FLUX model is available
-        model_id = "black-forest-labs/FLUX.2-klein-9B"
-        cache_dir = "/mnt/models"
+        logging.info(f"FLUX Outpaint: Loading FLUX.1 Fill [dev]...")
         
-        logging.info(f"FLUX Outpaint: Loading FLUX.2-klein-9B...")
-        
-        # Load pipeline
-        pipe = Flux2KleinPipeline.from_pretrained(
-            model_id,
+        # Load pipeline from Hugging Face
+        pipe = FluxFillPipeline.from_pretrained(
+            "black-forest-labs/FLUX.1-Fill-dev",
             torch_dtype=torch.bfloat16,
-            cache_dir=cache_dir,
-        )
-        
-        # Use cuda:0 temporarily
-        pipe.to("cuda:0")
+            cache_dir="/mnt/models",
+        ).to("cuda:0")
         
         orig_h, orig_w = bg_original.shape[:2]
-        bg_pil = Image.fromarray(cv2.cvtColor(bg_original, cv2.COLOR_BGR2RGB))
         
-        # Step 1: Create initial canvas with intelligent padding
+        # Step 1: Create canvas with original image centered
         canvas_np = np.zeros((final_h, final_w, 3), dtype=np.uint8)
-        
-        # Fill edges with mirrored content
-        if margin_h > 0:
-            # Top
-            edge = bg_original[:min(margin_h, orig_h), :]
-            edge_flipped = cv2.flip(edge, 0)
-            edge_resized = cv2.resize(edge_flipped, (orig_w, margin_h), interpolation=cv2.INTER_CUBIC)
-            canvas_np[:margin_h, margin_w:margin_w+orig_w] = edge_resized
-            # Bottom
-            edge = bg_original[-min(margin_h, orig_h):, :]
-            edge_flipped = cv2.flip(edge, 0)
-            edge_resized = cv2.resize(edge_flipped, (orig_w, margin_h), interpolation=cv2.INTER_CUBIC)
-            canvas_np[margin_h+orig_h:, margin_w:margin_w+orig_w] = edge_resized
-        
-        if margin_w > 0:
-            # Left
-            edge = bg_original[:, :min(margin_w, orig_w)]
-            edge_flipped = cv2.flip(edge, 1)
-            edge_resized = cv2.resize(edge_flipped, (margin_w, orig_h), interpolation=cv2.INTER_CUBIC)
-            canvas_np[margin_h:margin_h+orig_h, :margin_w] = edge_resized
-            # Right
-            edge = bg_original[:, -min(margin_w, orig_w):]
-            edge_flipped = cv2.flip(edge, 1)
-            edge_resized = cv2.resize(edge_flipped, (margin_w, orig_h), interpolation=cv2.INTER_CUBIC)
-            canvas_np[margin_h:margin_h+orig_h, margin_w+orig_w:] = edge_resized
-        
-        # Fill corners
-        if margin_h > 0 and margin_w > 0:
-            # Top-left
-            canvas_np[:margin_h, :margin_w] = cv2.resize(
-                bg_original[:min(margin_h, orig_h), :min(margin_w, orig_w)],
-                (margin_w, margin_h), interpolation=cv2.INTER_CUBIC
-            )
-            # Top-right
-            canvas_np[:margin_h, margin_w+orig_w:] = cv2.resize(
-                bg_original[:min(margin_h, orig_h), -min(margin_w, orig_w):],
-                (margin_w, margin_h), interpolation=cv2.INTER_CUBIC
-            )
-            # Bottom-left
-            canvas_np[margin_h+orig_h:, :margin_w] = cv2.resize(
-                bg_original[-min(margin_h, orig_h):, :min(margin_w, orig_w)],
-                (margin_w, margin_h), interpolation=cv2.INTER_CUBIC
-            )
-            # Bottom-right
-            canvas_np[margin_h+orig_h:, margin_w+orig_w:] = cv2.resize(
-                bg_original[-min(margin_h, orig_h):, -min(margin_w, orig_w):],
-                (margin_w, margin_h), interpolation=cv2.INTER_CUBIC
-            )
-        
-        # Place original in center
         canvas_np[margin_h:margin_h+orig_h, margin_w:margin_w+orig_w] = bg_original
+        
+        # Step 2: Create mask (white = areas to fill, black = keep original)
+        mask_np = np.ones((final_h, final_w), dtype=np.uint8) * 255
+        mask_np[margin_h:margin_h+orig_h, margin_w:margin_w+orig_w] = 0  # Keep original center
         
         # Convert to PIL
         canvas_pil = Image.fromarray(cv2.cvtColor(canvas_np, cv2.COLOR_BGR2RGB))
+        mask_pil = Image.fromarray(mask_np)
         
-        # Step 2: Use FLUX.2 to refine edges
-        prompt = "natural background scene, seamless extension, consistent lighting and colors, photorealistic, high quality, detailed environment"
+        # Step 3: Use FLUX.1 Fill to outpaint
+        prompt = "seamless background extension, natural continuation, consistent lighting and style, photorealistic, high quality"
         
-        logging.info(f"FLUX Outpaint: Refining edges with AI (img2img)...")
+        logging.info(f"FLUX Outpaint: Generating outpainted image with FLUX.1 Fill...")
         
         generated = pipe(
+            image=canvas_pil,
+            mask_image=mask_pil,
             prompt=prompt,
             height=final_h,
             width=final_w,
-            num_inference_steps=4,
-            guidance_scale=1.0,
+            num_inference_steps=30,  # FLUX.1 Fill needs more steps than FLUX.2
+            guidance_scale=30.0,  # High guidance for better adherence
             generator=torch.Generator("cuda:0").manual_seed(42),
         ).images[0]
         
-        # Step 3: Composite - keep center, blend edges
+        # Convert result
         generated_np = np.array(generated)
-        generated_bgr = cv2.cvtColor(generated_np, cv2.COLOR_RGB2BGR)
+        result_np = cv2.cvtColor(generated_np, cv2.COLOR_RGB2BGR)
         
-        # FLUX may resize to nearest multiple of 16, so resize back
-        gen_h, gen_w = generated_bgr.shape[:2]
+        # FLUX may resize to nearest multiple of 16, so resize back if needed
+        gen_h, gen_w = result_np.shape[:2]
         if gen_h != final_h or gen_w != final_w:
             logging.info(f"FLUX Outpaint: Resizing generated image from {gen_w}x{gen_h} to {final_w}x{final_h}")
-            generated_bgr = cv2.resize(generated_bgr, (final_w, final_h), interpolation=cv2.INTER_LANCZOS4)
-        
-        # Create blend mask (1.0 = keep original, 0.0 = use generated)
-        blend_mask = np.zeros((final_h, final_w), dtype=np.float32)
-        
-        # Center region: keep 100% original
-        blend_mask[margin_h:margin_h+orig_h, margin_w:margin_w+orig_w] = 1.0
-        
-        # Edge regions: smooth transition
-        blend_width = min(50, margin_h if margin_h > 0 else 50, margin_w if margin_w > 0 else 50)
-        
-        # Top edge blend
-        if margin_h > 0:
-            for i in range(min(blend_width, margin_h)):
-                alpha = i / blend_width
-                blend_mask[margin_h - i - 1, margin_w:margin_w+orig_w] = alpha
-        
-        # Bottom edge blend
-        if margin_h > 0:
-            for i in range(min(blend_width, margin_h)):
-                alpha = i / blend_width
-                if margin_h + orig_h + i < final_h:
-                    blend_mask[margin_h + orig_h + i, margin_w:margin_w+orig_w] = alpha
-        
-        # Left edge blend
-        if margin_w > 0:
-            for i in range(min(blend_width, margin_w)):
-                alpha = i / blend_width
-                blend_mask[margin_h:margin_h+orig_h, margin_w - i - 1] = alpha
-        
-        # Right edge blend
-        if margin_w > 0:
-            for i in range(min(blend_width, margin_w)):
-                alpha = i / blend_width
-                if margin_w + orig_w + i < final_w:
-                    blend_mask[margin_h:margin_h+orig_h, margin_w + orig_w + i] = alpha
-        
-        # Apply blend
-        blend_mask_3d = blend_mask[:, :, np.newaxis]
-        result_np = (
-            canvas_np * blend_mask_3d +
-            generated_bgr * (1 - blend_mask_3d)
-        ).astype(np.uint8)
+            result_np = cv2.resize(result_np, (final_w, final_h), interpolation=cv2.INTER_LANCZOS4)
         
         # Save result
         cv2.imwrite(output_path, result_np)

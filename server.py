@@ -485,7 +485,7 @@ server_queue = collections.OrderedDict()  # task_id -> {workflow_id, params, cli
 server_queue_lock = threading.Lock()
 queue_worker_threads = [None, None]  # One worker thread per GPU
 queue_worker_events = [threading.Event(), threading.Event()]  # Per-GPU wake events
-QUEUE_MAX_RETRIES = 2  # Max retry attempts for failed tasks
+QUEUE_MAX_RETRIES = 0  # Disable automatic retry for failed tasks
 failed_tasks = collections.OrderedDict()  # task_id -> {params, workflow_id, client_item_id, error, failed_at}
 completed_tasks = collections.OrderedDict()  # task_id -> {params, workflow_id, client_item_id, completed_at}
 
@@ -1952,12 +1952,13 @@ async def upload_background(file: UploadFile = File(...), user=Depends(get_curre
             content = await file.read()
             f.write(content)
 
-        # Resize oversized images to match video resolution (1280x720 max)
-        MAX_W, MAX_H = 1280, 720
+        # Resize oversized images to match video resolution (720x1280 portrait for Dance Shorts)
+        # Use portrait orientation as default since Dance Shorts is the primary use case
+        MAX_W, MAX_H = 720, 1280
         with Image.open(filepath) as img:
             width, height = img.size
             if width > MAX_W * 2 or height > MAX_H * 2:
-                # Resize to fit within 1280x720 while keeping aspect ratio
+                # Resize to fit within 720x1280 while keeping aspect ratio
                 img.thumbnail((MAX_W, MAX_H), Image.LANCZOS)
                 img.save(filepath, quality=95)
                 width, height = img.size
@@ -2119,6 +2120,63 @@ async def delete_avatar_image(group: str, filename: str, user=Depends(get_curren
         await db.commit()
     logging.info(f"Deleted avatar image: {group}/{filename} (user={user['id']})")
     return {"ok": True, "deleted": filename, "group": group}
+
+
+@app.post("/api/avatars/{group}/{filename}/change-category")
+async def change_avatar_category(group: str, filename: str, request: Request, user=Depends(get_current_user)):
+    """Change the category (group) of an avatar image."""
+    import shutil
+    data = await request.json()
+    new_group = data.get("new_group", "").strip()
+    if not new_group:
+        raise HTTPException(400, "new_group is required")
+    
+    # Sanitize new group name
+    new_group = "".join(c for c in new_group if c.isalnum() or c in "_-").strip()
+    if not new_group:
+        raise HTTPException(400, "Invalid group name")
+    
+    if new_group == group:
+        raise HTTPException(400, "New group is the same as current group")
+    
+    # Find the avatar file in DB
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        cursor = await db.execute(
+            "SELECT id, file_path, metadata FROM user_files WHERE user_id = ? AND file_type = 'avatar' AND filename = ? AND json_extract(metadata, '$.group') = ?",
+            (user["id"], filename, group))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Avatar image not found")
+        file_id, old_file_path, metadata_json = row
+        
+        # Parse metadata
+        import json
+        metadata = json.loads(metadata_json) if metadata_json else {}
+        
+        # Update file path
+        old_path = Path(old_file_path)
+        if not old_path.exists():
+            raise HTTPException(404, f"Avatar file not found: {old_file_path}")
+        
+        # Create new directory if needed
+        new_dir = AVATARS_DIR / new_group
+        new_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Move file to new group directory
+        new_path = new_dir / filename
+        shutil.move(str(old_path), str(new_path))
+        
+        # Update metadata
+        metadata["group"] = new_group
+        
+        # Update DB
+        await db.execute(
+            "UPDATE user_files SET file_path = ?, metadata = ? WHERE id = ?",
+            (str(new_path), json.dumps(metadata), file_id))
+        await db.commit()
+    
+    logging.info(f"Changed avatar category: {group}/{filename} -> {new_group}/{filename} (user={user['id']})")
+    return {"ok": True, "filename": filename, "old_group": group, "new_group": new_group, "new_path": str(new_path)}
 
 
 @app.post("/api/register-avatar")
@@ -4268,38 +4326,23 @@ def queue_worker_loop(gpu_id: int):
             workflow_generate_task(task_id, params, gpu_id=gpu_id)
         except Exception as e:
             logging.error(f"Queue worker GPU{gpu_id} error for {task_id}: {e}")
-            # Check retry count
-            retry_count = generation_status[task_id].get("_retry_count", 0)
-            if retry_count < QUEUE_MAX_RETRIES:
-                retry_count += 1
-                logging.info(f"Queue worker: Retrying {task_id} (attempt {retry_count}/{QUEUE_MAX_RETRIES})")
-                generation_status[task_id].update({
-                    "status": "queued",
-                    "progress": 0,
-                    "message": f"Retrying ({retry_count}/{QUEUE_MAX_RETRIES})... previous error: {str(e)[:100]}",
-                    "_retry_count": retry_count,
-                })
-                # Keep in server_queue for retry, wake workers
-                for evt in queue_worker_events:
-                    evt.set()
-                continue  # Skip the pop below, re-queue
-            else:
-                generation_status[task_id].update({
-                    "status": "failed", "progress": 0,
-                    "message": f"Failed after {QUEUE_MAX_RETRIES} retries: {str(e)}",
-                    "output_path": None,
-                })
-                # Save to failed_tasks for manual retry
-                with server_queue_lock:
-                    entry = server_queue.get(task_id, {})
-                    failed_tasks[task_id] = {
-                        "params": params,
-                        "workflow_id": entry.get("workflow_id", ""),
-                        "client_item_id": entry.get("client_item_id", ""),
-                        "error": str(e),
-                        "failed_at": datetime.datetime.now().isoformat(),
-                    }
-                logging.info(f"Queue worker: Task {task_id} saved to failed_tasks for manual retry")
+            # No automatic retry - mark as failed immediately
+            generation_status[task_id].update({
+                "status": "failed", "progress": 0,
+                "message": f"Failed: {str(e)}",
+                "output_path": None,
+            })
+            # Save to failed_tasks for manual retry
+            with server_queue_lock:
+                entry = server_queue.get(task_id, {})
+                failed_tasks[task_id] = {
+                    "params": params,
+                    "workflow_id": entry.get("workflow_id", ""),
+                    "client_item_id": entry.get("client_item_id", ""),
+                    "error": str(e),
+                    "failed_at": datetime.datetime.now().isoformat(),
+                }
+            logging.info(f"Queue worker: Task {task_id} saved to failed_tasks for manual retry")
         with server_queue_lock:
             entry = server_queue.pop(task_id, None)
             # Save completed task params for re-queue

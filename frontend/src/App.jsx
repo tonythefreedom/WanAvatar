@@ -46,6 +46,7 @@ import {
   adminDeleteUser,
   uploadToYouTube,
   deleteBackground,
+  changeAvatarCategory,
 } from './api';
 import './App.css';
 
@@ -5646,6 +5647,7 @@ function App() {
         const popupImages = avatarPopup.source === 'danceshorts' ? dsAvatarImages
           : (workflowStates[avatarPopup.wfId]?.avatarImages?.[avatarPopup.group] || []);
         const showNav = popupImages.length > 1;
+        const availableGroups = avatarPopup.source === 'danceshorts' ? dsAvatarGroups : [];
         return (
         <div className="avatar-popup-overlay" onClick={() => setAvatarPopup(null)}>
           {showNav && <button className="avatar-popup-nav avatar-popup-nav-left" onClick={(e) => { e.stopPropagation(); avatarPopupNavigate('left'); }}>&#10094;</button>}
@@ -5659,6 +5661,54 @@ function App() {
             </div>
             {avatarPopup.img && (
               <div className="avatar-popup-footer">
+                {avatarPopup.source === 'danceshorts' && availableGroups.length > 0 && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+                    <label style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>카테고리:</label>
+                    <select 
+                      value={avatarPopup.group}
+                      onChange={async (e) => {
+                        const newGroup = e.target.value;
+                        if (newGroup === avatarPopup.group) return;
+                        if (!window.confirm(`"${avatarPopup.filename}"을(를) ${avatarPopup.group}에서 ${newGroup}(으)로 이동하시겠습니까?`)) {
+                          e.target.value = avatarPopup.group;
+                          return;
+                        }
+                        try {
+                          await changeAvatarCategory(avatarPopup.group, avatarPopup.filename, newGroup);
+                          // Reload both old and new group
+                          await loadDsAvatarImages(avatarPopup.group);
+                          await loadDsAvatarImages(newGroup);
+                          // Update popup state
+                          setAvatarPopup(prev => ({ ...prev, group: newGroup }));
+                          // If currently selected, update selection
+                          if (dsCharImagePath === avatarPopup.img.path) {
+                            setDsCharImagePath('');
+                            setDsCharImagePreview(null);
+                          }
+                          // Switch to new group tab
+                          setDsAvatarSelectedGroup(newGroup);
+                          alert(`카테고리가 ${newGroup}(으)로 변경되었습니다.`);
+                        } catch (err) {
+                          alert(`카테고리 변경 실패: ${err.message}`);
+                          e.target.value = avatarPopup.group;
+                        }
+                      }}
+                      style={{ 
+                        padding: '6px 10px', 
+                        borderRadius: 4, 
+                        border: '1px solid var(--border)', 
+                        background: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.875rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {availableGroups.map(g => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <button className="btn cancel-btn" onClick={async () => {
                   if (!window.confirm(`Delete "${avatarPopup.filename}" from ${avatarPopup.group}?`)) return;
                   if (avatarPopup.source === 'danceshorts') {

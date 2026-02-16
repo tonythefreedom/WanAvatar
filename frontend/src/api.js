@@ -301,4 +301,9 @@ export const uploadToYouTube = async (filename, title, description, hashtags) =>
   return response.data;
 };
 
+export const changeAvatarCategory = async (group, filename, newGroup) => {
+  const response = await api.post(`/avatars/${group}/${filename}/change-category`, { new_group: newGroup });
+  return response.data;
+};
+
 export default api;

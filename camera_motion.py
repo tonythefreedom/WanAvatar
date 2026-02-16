@@ -51,16 +51,16 @@ def _estimate_homographies(video_path: str, max_frames: int = 0,
         cap.release()
         return []
 
-    # Auto max translation: 15% of frame diagonal (matches scale_factor=1.3 margin)
+    # Auto max translation: 25% of frame diagonal (increased for larger movements)
     if max_translation_px <= 0:
-        max_translation_px = 0.15 * np.sqrt(w**2 + h**2)
+        max_translation_px = 0.25 * np.sqrt(w**2 + h**2)
 
-    # Per-frame sanity limits
-    max_per_frame_tx = w * 0.05   # Max 5% of width per frame
-    max_per_frame_ty = h * 0.05   # Max 5% of height per frame
-    max_per_frame_angle = np.radians(2.0)  # Max 2 degrees per frame
-    min_per_frame_scale = 0.95
-    max_per_frame_scale = 1.05
+    # Per-frame sanity limits (relaxed for fast zoom/pan)
+    max_per_frame_tx = w * 0.15   # Max 15% of width per frame (increased from 5%)
+    max_per_frame_ty = h * 0.15   # Max 15% of height per frame (increased from 5%)
+    max_per_frame_angle = np.radians(5.0)  # Max 5 degrees per frame (increased from 2)
+    min_per_frame_scale = 0.85    # Allow 15% zoom out per frame (was 0.95)
+    max_per_frame_scale = 1.15    # Allow 15% zoom in per frame (was 1.05)
 
     # Frame sampling to match force_rate (ComfyUI resamples to 16fps)
     step = max(1, round(orig_fps / force_rate))
@@ -362,6 +362,11 @@ def _outpaint_with_flux_v2(bg_original: np.ndarray, final_w: int, final_h: int,
         import torch
         from PIL import Image
         import numpy as np
+        
+        # Clear GPU memory before loading FLUX
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
         
         logging.info(f"FLUX Outpaint: Loading FLUX.1 Fill [dev]...")
         

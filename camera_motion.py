@@ -724,14 +724,39 @@ def warp_background_video(bg_image_path: str, video_path: str,
     
     bg_h, bg_w = bg_img.shape[:2]
     
-    # If outpainting produced exact size, use it directly
-    # Otherwise, resize to needed dimensions
-    if bg_w != needed_w or bg_h != needed_h:
-        bg_scaled = cv2.resize(bg_img, (needed_w, needed_h), interpolation=cv2.INTER_LANCZOS4)
-        logging.info(f"CameraMotion: Resized outpainted bg {bg_w}x{bg_h} → {needed_w}x{needed_h}")
+    # Resize to needed dimensions while preserving aspect ratio
+    # Use center crop if needed to match exact dimensions
+    bg_aspect = bg_w / bg_h
+    needed_aspect = needed_w / needed_h
+    
+    if abs(bg_aspect - needed_aspect) < 0.01:  # Aspect ratios match (within 1%)
+        # Direct resize is safe
+        if bg_w != needed_w or bg_h != needed_h:
+            bg_scaled = cv2.resize(bg_img, (needed_w, needed_h), interpolation=cv2.INTER_LANCZOS4)
+            logging.info(f"CameraMotion: Resized outpainted bg {bg_w}x{bg_h} → {needed_w}x{needed_h}")
+        else:
+            bg_scaled = bg_img
+            logging.info(f"CameraMotion: Using outpainted bg at {bg_w}x{bg_h}")
     else:
-        bg_scaled = bg_img
-        logging.info(f"CameraMotion: Using outpainted bg at {bg_w}x{bg_h}")
+        # Aspect ratios differ - resize to fit and center crop
+        if bg_aspect > needed_aspect:
+            # Background is wider - fit height, crop width
+            scale = needed_h / bg_h
+            temp_w = int(bg_w * scale)
+            temp_h = needed_h
+        else:
+            # Background is taller - fit width, crop height
+            scale = needed_w / bg_w
+            temp_w = needed_w
+            temp_h = int(bg_h * scale)
+        
+        temp_bg = cv2.resize(bg_img, (temp_w, temp_h), interpolation=cv2.INTER_LANCZOS4)
+        
+        # Center crop to exact dimensions
+        crop_x = (temp_w - needed_w) // 2
+        crop_y = (temp_h - needed_h) // 2
+        bg_scaled = temp_bg[crop_y:crop_y+needed_h, crop_x:crop_x+needed_w]
+        logging.info(f"CameraMotion: Resized {bg_w}x{bg_h} → {temp_w}x{temp_h}, center crop → {needed_w}x{needed_h}")
 
     # Center offset (the initial view is the center crop of the scaled image)
     scaled_h, scaled_w = bg_scaled.shape[:2]

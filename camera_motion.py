@@ -255,17 +255,17 @@ def outpaint_background(bg_image_path: str, target_width: int, target_height: in
     # Calculate required final dimensions for camera motion
     required_w = int(target_width * scale_factor)
     required_h = int(target_height * scale_factor)
-    target_aspect = required_w / required_h  # 9:16 비율
+    target_aspect = target_width / target_height  # Use target video aspect ratio (e.g., 720/1280 = 0.5625)
     orig_aspect = orig_w / orig_h
     
     # Check if aspect ratio is already correct (within 2% tolerance)
     aspect_diff = abs(orig_aspect - target_aspect) / target_aspect
     
-    # Case 1: Background is large enough (can downscale) → Crop to aspect ratio + resize
+    # Case 1: Background is large enough (can downscale) → Crop to target aspect + resize to required
     if orig_w >= required_w and orig_h >= required_h:
-        logging.info(f"Outpaint: Background {orig_w}x{orig_h} >= required {required_w}x{required_h}, cropping to aspect ratio")
+        logging.info(f"Outpaint: Background {orig_w}x{orig_h} >= required {required_w}x{required_h}, cropping to target aspect ratio")
         
-        # Calculate crop dimensions to match target aspect ratio
+        # Calculate crop dimensions to match TARGET aspect ratio (not required aspect)
         if orig_aspect > target_aspect:
             # Background is wider → crop width
             crop_h = orig_h
@@ -280,19 +280,19 @@ def outpaint_background(bg_image_path: str, target_width: int, target_height: in
         y = (orig_h - crop_h) // 2
         cropped = bg_img[y:y+crop_h, x:x+crop_w]
         
-        # Resize to required dimensions (downscale)
+        # Resize to required dimensions (downscale with camera motion margin)
         resized = cv2.resize(cropped, (required_w, required_h), interpolation=cv2.INTER_LANCZOS4)
         cv2.imwrite(cache_path, resized)
         
-        logging.info(f"Outpaint: Cropped {orig_w}x{orig_h} → {crop_w}x{crop_h} → resized to {required_w}x{required_h}")
+        logging.info(f"Outpaint: Cropped {orig_w}x{orig_h} → {crop_w}x{crop_h} (aspect {crop_w/crop_h:.3f}) → resized to {required_w}x{required_h}")
         return cache_path
     
     # Case 2: Background is too small → Need outpainting (never upscale with resize)
     # First, ensure correct aspect ratio, then extend to required size
     
     if aspect_diff >= 0.02:
-        # Aspect ratio is wrong → First crop to correct aspect ratio
-        logging.info(f"Outpaint: Adjusting aspect ratio from {orig_aspect:.3f} to {target_aspect:.3f}")
+        # Aspect ratio is wrong → First crop to correct TARGET aspect ratio
+        logging.info(f"Outpaint: Adjusting aspect ratio from {orig_aspect:.3f} to target {target_aspect:.3f}")
         
         if orig_aspect > target_aspect:
             # Too wide → crop width
@@ -308,7 +308,7 @@ def outpaint_background(bg_image_path: str, target_width: int, target_height: in
         y = (orig_h - crop_h) // 2
         bg_img = bg_img[y:y+crop_h, x:x+crop_w]
         orig_w, orig_h = crop_w, crop_h
-        logging.info(f"Outpaint: Cropped to correct aspect ratio: {orig_w}x{orig_h}")
+        logging.info(f"Outpaint: Cropped to target aspect ratio: {orig_w}x{orig_h} (aspect {orig_w/orig_h:.3f})")
     
     # Now extend to required size with outpainting
     final_w = required_w

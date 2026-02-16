@@ -33,6 +33,7 @@ import {
   getFashionStyles,
   cancelGeneration,
   submitBatchQueue,
+  addQueueItem,
   getQueueStatus,
   retryFailedTasks,
   requeueTask,
@@ -3333,6 +3334,9 @@ function App() {
     const pendingItems = queue.items.filter(i => i.status === 'pending');
     if (pendingItems.length === 0) return;
 
+    // Check if queue is already processing
+    const isAlreadyProcessing = queue.isProcessing;
+    
     setWfQueue(prev => ({ ...prev, [wfId]: { ...prev[wfId], isProcessing: true } }));
 
     // Build batch payload
@@ -3372,11 +3376,18 @@ function App() {
     }
 
     try {
-      const data = await submitBatchQueue(wfId, batchItems);
+      // Use addQueueItem if queue is already processing, otherwise use submitBatchQueue
+      const data = isAlreadyProcessing 
+        ? await addQueueItem(wfId, batchItems)
+        : await submitBatchQueue(wfId, batchItems);
+      
       for (const mapping of data.tasks) {
         updateQueueItem(wfId, mapping.client_item_id, { taskId: mapping.task_id, progress: 0 });
       }
-      startQueuePolling(wfId);
+      
+      if (!isAlreadyProcessing) {
+        startQueuePolling(wfId);
+      }
     } catch (err) {
       for (const item of pendingItems) {
         updateQueueItem(wfId, item.id, { status: 'failed', error: `Submit failed: ${err.message}` });

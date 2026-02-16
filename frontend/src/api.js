@@ -180,6 +180,11 @@ export const submitBatchQueue = async (workflowId, items) => {
   return response.data;
 };
 
+export const addQueueItem = async (workflowId, items) => {
+  const response = await api.post('/queue/add-item', { workflow_id: workflowId, items });
+  return response.data;
+};
+
 export const getQueueStatus = async () => {
   const response = await api.get('/queue/status');
   return response.data;

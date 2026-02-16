@@ -4504,6 +4504,94 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
     return {"tasks": results}
 
 
+@app.post("/api/queue/add-item")
+async def add_queue_item(request: QueueBatchRequest, user=Depends(get_current_user)):
+    """Add a single item to the running queue dynamically."""
+    wf_config = WORKFLOW_REGISTRY.get(request.workflow_id)
+    if not wf_config:
+        raise HTTPException(400, f"Unknown workflow: {request.workflow_id}")
+
+    api_path = WORKFLOW_DIR / wf_config["api_json"]
+    if not api_path.exists():
+        raise HTTPException(503, f"Workflow API JSON not found: {wf_config['api_json']}")
+
+    if not request.items or len(request.items) == 0:
+        raise HTTPException(400, "No items provided")
+
+    results = []
+    with server_queue_lock:
+        for item_data in request.items:
+            item = QueueBatchItem(**item_data) if isinstance(item_data, dict) else item_data
+            task_id = str(uuid.uuid4())
+
+            params = {
+                "workflow_id": request.workflow_id,
+                "inputs": item.inputs,
+                "yt_title": item.yt_title,
+                "yt_description": item.yt_description,
+                "yt_hashtags": item.yt_hashtags,
+                "yt_upload": item.yt_upload,
+            }
+
+            # Save reference video path for audio extraction
+            for input_def in wf_config["inputs"]:
+                if input_def["type"] == "video" and input_def["key"] in params["inputs"]:
+                    ref_path = params["inputs"][input_def["key"]]
+                    if ref_path:
+                        abs_ref = ref_path if os.path.isabs(ref_path) else str(Path(ref_path).resolve())
+                        params["_ref_video_original"] = abs_ref
+                        break
+
+            custom_audio = params["inputs"].get("custom_audio")
+            if custom_audio:
+                abs_audio = custom_audio if os.path.isabs(custom_audio) else str(Path(custom_audio).resolve())
+                params["_custom_audio_path"] = abs_audio
+
+            params["_user_id"] = user["id"]
+
+            # Probe reference video duration if available
+            video_duration = None
+            ref_video = params.get("_ref_video_original")
+            if ref_video and os.path.exists(ref_video):
+                video_duration = probe_video_duration(ref_video)
+
+            generation_status[task_id] = {
+                "status": "queued",
+                "progress": 0,
+                "message": "Waiting in server queue...",
+                "output_path": None,
+                "workflow_id": request.workflow_id,
+                "video_duration": video_duration,
+            }
+
+            server_queue[task_id] = {
+                "workflow_id": request.workflow_id,
+                "params": params,
+                "client_item_id": item.client_item_id,
+                "submitted_at": datetime.datetime.now().isoformat(),
+            }
+
+            results.append({
+                "task_id": task_id,
+                "client_item_id": item.client_item_id,
+            })
+
+    # Ensure worker threads are running (one per GPU)
+    for gpu_id in range(len(COMFYUI_INSTANCES)):
+        if queue_worker_threads[gpu_id] is None or not queue_worker_threads[gpu_id].is_alive():
+            queue_worker_threads[gpu_id] = threading.Thread(
+                target=queue_worker_loop, args=(gpu_id,), daemon=True,
+                name=f"queue-worker-gpu{gpu_id}",
+            )
+            queue_worker_threads[gpu_id].start()
+
+    for evt in queue_worker_events:
+        evt.set()
+    
+    logging.info(f"Added {len(results)} item(s) to queue for {request.workflow_id}")
+    return {"tasks": results, "added": len(results)}
+
+
 @app.get("/api/queue/status")
 async def get_queue_status(user=Depends(get_current_user)):
     """Return status of all server-queue tasks."""

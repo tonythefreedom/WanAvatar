@@ -178,27 +178,32 @@ def _estimate_homographies(video_path: str, max_frames: int = 0,
 
 
 def _smooth_homographies(homographies: list, window: int = 5) -> list:
-#!/usr/bin/env python3
-"""
-Camera motion extraction and background warping for Dance Shorts.
-
-Extracts camera motion from reference video and applies it to background image/video.
-Includes AI-powered background outpainting for natural edge extension.
-"""
-import os
-import sys
-import logging
-import hashlib
-import cv2
-import numpy as np
-from typing import Optional, Tuple, List
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+    """
+    Smooth homographies using a moving average window to reduce jitter.
+    
+    Args:
+        homographies: List of 3x3 homography matrices
+        window: Window size for moving average (odd number recommended)
+    
+    Returns:
+        Smoothed list of homography matrices
+    """
+    if len(homographies) < 2:
+        return homographies
+    
+    smoothed = []
+    half_window = window // 2
+    
+    for i in range(len(homographies)):
+        start = max(0, i - half_window)
+        end = min(len(homographies), i + half_window + 1)
+        window_matrices = homographies[start:end]
+        
+        # Average the matrices
+        avg_H = np.mean([H for H in window_matrices], axis=0)
+        smoothed.append(avg_H)
+    
+    return smoothed
 
 
 def outpaint_background(bg_image_path: str, target_width: int, target_height: int,

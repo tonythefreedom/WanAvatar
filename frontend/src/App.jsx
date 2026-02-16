@@ -855,6 +855,7 @@ function App() {
   const [galleryImages, setGalleryImages] = useState([]);
   const [galleryAssets, setGalleryAssets] = useState([]); // All uploaded files
   const [selectedAssets, setSelectedAssets] = useState([]); // Selected filenames for bulk operations
+  const [assetTypeFilter, setAssetTypeFilter] = useState('all'); // 'all' | 'image' | 'video'
   const [galleryPopup, setGalleryPopup] = useState(null); // { index, img }
   const [avatarPreparing, setAvatarPreparing] = useState({}); // { [filename]: { taskId, status, progress } }
   const [ytUploadTarget, setYtUploadTarget] = useState(null); // filename being uploaded
@@ -2008,12 +2009,21 @@ function App() {
   const studioHandleRefVideoUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    // Set temporary preview immediately for better UX
+    const tempPreview = URL.createObjectURL(file);
+    setStudioRefVideoPreview(tempPreview);
     try {
       const result = await uploadVideo(file);
       setStudioRefVideoPath(result.path);
-      setStudioRefVideoPreview(URL.createObjectURL(file));
+      // Replace with server URL for persistence
+      setStudioRefVideoPreview(result.url || result.path);
+      // Clean up temp blob URL
+      URL.revokeObjectURL(tempPreview);
     } catch (err) {
       alert(`Upload failed: ${err.message}`);
+      // Revert on error
+      setStudioRefVideoPreview(null);
+      URL.revokeObjectURL(tempPreview);
     }
   };
 
@@ -2275,10 +2285,16 @@ function App() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedAssets.length === galleryAssets.length) {
-      setSelectedAssets([]);
+    const filteredAssets = galleryAssets.filter(a => assetTypeFilter === 'all' || a.type === assetTypeFilter);
+    const filteredFilenames = filteredAssets.map(a => a.filename);
+    const allFilteredSelected = filteredFilenames.every(f => selectedAssets.includes(f));
+    
+    if (allFilteredSelected && filteredFilenames.length > 0) {
+      // Deselect all filtered items
+      setSelectedAssets(prev => prev.filter(f => !filteredFilenames.includes(f)));
     } else {
-      setSelectedAssets(galleryAssets.map(a => a.filename));
+      // Select all filtered items
+      setSelectedAssets(prev => [...new Set([...prev, ...filteredFilenames])]);
     }
   };
 
@@ -5133,28 +5149,52 @@ function App() {
                           <p className="queue-empty">{t('wfQueueEmpty')}</p>
                         )}
                         <div className="queue-list">
-                          {items.map(item => (
-                            <div key={item.id} className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}`}>
-                              <div className="queue-item-top">
-                                {(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) && (
-                                  <div className="queue-item-thumbs">
-                                    {item.previews?.ref_image && (
-                                      <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar"
-                                        onClick={() => setQueueMediaPopup({ url: item.previews.ref_image, type: 'image', label: 'Avatar' })}
-                                        style={{ cursor: 'pointer' }} />
-                                    )}
-                                    {item.previews?.ref_video && (
-                                      <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata"
-                                        onClick={() => setQueueMediaPopup({ url: item.previews.ref_video, type: 'video', label: 'Reference Video' })}
-                                        style={{ cursor: 'pointer' }} />
-                                    )}
-                                    {item.previews?.bg_image && (
-                                      <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg"
-                                        onClick={() => setQueueMediaPopup({ url: item.previews.bg_image, type: 'image', label: 'Background' })}
-                                        style={{ cursor: 'pointer' }} />
-                                    )}
-                                  </div>
-                                )}
+                          {items.map(item => {
+                            // Debug: log item structure
+                            if (item.status === 'pending' && !item.previews?.ref_video) {
+                              console.log('[Queue Debug]', item.id, {
+                                'previews.ref_video': item.previews?.ref_video,
+                                'inputs.ref_video': item.inputs?.ref_video,
+                                'previews': item.previews,
+                                'inputs': item.inputs
+                              });
+                            }
+                            return (
+                              <div key={item.id} className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}`}>
+                                <div className="queue-item-top">
+                                  {(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) && (
+                                    <div className="queue-item-thumbs">
+                                      {item.previews?.ref_image && (
+                                        <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar"
+                                          onClick={() => setQueueMediaPopup({ url: item.previews.ref_image, type: 'image', label: 'Avatar' })}
+                                          style={{ cursor: 'pointer' }} />
+                                      )}
+                                      {(() => {
+                                        // Use server URL if preview is blob (invalid after refresh) or missing
+                                        let videoUrl = item.previews?.ref_video;
+                                        if (!videoUrl || (typeof videoUrl === 'string' && videoUrl.startsWith('blob:'))) {
+                                          const inputPath = item.inputs?.ref_video;
+                                          if (inputPath) {
+                                            // Remove 'uploads/' prefix if it already exists
+                                            const cleanPath = inputPath.startsWith('uploads/') ? inputPath.substring(8) : inputPath;
+                                            videoUrl = `/uploads/${cleanPath}`;
+                                          } else {
+                                            videoUrl = null;
+                                          }
+                                        }
+                                        return videoUrl && (
+                                          <video src={videoUrl} className="queue-thumb queue-thumb--video" muted preload="metadata"
+                                            onClick={() => setQueueMediaPopup({ url: videoUrl, type: 'video', label: 'Reference Video' })}
+                                            style={{ cursor: 'pointer' }} />
+                                        );
+                                      })()}
+                                      {item.previews?.bg_image && (
+                                        <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg"
+                                          onClick={() => setQueueMediaPopup({ url: item.previews.bg_image, type: 'image', label: 'Background' })}
+                                          style={{ cursor: 'pointer' }} />
+                                      )}
+                                    </div>
+                                  )}
                                 <div className="queue-item-info">
                                   <div className="queue-item-title-row">
                                     <span className="queue-item-status">
@@ -5208,7 +5248,8 @@ function App() {
                                 </div>
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                         {items.length > 0 && (
                           <div className="queue-actions">
@@ -5277,11 +5318,23 @@ function App() {
                 </div>
 
                 {galleryTab === 'images' && galleryAssets.length > 0 && (
-                  <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center', background: 'var(--bg-secondary)' }}>
+                  <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center', background: 'var(--bg-secondary)', flexWrap: 'wrap' }}>
+                    <div className="sub-tabs" style={{ marginBottom: 0 }}>
+                      <button className={assetTypeFilter === 'all' ? 'active' : ''} onClick={() => setAssetTypeFilter('all')}>
+                        전체 ({galleryAssets.length})
+                      </button>
+                      <button className={assetTypeFilter === 'image' ? 'active' : ''} onClick={() => setAssetTypeFilter('image')}>
+                        이미지 ({galleryAssets.filter(a => a.type === 'image').length})
+                      </button>
+                      <button className={assetTypeFilter === 'video' ? 'active' : ''} onClick={() => setAssetTypeFilter('video')}>
+                        동영상 ({galleryAssets.filter(a => a.type === 'video').length})
+                      </button>
+                    </div>
+                    <div style={{ flex: 1 }} />
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.875rem' }}>
                       <input 
                         type="checkbox" 
-                        checked={selectedAssets.length === galleryAssets.length && galleryAssets.length > 0}
+                        checked={selectedAssets.length === galleryAssets.filter(a => assetTypeFilter === 'all' || a.type === assetTypeFilter).length && galleryAssets.filter(a => assetTypeFilter === 'all' || a.type === assetTypeFilter).length > 0}
                         onChange={toggleSelectAll}
                         style={{ cursor: 'pointer' }}
                       />
@@ -5308,7 +5361,7 @@ function App() {
                     <div className="gallery-empty"><p>{t('noUploads')}</p></div>
                   ) : (
                     <div className="gallery-grid">
-                      {galleryAssets.map((asset, idx) => (
+                      {galleryAssets.filter(asset => assetTypeFilter === 'all' || asset.type === assetTypeFilter).map((asset, idx) => (
                         <div key={asset.filename} className="gallery-item" style={{ position: 'relative' }}>
                           <div style={{ position: 'absolute', top: 8, left: 8, zIndex: 10 }}>
                             <input 

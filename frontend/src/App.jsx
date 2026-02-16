@@ -3480,6 +3480,17 @@ function App() {
     }
   };
 
+  const handleWfQueueReorder = (wfId, fromIndex, toIndex) => {
+    setWfQueue(prev => {
+      const q = prev[wfId];
+      if (!q?.items) return prev;
+      const newItems = [...q.items];
+      const [movedItem] = newItems.splice(fromIndex, 1);
+      newItems.splice(toIndex, 0, movedItem);
+      return { ...prev, [wfId]: { ...q, items: newItems } };
+    });
+  };
+
   // ─── Dynamic form renderer ───
   const renderWorkflowInput = (wfId, inputDef) => {
     const wfState = workflowStates[wfId];
@@ -5143,6 +5154,51 @@ function App() {
                     const isProcessing = queue?.isProcessing || false;
                     const pendingCount = items.filter(i => i.status === 'pending').length;
                     const failedCount = items.filter(i => i.status === 'failed').length;
+                    
+                    // Drag and drop state
+                    const [draggedIndex, setDraggedIndex] = useState(null);
+                    const [dragOverIndex, setDragOverIndex] = useState(null);
+
+                    const handleDragStart = (e, index) => {
+                      setDraggedIndex(index);
+                      e.dataTransfer.effectAllowed = 'move';
+                    };
+
+                    const handleDragOver = (e, index) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (draggedIndex !== null && draggedIndex !== index) {
+                        setDragOverIndex(index);
+                      }
+                    };
+
+                    const handleDragLeave = () => {
+                      setDragOverIndex(null);
+                    };
+
+                    const handleDrop = (e, dropIndex) => {
+                      e.preventDefault();
+                      if (draggedIndex !== null && draggedIndex !== dropIndex) {
+                        // Find actual indices in the full queue
+                        const allItems = wfQueue['change_character']?.items || [];
+                        const draggedItem = items[draggedIndex];
+                        const dropItem = items[dropIndex];
+                        const actualDraggedIndex = allItems.findIndex(i => i.id === draggedItem.id);
+                        const actualDropIndex = allItems.findIndex(i => i.id === dropItem.id);
+                        
+                        if (actualDraggedIndex !== -1 && actualDropIndex !== -1) {
+                          handleWfQueueReorder('change_character', actualDraggedIndex, actualDropIndex);
+                        }
+                      }
+                      setDraggedIndex(null);
+                      setDragOverIndex(null);
+                    };
+
+                    const handleDragEnd = () => {
+                      setDraggedIndex(null);
+                      setDragOverIndex(null);
+                    };
+
                     return (
                       <div className="card queue-card" style={{ marginTop: 16 }}>
                         <h3>{t('wfQueue')} {items.length > 0 && `(${items.length})`}</h3>
@@ -5150,7 +5206,7 @@ function App() {
                           <p className="queue-empty">{t('wfQueueEmpty')}</p>
                         )}
                         <div className="queue-list">
-                          {items.map(item => {
+                          {items.map((item, index) => {
                             // Debug: log item structure
                             if (item.status === 'pending' && !item.previews?.ref_video) {
                               console.log('[Queue Debug]', item.id, {
@@ -5161,7 +5217,16 @@ function App() {
                               });
                             }
                             return (
-                              <div key={item.id} className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}`}>
+                              <div 
+                                key={item.id} 
+                                className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}${dragOverIndex === index ? ' queue-item--drag-over' : ''}${draggedIndex === index ? ' queue-item--dragging' : ''}`}
+                                draggable={true}
+                                onDragStart={(e) => handleDragStart(e, index)}
+                                onDragOver={(e) => handleDragOver(e, index)}
+                                onDragLeave={handleDragLeave}
+                                onDrop={(e) => handleDrop(e, index)}
+                                onDragEnd={handleDragEnd}
+                              >
                                 <div className="queue-item-top">
                                   {(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) && (
                                     <div className="queue-item-thumbs">

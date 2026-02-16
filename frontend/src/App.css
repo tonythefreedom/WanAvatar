@@ -2172,6 +2172,20 @@ video.picker-thumb {
   background: var(--surface);
   border: 1px solid var(--border);
   font-size: 0.85rem;
+  cursor: move;
+  transition: all 0.2s ease;
+}
+
+.queue-item--dragging {
+  opacity: 0.5;
+  transform: scale(0.98);
+}
+
+.queue-item--drag-over {
+  border-color: var(--primary);
+  border-width: 2px;
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+  transform: translateY(-2px);
 }
 
 .queue-item-top {

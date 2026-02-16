@@ -623,7 +623,9 @@ def warp_background_video(*args, **kwargs):
     pass
 def warp_background_video(bg_image_path: str, video_path: str,
                           output_path: str, force_rate: int = 16,
-                          scale_factor: float = 1.3) -> str:
+                          scale_factor: float = 1.3,
+                          target_width: int = None,
+                          target_height: int = None) -> str:
     """
     Create a warped background video that follows camera motion from the
     original dance video.
@@ -640,6 +642,8 @@ def warp_background_video(bg_image_path: str, video_path: str,
         output_path: Path to save the warped background video.
         force_rate: Target FPS (matches ComfyUI force_rate).
         scale_factor: How much to scale up bg image (1.3 = 30% larger).
+        target_width: Target width for output video (overrides video dimensions).
+        target_height: Target height for output video (overrides video dimensions).
 
     Returns:
         Path to the warped background video, or empty string on failure.
@@ -662,6 +666,11 @@ def warp_background_video(bg_image_path: str, video_path: str,
     if orig_fps <= 0 or vid_w <= 0 or vid_h <= 0:
         logging.warning(f"CameraMotion: Invalid video")
         return ""
+
+    # Use target dimensions if provided, otherwise use video dimensions
+    if target_width and target_height:
+        vid_w, vid_h = target_width, target_height
+        logging.info(f"CameraMotion: Using target dimensions {vid_w}x{vid_h}")
 
     # Calculate expected frame count after resampling to force_rate
     # Use ceil + buffer to ensure bg video is always >= dance video frames

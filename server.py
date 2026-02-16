@@ -4034,7 +4034,10 @@ def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
                     from camera_motion import warp_background_video
                     generation_status[task_id].update({"progress": 0.10, "message": "Extracting camera motion..."})
                     warped_path = os.path.join("/tmp", f"bg_warped_{task_id}.mp4")
-                    result_path = warp_background_video(bg_local, ref_video_local, warped_path)
+                    # Use ComfyUI target dimensions (720x1280 for portrait)
+                    target_w, target_h = 720, 1280
+                    result_path = warp_background_video(bg_local, ref_video_local, warped_path,
+                                                       target_width=target_w, target_height=target_h)
                     if result_path and os.path.exists(result_path) and os.path.getsize(result_path) > 1024:
                         warped_comfyui = upload_to_comfyui(result_path, comfyui_url=_comfyui_url)
                         user_inputs["_bg_motion_video"] = warped_comfyui

@@ -12,6 +12,7 @@ import {
   listUploadedImages,
   getT2iStatus,
   listOutputs,
+  listAllUploads,
   startWorkflowGeneration,
   getWorkflowStatus,
   downloadYoutube,
@@ -139,9 +140,10 @@ const translations = {
     fluxGenerating: 'Generating...',
     fluxModelNote: 'FLUX.2-klein-9B: 4-step fast generation. First use requires model download.',
     // Gallery
-    galleryImages: 'Images',
+    galleryImages: 'Uploaded',
     galleryVideos: 'Videos',
     galleryStages: 'Stages',
+    galleryDownload: 'Download',
     // Output picker
     selectFromOutputs: 'Select from generated outputs',
     noOutputs: 'No generated outputs available',
@@ -367,9 +369,10 @@ const translations = {
     fluxGenerating: '생성 중...',
     fluxModelNote: 'FLUX.2-klein-9B: 4스텝 고속 생성. 첫 사용 시 모델 다운로드 필요.',
     // Gallery
-    galleryImages: '이미지',
+    galleryImages: '업로드',
     galleryVideos: '동영상',
     galleryStages: '스테이지',
+    galleryDownload: '다운로드',
     // Output picker
     selectFromOutputs: '생성된 결과에서 선택',
     noOutputs: '생성된 결과가 없습니다',
@@ -595,9 +598,10 @@ const translations = {
     fluxGenerating: '生成中...',
     fluxModelNote: 'FLUX.2-klein-9B: 4步快速生成。首次使用需下载模型。',
     // Gallery
-    galleryImages: '图片',
+    galleryImages: '上传',
     galleryVideos: '视频',
     galleryStages: '舞台',
+    galleryDownload: '下载',
     // Output picker
     selectFromOutputs: '从生成结果中选择',
     noOutputs: '没有生成结果',
@@ -849,6 +853,8 @@ function App() {
   // Gallery tab state
   const [galleryTab, setGalleryTab] = useState('images');
   const [galleryImages, setGalleryImages] = useState([]);
+  const [galleryAssets, setGalleryAssets] = useState([]); // All uploaded files
+  const [selectedAssets, setSelectedAssets] = useState([]); // Selected filenames for bulk operations
   const [galleryPopup, setGalleryPopup] = useState(null); // { index, img }
   const [avatarPreparing, setAvatarPreparing] = useState({}); // { [filename]: { taskId, status, progress } }
   const [ytUploadTarget, setYtUploadTarget] = useState(null); // filename being uploaded
@@ -2203,6 +2209,10 @@ function App() {
       const outputs = data.outputs || [];
       setGalleryImages(outputs.filter(o => o.type === 'image'));
       setVideos(outputs.filter(o => o.type === 'video'));
+      
+      // Fetch all uploaded files for Assets tab
+      const uploadsData = await listAllUploads();
+      setGalleryAssets(uploadsData.files || []);
     }
     catch (err) { console.error('Failed to fetch gallery:', err); }
     finally { setGalleryLoading(false); }
@@ -2216,6 +2226,60 @@ function App() {
     // Always remove from UI (even if server returned 404 for already-deleted files)
     setGalleryImages(prev => prev.filter(o => o.filename !== filename));
     setVideos(prev => prev.filter(v => v.filename !== filename));
+    setGalleryAssets(prev => prev.filter(a => a.filename !== filename));
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedAssets.length === 0) return;
+    if (!window.confirm(`${selectedAssets.length}개의 파일을 삭제하시겠습니까?`)) return;
+    
+    const deletePromises = selectedAssets.map(filename => 
+      deleteOutput(filename).catch(err => console.error(`Failed to delete ${filename}:`, err))
+    );
+    
+    await Promise.all(deletePromises);
+    
+    // Remove from UI
+    setGalleryImages(prev => prev.filter(o => !selectedAssets.includes(o.filename)));
+    setVideos(prev => prev.filter(v => !selectedAssets.includes(v.filename)));
+    setGalleryAssets(prev => prev.filter(a => !selectedAssets.includes(a.filename)));
+    setSelectedAssets([]);
+  };
+
+  const handleBulkDownload = async () => {
+    if (selectedAssets.length === 0) return;
+    
+    // Download each file sequentially to avoid browser blocking
+    for (const filename of selectedAssets) {
+      const asset = galleryAssets.find(a => a.filename === filename);
+      if (!asset) continue;
+      
+      const a = document.createElement('a');
+      a.href = asset.url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      // Small delay between downloads
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  };
+
+  const toggleAssetSelection = (filename) => {
+    setSelectedAssets(prev => 
+      prev.includes(filename) 
+        ? prev.filter(f => f !== filename)
+        : [...prev, filename]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedAssets.length === galleryAssets.length) {
+      setSelectedAssets([]);
+    } else {
+      setSelectedAssets(galleryAssets.map(a => a.filename));
+    }
   };
 
   const handleGalleryUpload = async (e) => {
@@ -2233,6 +2297,8 @@ function App() {
         } else {
           setVideos(prev => [item, ...prev]);
         }
+        // Add to assets tab as well
+        setGalleryAssets(prev => [item, ...prev]);
       } catch (err) {
         console.error('Gallery upload failed:', err);
       }
@@ -5203,21 +5269,82 @@ function App() {
 
                 <div className="sub-tabs">
                   <button className={galleryTab === 'images' ? 'active' : ''} onClick={() => setGalleryTab('images')}>
-                    {t('galleryImages')} ({galleryImages.length})
+                    {t('galleryImages')} ({galleryAssets.length})
                   </button>
                   <button className={galleryTab === 'videos' ? 'active' : ''} onClick={() => setGalleryTab('videos')}>
                     {t('galleryVideos')} ({videos.length})
                   </button>
                 </div>
 
+                {galleryTab === 'images' && galleryAssets.length > 0 && (
+                  <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center', background: 'var(--bg-secondary)' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.875rem' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={selectedAssets.length === galleryAssets.length && galleryAssets.length > 0}
+                        onChange={toggleSelectAll}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      전체 선택
+                    </label>
+                    {selectedAssets.length > 0 && (
+                      <>
+                        <span style={{ fontSize: '0.875rem', color: 'var(--text-light)' }}>
+                          {selectedAssets.length}개 선택됨
+                        </span>
+                        <button className="btn primary small" onClick={handleBulkDownload}>
+                          다운로드 ({selectedAssets.length})
+                        </button>
+                        <button className="btn danger small" onClick={handleBulkDelete}>
+                          삭제 ({selectedAssets.length})
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {galleryTab === 'images' && (
-                  galleryImages.length === 0 ? (
-                    <div className="gallery-empty"><p>{t('galleryEmpty')}</p></div>
+                  galleryAssets.length === 0 ? (
+                    <div className="gallery-empty"><p>{t('noUploads')}</p></div>
                   ) : (
-                    <div className="gallery-thumb-grid">
-                      {galleryImages.map((img, idx) => (
-                        <div key={img.filename} className="gallery-thumb" onClick={() => setGalleryPopup({ index: idx, img })}>
-                          <img src={img.url} alt={img.filename} loading="lazy" />
+                    <div className="gallery-grid">
+                      {galleryAssets.map((asset, idx) => (
+                        <div key={asset.filename} className="gallery-item" style={{ position: 'relative' }}>
+                          <div style={{ position: 'absolute', top: 8, left: 8, zIndex: 10 }}>
+                            <input 
+                              type="checkbox" 
+                              checked={selectedAssets.includes(asset.filename)}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                toggleAssetSelection(asset.filename);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ 
+                                width: 20, 
+                                height: 20, 
+                                cursor: 'pointer',
+                                accentColor: 'var(--primary)'
+                              }}
+                            />
+                          </div>
+                          <div style={{ cursor: 'pointer', flex: 1, display: 'flex', flexDirection: 'column' }} onClick={() => setGalleryPopup({ index: idx, img: asset, allAssets: galleryAssets })}>
+                            {asset.type === 'image' ? (
+                              <img src={asset.url} alt={asset.filename} style={{ width: '100%', height: 'auto', display: 'block' }} />
+                            ) : asset.type === 'video' ? (
+                              <video src={asset.url} preload="metadata" style={{ width: '100%', height: 'auto', display: 'block', pointerEvents: 'none' }} />
+                            ) : (
+                              <div style={{ width: '100%', minHeight: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)' }}>
+                                <div style={{ textAlign: 'center', padding: '1rem' }}>
+                                  <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem', wordBreak: 'break-word' }}>{asset.filename}</p>
+                                  <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>{asset.type}</p>
+                                </div>
+                              </div>
+                            )}
+                            <div className="gallery-item-info">
+                              <span className="gallery-item-name" title={asset.filename}>{asset.filename}</span>
+                              <span className="gallery-item-meta">{(asset.size / 1024 / 1024).toFixed(1)} MB</span>
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -5228,10 +5355,10 @@ function App() {
                   videos.length === 0 ? (
                     <div className="gallery-empty"><p>{t('galleryEmpty')}</p></div>
                   ) : (
-                    <div className="gallery-grid">
+                    <div className="gallery-grid videos-grid">
                       {videos.map((video) => (
-                        <div key={video.filename} className="gallery-item">
-                          <video controls src={video.url} preload="metadata" />
+                        <div key={video.filename} className="gallery-item" style={{ display: 'flex', flexDirection: 'column' }}>
+                          <video controls src={video.url} preload="metadata" style={{ width: '100%', height: 'auto' }} />
                           <div className="gallery-item-info">
                             <span className="gallery-item-name" title={video.filename}>{video.filename}</span>
                             <span className="gallery-item-meta">{t('gallerySize')}: {(video.size / 1024 / 1024).toFixed(1)} MB</span>
@@ -5285,14 +5412,18 @@ function App() {
 
                 {/* Gallery Image Popup */}
                 {galleryPopup && (() => {
-                  const img = galleryImages[galleryPopup.index];
+                  const isAssetPopup = galleryPopup.allAssets !== undefined;
+                  const sourceList = isAssetPopup ? galleryPopup.allAssets : galleryImages;
+                  const img = sourceList[galleryPopup.index];
                   if (!img) return null;
                   const navGallery = (dir) => {
                     setGalleryPopup(prev => {
                       const next = dir === 'right'
-                        ? (prev.index + 1) % galleryImages.length
-                        : (prev.index - 1 + galleryImages.length) % galleryImages.length;
-                      return { index: next, img: galleryImages[next] };
+                        ? (prev.index + 1) % sourceList.length
+                        : (prev.index - 1 + sourceList.length) % sourceList.length;
+                      return isAssetPopup 
+                        ? { index: next, img: sourceList[next], allAssets: prev.allAssets }
+                        : { index: next, img: sourceList[next] };
                     });
                   };
                   return (
@@ -5304,30 +5435,45 @@ function App() {
                       }} tabIndex={0} ref={el => el && el.focus()}>
                       <div className="avatar-popup" onClick={e => e.stopPropagation()} style={{ maxWidth: '85vw' }}>
                         <div className="avatar-popup-header">
-                          <span style={{ fontSize: 13, opacity: 0.7 }}>{galleryPopup.index + 1} / {galleryImages.length}</span>
+                          <span style={{ fontSize: 13, opacity: 0.7 }}>{galleryPopup.index + 1} / {sourceList.length}</span>
                           <span style={{ fontSize: 13, fontWeight: 500 }}>{img.filename}</span>
                           <button onClick={() => setGalleryPopup(null)} style={{ background: 'none', border: 'none', color: 'inherit', fontSize: 20, cursor: 'pointer' }}>×</button>
                         </div>
                         <div className="avatar-popup-body">
-                          <img src={img.url} alt={img.filename} style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }} />
+                          {img.type === 'video' ? (
+                            <video controls src={img.url} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
+                          ) : img.type === 'image' || !img.type ? (
+                            <img src={img.url} alt={img.filename} style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }} />
+                          ) : (
+                            <div style={{ padding: 40, textAlign: 'center' }}>
+                              <p>{img.filename}</p>
+                              <p style={{ fontSize: '0.875rem', color: 'var(--text-light)', marginTop: 8 }}>{img.type}</p>
+                              <a href={img.url} download={img.filename} className="btn primary" style={{ marginTop: 16 }}>{t('galleryDownload')}</a>
+                            </div>
+                          )}
                         </div>
                         <div className="avatar-popup-footer" style={{ display: 'flex', gap: 8, padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
-                          {avatarPreparing[img.filename] ? (
-                            <button className="btn small" disabled style={{ flex: 1, opacity: 0.7 }}>
-                              {avatarPreparing[img.filename].message || `Preparing... ${avatarPreparing[img.filename].progress}%`}
-                            </button>
-                          ) : (
-                            <button className="btn primary small" style={{ flex: 1 }} onClick={() => handleRegisterAsAvatar(img)}>Avatar</button>
+                          {(img.type === 'image' || !img.type) && (
+                            <>
+                              {avatarPreparing[img.filename] ? (
+                                <button className="btn small" disabled style={{ flex: 1, opacity: 0.7 }}>
+                                  {avatarPreparing[img.filename].message || `Preparing... ${avatarPreparing[img.filename].progress}%`}
+                                </button>
+                              ) : (
+                                <button className="btn primary small" style={{ flex: 1 }} onClick={() => handleRegisterAsAvatar(img)}>Avatar</button>
+                              )}
+                              <button className="btn small" style={{ flex: 1 }} onClick={() => handleRegisterAsStage(img)}>Stage</button>
+                            </>
                           )}
-                          <button className="btn small" style={{ flex: 1 }} onClick={() => handleRegisterAsStage(img)}>Stage</button>
+                          <a href={img.url} download={img.filename} className="btn secondary small" style={{ flex: 1, textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{t('galleryDownload')}</a>
                           <button className="btn danger small" style={{ flex: 1 }} onClick={() => {
                             handleDeleteOutput(img.filename);
-                            if (galleryImages.length <= 1) setGalleryPopup(null);
+                            if (sourceList.length <= 1) setGalleryPopup(null);
                             else navGallery('right');
                           }}>{t('galleryDelete')}</button>
                         </div>
                       </div>
-                      {galleryImages.length > 1 && (
+                      {sourceList.length > 1 && (
                         <>
                           <button className="avatar-popup-nav" style={{ left: 16 }} onClick={e => { e.stopPropagation(); navGallery('left'); }}>‹</button>
                           <button className="avatar-popup-nav" style={{ right: 16 }} onClick={e => { e.stopPropagation(); navGallery('right'); }}>›</button>

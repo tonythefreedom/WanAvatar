@@ -2606,6 +2606,63 @@ async def list_uploaded_images(user=Depends(get_current_user)):
     return {"images": images, "total": len(images)}
 
 
+@app.get("/api/uploads")
+async def list_all_uploads(user=Depends(get_current_user)):
+    """List all files in /uploads directory (not just DB-registered ones)."""
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+    VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi"}
+    AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac"}
+    
+    uploads_dir = Path("uploads")
+    if not uploads_dir.exists():
+        return {"files": [], "total": 0}
+    
+    files = []
+    for fp in uploads_dir.iterdir():
+        if fp.is_file():
+            ext = fp.suffix.lower()
+            
+            # Determine file type
+            if ext in IMAGE_EXTS:
+                file_type = "image"
+            elif ext in VIDEO_EXTS:
+                file_type = "video"
+            elif ext in AUDIO_EXTS:
+                file_type = "audio"
+            else:
+                file_type = "other"
+            
+            stat = fp.stat()
+            item = {
+                "filename": fp.name,
+                "url": f"/uploads/{fp.name}",
+                "path": str(fp),
+                "type": file_type,
+                "size": stat.st_size,
+                "created_at": stat.st_mtime,
+            }
+            
+            # Add dimensions for images
+            if file_type == "image":
+                try:
+                    import cv2
+                    img = cv2.imread(str(fp))
+                    if img is not None:
+                        h, w = img.shape[:2]
+                        item["width"] = w
+                        item["height"] = h
+                except:
+                    item["width"] = 0
+                    item["height"] = 0
+            
+            files.append(item)
+    
+    # Sort by creation time (newest first)
+    files.sort(key=lambda x: x["created_at"], reverse=True)
+    
+    return {"files": files, "total": len(files)}
+
+
 @app.get("/api/uploads/audio")
 async def list_uploaded_audio(user=Depends(get_current_user)):
     """List all uploaded audio files."""
@@ -3491,9 +3548,38 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 logging.info(f"Camera motion background applied (trimmed to dance frames): {bg_motion_video}")
         elif bg_image:
             # No camera motion: use static image repeated
+            # Apply outpainting preprocessing for better quality
+            bg_image_to_use = bg_image
+            
+            # Get target dimensions from workflow
+            target_w = workflow.get("123", {}).get("inputs", {}).get("value", 720)
+            target_h = workflow.get("124", {}).get("inputs", {}).get("value", 1280)
+            
+            # Try to apply outpainting preprocessing
+            try:
+                from camera_motion import outpaint_background
+                bg_image_path = str(BACKGROUNDS_DIR / bg_image) if not os.path.isabs(bg_image) else bg_image
+                if not os.path.exists(bg_image_path):
+                    bg_image_path = os.path.join("/home/ubuntu/ComfyUI/input", bg_image)
+                
+                if os.path.exists(bg_image_path):
+                    # Outpaint with 1.3x scale factor for camera motion margin
+                    outpainted_path = outpaint_background(bg_image_path, target_w, target_h, scale_factor=1.3)
+                    
+                    # If outpainting succeeded and produced a different file, upload it to ComfyUI
+                    if outpainted_path and outpainted_path != bg_image_path:
+                        import shutil
+                        outpainted_filename = f"outpainted_{os.path.basename(bg_image)}"
+                        comfyui_input_path = os.path.join("/home/ubuntu/ComfyUI/input", outpainted_filename)
+                        shutil.copy(outpainted_path, comfyui_input_path)
+                        bg_image_to_use = outpainted_filename
+                        logging.info(f"Custom background outpainted: {bg_image} → {outpainted_filename}")
+            except Exception as e:
+                logging.warning(f"Background outpainting failed: {e}, using original")
+            
             workflow["300"] = {
                 "class_type": "LoadImage",
-                "inputs": {"image": bg_image, "upload": "image"},
+                "inputs": {"image": bg_image_to_use, "upload": "image"},
             }
             workflow["301"] = {
                 "class_type": "ImageResizeKJv2",
@@ -3520,7 +3606,7 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             # Node 15 still applies the character mask, producing bg with character area blacked out
             if "15" in workflow:
                 workflow["15"]["inputs"]["image"] = ["302", 0]
-                logging.info(f"Custom background image applied (static): {bg_image}")
+                logging.info(f"Custom background image applied (static): {bg_image_to_use}")
 
         # Auto-analyze background lighting with Gemini if no manual bg_prompt
         if bg_image and not bg_prompt:

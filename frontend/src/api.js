@@ -155,6 +155,11 @@ export const listOutputs = async () => {
   return response.data;
 };
 
+export const listAllUploads = async () => {
+  const response = await api.get('/uploads');
+  return response.data;
+};
+
 export const startFluxGeneration = async (params) => {
   const response = await api.post('/generate-flux', params);
   return response.data;

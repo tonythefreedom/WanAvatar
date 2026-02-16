@@ -4770,6 +4770,7 @@ function App() {
                                               return (
                                                 <img key={thumbKey} src={url} alt={key} className={`queue-thumb ${borderClass}`}
                                                   onClick={() => setQueueMediaPopup({ url, type: 'image', label: key })}
+                                                  onError={(e) => { e.target.style.display = 'none'; }}
                                                   style={{ cursor: 'pointer' }} />
                                               );
                                             });
@@ -5234,6 +5235,7 @@ function App() {
                                       {item.previews?.ref_image && (
                                         <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar"
                                           onClick={() => setQueueMediaPopup({ url: item.previews.ref_image, type: 'image', label: 'Avatar' })}
+                                          onError={(e) => { e.target.style.display = 'none'; }}
                                           style={{ cursor: 'pointer' }} />
                                       )}
                                       {(() => {
@@ -5258,6 +5260,7 @@ function App() {
                                       {item.previews?.bg_image && (
                                         <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg"
                                           onClick={() => setQueueMediaPopup({ url: item.previews.bg_image, type: 'image', label: 'Background' })}
+                                          onError={(e) => { e.target.style.display = 'none'; }}
                                           style={{ cursor: 'pointer' }} />
                                       )}
                                     </div>

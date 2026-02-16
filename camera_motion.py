@@ -290,9 +290,9 @@ def outpaint_background(bg_image_path: str, target_width: int, target_height: in
     # Case 2: Background is too small → Need outpainting (never upscale with resize)
     # First, ensure correct aspect ratio, then extend to required size
     
-    if aspect_diff >= 0.02:
+    if aspect_diff >= 0.01:  # 1% tolerance for aspect ratio
         # Aspect ratio is wrong → First crop to correct TARGET aspect ratio
-        logging.info(f"Outpaint: Adjusting aspect ratio from {orig_aspect:.3f} to target {target_aspect:.3f}")
+        logging.info(f"Outpaint: Adjusting aspect ratio from {orig_aspect:.3f} to target {target_aspect:.3f} (diff={aspect_diff*100:.1f}%)")
         
         if orig_aspect > target_aspect:
             # Too wide → crop width
@@ -374,22 +374,86 @@ def _outpaint_with_flux_v2(bg_original: np.ndarray, final_w: int, final_h: int,
         
         orig_h, orig_w = bg_original.shape[:2]
         
-        # Step 1: Create canvas with original image centered
+        # Step 1: Create canvas with intelligent padding (mirror edges)
         canvas_np = np.zeros((final_h, final_w, 3), dtype=np.uint8)
+        
+        # Fill edges with mirrored content for better context
+        if margin_h > 0:
+            # Top edge - mirror top rows
+            edge_size = min(margin_h, orig_h // 4)
+            edge = bg_original[:edge_size, :]
+            edge_flipped = cv2.flip(edge, 0)
+            edge_resized = cv2.resize(edge_flipped, (orig_w, margin_h), interpolation=cv2.INTER_CUBIC)
+            canvas_np[:margin_h, margin_w:margin_w+orig_w] = edge_resized
+            
+            # Bottom edge - mirror bottom rows
+            edge = bg_original[-edge_size:, :]
+            edge_flipped = cv2.flip(edge, 0)
+            edge_resized = cv2.resize(edge_flipped, (orig_w, margin_h), interpolation=cv2.INTER_CUBIC)
+            canvas_np[margin_h+orig_h:, margin_w:margin_w+orig_w] = edge_resized
+        
+        if margin_w > 0:
+            # Left edge - mirror left columns
+            edge_size = min(margin_w, orig_w // 4)
+            edge = bg_original[:, :edge_size]
+            edge_flipped = cv2.flip(edge, 1)
+            edge_resized = cv2.resize(edge_flipped, (margin_w, orig_h), interpolation=cv2.INTER_CUBIC)
+            canvas_np[margin_h:margin_h+orig_h, :margin_w] = edge_resized
+            
+            # Right edge - mirror right columns
+            edge = bg_original[:, -edge_size:]
+            edge_flipped = cv2.flip(edge, 1)
+            edge_resized = cv2.resize(edge_flipped, (margin_w, orig_h), interpolation=cv2.INTER_CUBIC)
+            canvas_np[margin_h:margin_h+orig_h, margin_w+orig_w:] = edge_resized
+        
+        # Fill corners with blurred edge content
+        if margin_h > 0 and margin_w > 0:
+            corner_size = 20
+            # Top-left
+            corner = bg_original[:corner_size, :corner_size]
+            corner_blurred = cv2.GaussianBlur(corner, (21, 21), 0)
+            canvas_np[:margin_h, :margin_w] = cv2.resize(corner_blurred, (margin_w, margin_h), interpolation=cv2.INTER_CUBIC)
+            # Top-right
+            corner = bg_original[:corner_size, -corner_size:]
+            corner_blurred = cv2.GaussianBlur(corner, (21, 21), 0)
+            canvas_np[:margin_h, margin_w+orig_w:] = cv2.resize(corner_blurred, (margin_w, margin_h), interpolation=cv2.INTER_CUBIC)
+            # Bottom-left
+            corner = bg_original[-corner_size:, :corner_size]
+            corner_blurred = cv2.GaussianBlur(corner, (21, 21), 0)
+            canvas_np[margin_h+orig_h:, :margin_w] = cv2.resize(corner_blurred, (margin_w, margin_h), interpolation=cv2.INTER_CUBIC)
+            # Bottom-right
+            corner = bg_original[-corner_size:, -corner_size:]
+            corner_blurred = cv2.GaussianBlur(corner, (21, 21), 0)
+            canvas_np[margin_h+orig_h:, margin_w+orig_w:] = cv2.resize(corner_blurred, (margin_w, margin_h), interpolation=cv2.INTER_CUBIC)
+        
+        # Place original in center
         canvas_np[margin_h:margin_h+orig_h, margin_w:margin_w+orig_w] = bg_original
         
-        # Step 2: Create mask (white = areas to fill, black = keep original)
+        # Step 2: Create soft mask for smooth transitions
         mask_np = np.ones((final_h, final_w), dtype=np.uint8) * 255
-        mask_np[margin_h:margin_h+orig_h, margin_w:margin_w+orig_w] = 0  # Keep original center
+        
+        # Create feathered mask (gradually transition from 0 to 255)
+        feather_size = min(40, margin_w, margin_h) if margin_w > 0 and margin_h > 0 else 40
+        
+        # Center region is fully masked out (keep original)
+        inner_margin_h = margin_h + feather_size if margin_h > 0 else feather_size
+        inner_margin_w = margin_w + feather_size if margin_w > 0 else feather_size
+        
+        if inner_margin_h < final_h // 2 and inner_margin_w < final_w // 2:
+            mask_np[inner_margin_h:final_h-inner_margin_h, 
+                    inner_margin_w:final_w-inner_margin_w] = 0
+        
+        # Apply Gaussian blur to mask for smooth transitions
+        mask_np = cv2.GaussianBlur(mask_np, (51, 51), 0)
         
         # Convert to PIL
         canvas_pil = Image.fromarray(cv2.cvtColor(canvas_np, cv2.COLOR_BGR2RGB))
         mask_pil = Image.fromarray(mask_np)
         
-        # Step 3: Use FLUX.1 Fill to outpaint
-        prompt = "seamless background extension, natural continuation, consistent lighting and style, photorealistic, high quality"
+        # Step 3: Use FLUX.1 Fill to refine the intelligent padding
+        prompt = "continue the background naturally, maintain architectural perspective and lighting"
         
-        logging.info(f"FLUX Outpaint: Generating outpainted image with FLUX.1 Fill...")
+        logging.info(f"FLUX Outpaint: Refining edges with FLUX.1 Fill...")
         
         generated = pipe(
             image=canvas_pil,
@@ -397,8 +461,8 @@ def _outpaint_with_flux_v2(bg_original: np.ndarray, final_w: int, final_h: int,
             prompt=prompt,
             height=final_h,
             width=final_w,
-            num_inference_steps=30,  # FLUX.1 Fill needs more steps than FLUX.2
-            guidance_scale=30.0,  # High guidance for better adherence
+            num_inference_steps=50,
+            guidance_scale=30.0,
             generator=torch.Generator("cuda:0").manual_seed(42),
         ).images[0]
         

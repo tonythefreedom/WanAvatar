@@ -977,6 +977,10 @@ function App() {
   const timelineRefsMap = useRef({});
   const tasksRestoredRef = useRef(false);
   const queueRestoredRef = useRef(false);
+  
+  // Drag and drop state for queue reordering
+  const [draggedQueueIndex, setDraggedQueueIndex] = useState(null);
+  const [dragOverQueueIndex, setDragOverQueueIndex] = useState(null);
 
   // ============ Studio state ============
   const [studioMode, setStudioMode] = useState('manual'); // 'manual' | 'auto'
@@ -5155,33 +5159,30 @@ function App() {
                     const pendingCount = items.filter(i => i.status === 'pending').length;
                     const failedCount = items.filter(i => i.status === 'failed').length;
                     
-                    // Drag and drop state
-                    const [draggedIndex, setDraggedIndex] = useState(null);
-                    const [dragOverIndex, setDragOverIndex] = useState(null);
-
+                    // Drag and drop handlers
                     const handleDragStart = (e, index) => {
-                      setDraggedIndex(index);
+                      setDraggedQueueIndex(index);
                       e.dataTransfer.effectAllowed = 'move';
                     };
 
                     const handleDragOver = (e, index) => {
                       e.preventDefault();
                       e.dataTransfer.dropEffect = 'move';
-                      if (draggedIndex !== null && draggedIndex !== index) {
-                        setDragOverIndex(index);
+                      if (draggedQueueIndex !== null && draggedQueueIndex !== index) {
+                        setDragOverQueueIndex(index);
                       }
                     };
 
                     const handleDragLeave = () => {
-                      setDragOverIndex(null);
+                      setDragOverQueueIndex(null);
                     };
 
                     const handleDrop = (e, dropIndex) => {
                       e.preventDefault();
-                      if (draggedIndex !== null && draggedIndex !== dropIndex) {
+                      if (draggedQueueIndex !== null && draggedQueueIndex !== dropIndex) {
                         // Find actual indices in the full queue
                         const allItems = wfQueue['change_character']?.items || [];
-                        const draggedItem = items[draggedIndex];
+                        const draggedItem = items[draggedQueueIndex];
                         const dropItem = items[dropIndex];
                         const actualDraggedIndex = allItems.findIndex(i => i.id === draggedItem.id);
                         const actualDropIndex = allItems.findIndex(i => i.id === dropItem.id);
@@ -5190,13 +5191,13 @@ function App() {
                           handleWfQueueReorder('change_character', actualDraggedIndex, actualDropIndex);
                         }
                       }
-                      setDraggedIndex(null);
-                      setDragOverIndex(null);
+                      setDraggedQueueIndex(null);
+                      setDragOverQueueIndex(null);
                     };
 
                     const handleDragEnd = () => {
-                      setDraggedIndex(null);
-                      setDragOverIndex(null);
+                      setDraggedQueueIndex(null);
+                      setDragOverQueueIndex(null);
                     };
 
                     return (
@@ -5219,7 +5220,7 @@ function App() {
                             return (
                               <div 
                                 key={item.id} 
-                                className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}${dragOverIndex === index ? ' queue-item--drag-over' : ''}${draggedIndex === index ? ' queue-item--dragging' : ''}`}
+                                className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}${dragOverQueueIndex === index ? ' queue-item--drag-over' : ''}${draggedQueueIndex === index ? ' queue-item--dragging' : ''}`}
                                 draggable={true}
                                 onDragStart={(e) => handleDragStart(e, index)}
                                 onDragOver={(e) => handleDragOver(e, index)}

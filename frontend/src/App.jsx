@@ -5268,6 +5268,11 @@ function App() {
                                     </span>
                                     <span className="queue-item-label" title={item.ytTitle || item.inputs?.prompt || ''}>
                                       {item.ytTitle || item.label}
+                                      {item.videoDuration != null && (
+                                        <span style={{ marginLeft: '6px', fontSize: '0.85em', color: 'var(--text-light)', fontWeight: 'normal' }}>
+                                          ({Math.round(item.videoDuration)}s)
+                                        </span>
+                                      )}
                                     </span>
                                     <button className="queue-item-remove" onClick={() => handleWfQueueRemove('change_character', item.id)}>&times;</button>
                                   </div>

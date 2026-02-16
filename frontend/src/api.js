@@ -185,6 +185,11 @@ export const retryFailedTasks = async () => {
   return response.data;
 };
 
+export const requeueTask = async (taskId) => {
+  const response = await api.post(`/queue/requeue/${taskId}`);
+  return response.data;
+};
+
 export const getWorkflowStatus = async () => {
   const response = await api.get('/workflow/status');
   return response.data;

@@ -2187,7 +2187,8 @@ video.picker-thumb {
   width: 36px;
   height: 64px;
   border-radius: 4px;
-  object-fit: cover;
+  object-fit: contain;
+  background: var(--bg-secondary);
 }
 
 .queue-thumb--avatar {
@@ -2311,6 +2312,22 @@ video.picker-thumb {
   text-decoration: none;
   font-weight: 600;
   margin-left: auto;
+}
+
+.queue-item-requeue {
+  font-size: 0.85rem;
+  color: var(--primary);
+  background: none;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0 5px;
+  margin-left: 4px;
+  line-height: 1.4;
+}
+.queue-item-requeue:hover {
+  background: var(--primary);
+  color: #fff;
 }
 
 .queue-item-error {

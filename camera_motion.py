@@ -306,6 +306,22 @@ def warp_background_video(bg_image_path: str, video_path: str,
     # Target size matches video dimensions
     target_w, target_h = vid_w, vid_h
 
+    # Upscale background with Real-ESRGAN if it's smaller than needed
+    needed_w = int(target_w * scale_factor)
+    needed_h = int(target_h * scale_factor)
+    bg_h, bg_w = bg_img.shape[:2]
+
+    if bg_w < needed_w or bg_h < needed_h:
+        try:
+            from server import get_upsampler, REALESRGAN_MODEL_PATH
+            if os.path.exists(REALESRGAN_MODEL_PATH):
+                esrgan = get_upsampler()
+                bg_img, _ = esrgan.enhance(bg_img, outscale=2)
+                bg_h, bg_w = bg_img.shape[:2]
+                logging.info(f"CameraMotion: Upscaled background with Real-ESRGAN → {bg_w}x{bg_h}")
+        except Exception as e:
+            logging.warning(f"CameraMotion: Real-ESRGAN upscale failed ({e}), using lanczos")
+
     # Scale up background to provide panning room
     scaled_w = int(target_w * scale_factor)
     scaled_h = int(target_h * scale_factor)

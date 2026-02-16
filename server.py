@@ -116,7 +116,7 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASS", "")
 WORKFLOW_REGISTRY = {
     "change_character": {
         "id": "change_character",
-        "display_name": {"en": "Change Character V1.1", "ko": "캐릭터 변경 V1.1", "zh": "角色替换 V1.1"},
+        "display_name": {"en": "Character Change", "ko": "캐릭터 변경", "zh": "角色替换"},
         "description": {
             "en": "Replace a character in a reference video with your character image. Single front-facing photo needed.",
             "ko": "참조 비디오의 캐릭터를 사용자 이미지로 교체합니다. 정면 사진 1장 필요.",
@@ -284,7 +284,7 @@ WORKFLOW_REGISTRY = {
         "api_json": "wan_infinitalk_api.json",
         "inputs": [
             {"key": "image", "type": "image", "node_id": "97", "field": "inputs.image",
-             "upload_to_comfyui": True, "required": True,
+             "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
              "label": {"en": "Character/Scene Image", "ko": "캐릭터/장면 이미지", "zh": "角色/场景图片"}},
             {"key": "audio", "type": "audio", "node_id": "168", "field": "inputs.audio",
              "upload_to_comfyui": True, "required": True,
@@ -487,6 +487,7 @@ queue_worker_threads = [None, None]  # One worker thread per GPU
 queue_worker_events = [threading.Event(), threading.Event()]  # Per-GPU wake events
 QUEUE_MAX_RETRIES = 2  # Max retry attempts for failed tasks
 failed_tasks = collections.OrderedDict()  # task_id -> {params, workflow_id, client_item_id, error, failed_at}
+completed_tasks = collections.OrderedDict()  # task_id -> {params, workflow_id, client_item_id, completed_at}
 
 # Distributed / Sequence Parallel setup
 USE_SP = False
@@ -532,7 +533,7 @@ app.add_middleware(
 
 # Static files
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/uploads", StaticFiles(directory="uploads", follow_symlink=True), name="uploads")
 app.mount("/background", StaticFiles(directory="background"), name="background")
 
 AVATARS_DIR = Path("settings/avatars")
@@ -2693,10 +2694,28 @@ async def generate_flux(request: FluxGenerateRequest, user=Depends(get_current_u
 @app.delete("/api/outputs/{filename}")
 async def delete_output(filename: str, user=Depends(get_current_user)):
     """Delete a generated output (image or video)."""
-    filepath = OUTPUT_DIR / filename
-    if not filepath.exists():
+    # Look up actual file path from DB first (files may be in outputs/ or uploads/)
+    filepath = None
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT file_path FROM user_files WHERE user_id = ? AND filename = ? AND file_type = 'output'",
+            (user["id"], filename))
+        row = await cursor.fetchone()
+        if row:
+            filepath = Path(row["file_path"])
+    # Fallback: check outputs/ and uploads/ directories
+    if not filepath or not filepath.exists():
+        for d in [OUTPUT_DIR, UPLOAD_DIR]:
+            candidate = d / filename
+            if candidate.exists():
+                filepath = candidate
+                break
+    if not filepath or not filepath.exists():
         raise HTTPException(404, "File not found")
-    if filepath.resolve().parent != OUTPUT_DIR.resolve():
+    # Security: only allow deletion from outputs/ or uploads/
+    resolved_parent = filepath.resolve().parent
+    if resolved_parent not in (OUTPUT_DIR.resolve(), UPLOAD_DIR.resolve()):
         raise HTTPException(403, "Access denied")
     filepath.unlink()
     try:
@@ -3449,7 +3468,7 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                     "width": ["123", 0],
                     "height": ["124", 0],
                     "upscale_method": "lanczos",
-                    "keep_proportion": "pad",
+                    "keep_proportion": "crop",
                     "pad_color": "0, 0, 0",
                     "crop_position": "center",
                     "divisible_by": 16,
@@ -3482,7 +3501,7 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                     "width": ["123", 0],
                     "height": ["124", 0],
                     "upscale_method": "lanczos",
-                    "keep_proportion": "pad",
+                    "keep_proportion": "crop",
                     "pad_color": "0, 0, 0",
                     "crop_position": "center",
                     "divisible_by": 16,
@@ -4196,7 +4215,18 @@ def queue_worker_loop(gpu_id: int):
                     }
                 logging.info(f"Queue worker: Task {task_id} saved to failed_tasks for manual retry")
         with server_queue_lock:
-            server_queue.pop(task_id, None)
+            entry = server_queue.pop(task_id, None)
+            # Save completed task params for re-queue
+            if entry and generation_status.get(task_id, {}).get("status") == "completed":
+                completed_tasks[task_id] = {
+                    "params": params,
+                    "workflow_id": entry.get("workflow_id", ""),
+                    "client_item_id": entry.get("client_item_id", ""),
+                    "completed_at": datetime.datetime.now().isoformat(),
+                }
+                # Keep only last 100 completed tasks
+                while len(completed_tasks) > 100:
+                    completed_tasks.popitem(last=False)
         # Wake BOTH workers so each can independently pick the next queued item
         for evt in queue_worker_events:
             evt.set()
@@ -4371,20 +4401,29 @@ async def get_queue_status(user=Depends(get_current_user)):
         for task_id, entry in server_queue.items():
             status_data = generation_status.get(task_id, {})
             eta_seconds = _calc_eta(status_data) if status_data.get("status") == "processing" else None
+            inputs = entry.get("params", {}).get("inputs", {})
             result[task_id] = {
                 **status_data,
                 "task_id": task_id,
                 "workflow_id": entry["workflow_id"],
                 "client_item_id": entry.get("client_item_id", ""),
                 "eta_seconds": eta_seconds,
+                "inputs": inputs,
             }
 
-    # Also include recently completed/failed tasks that have workflow_id
+    # Also include recently completed tasks (not failed) that have workflow_id
     for task_id, status_data in generation_status.items():
         if task_id not in result and "workflow_id" in status_data:
+            if status_data.get("status") == "failed":
+                continue  # Don't expose old failures to frontend
+            saved_entry = completed_tasks.get(task_id) or failed_tasks.get(task_id)
+            inputs = saved_entry["params"].get("inputs", {}) if saved_entry and "params" in saved_entry else {}
+            client_item_id = saved_entry.get("client_item_id", "") if saved_entry else ""
             result[task_id] = {
                 **status_data,
                 "task_id": task_id,
+                "inputs": inputs,
+                "client_item_id": client_item_id,
             }
 
     return {"tasks": result}
@@ -4434,6 +4473,57 @@ async def retry_failed_tasks(user=Depends(get_current_user)):
 
     logging.info(f"Retry: Re-queued {len(retried)} failed tasks")
     return {"retried": len(retried), "tasks": retried}
+
+
+@app.post("/api/queue/requeue/{task_id}")
+async def requeue_task(task_id: str, user=Depends(get_current_user)):
+    """Re-queue a completed or failed task with the same parameters."""
+    # Look in completed_tasks first, then failed_tasks
+    entry = completed_tasks.get(task_id) or failed_tasks.get(task_id)
+    if not entry:
+        raise HTTPException(404, "Task not found or params expired")
+
+    new_task_id = str(uuid.uuid4())
+    params = entry["params"]
+    workflow_id = entry["workflow_id"]
+
+    # Probe video duration if available
+    video_duration = None
+    ref_video = params.get("_ref_video_original")
+    if ref_video and os.path.exists(ref_video):
+        video_duration = probe_video_duration(ref_video)
+
+    generation_status[new_task_id] = {
+        "status": "queued",
+        "progress": 0,
+        "message": f"Re-queued from {task_id[:8]}...",
+        "output_path": None,
+        "workflow_id": workflow_id,
+        "video_duration": video_duration,
+    }
+
+    with server_queue_lock:
+        server_queue[new_task_id] = {
+            "workflow_id": workflow_id,
+            "params": params,
+            "client_item_id": entry.get("client_item_id", ""),
+            "submitted_at": datetime.datetime.now().isoformat(),
+        }
+
+    # Ensure worker threads are running
+    for gpu_id in range(len(COMFYUI_INSTANCES)):
+        if queue_worker_threads[gpu_id] is None or not queue_worker_threads[gpu_id].is_alive():
+            queue_worker_threads[gpu_id] = threading.Thread(
+                target=queue_worker_loop, args=(gpu_id,), daemon=True,
+                name=f"queue-worker-gpu{gpu_id}",
+            )
+            queue_worker_threads[gpu_id].start()
+
+    for evt in queue_worker_events:
+        evt.set()
+
+    logging.info(f"Re-queued task {task_id[:8]} → {new_task_id[:8]} ({workflow_id})")
+    return {"old_task_id": task_id, "new_task_id": new_task_id}
 
 
 @app.get("/api/workflows")

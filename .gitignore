@@ -65,10 +65,33 @@ output_lora_14B/
 # Node modules
 node_modules/
 
-# Environment variables
+# Environment variables & secrets
 .env
+client_secret.json
+token.json
 
-# Misc
-.DS_Store
-Thumbs.db
-*.tmp
+# Database (local / runtime)
+*.sqlite3
+wanavatardb.sqlite3
+settings/app.db
+
+# User / runtime data
+settings/avatars/
+background/stages/upload_*.png
+
+# Logs & temp
+nohup.out
+queue_report.md
+queue_snapshot_*.json
+
+# Binary models (MediaPipe etc.)
+*.tflite
+models/
+
+# Subproject demo outputs
+rife_model/demo/
+
+# Frontend build (optional; dist/ already covered)
+frontend/dist/
+frontend/uploads/
+frontend/outputs/

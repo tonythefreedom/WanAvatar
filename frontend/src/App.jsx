@@ -34,6 +34,7 @@ import {
   submitBatchQueue,
   getQueueStatus,
   retryFailedTasks,
+  requeueTask,
   authLogin,
   authGoogle,
   authMe,
@@ -60,7 +61,7 @@ const translations = {
     galleryTitle: 'Assets',
     galleryEmpty: 'No videos generated yet',
     galleryDelete: 'Delete',
-    galleryDeleteConfirm: 'Delete this video?',
+    galleryDeleteConfirm: 'Delete this file?',
     gallerySize: 'Size',
     galleryDate: 'Created',
     galleryRefresh: 'Refresh',
@@ -290,7 +291,7 @@ const translations = {
     galleryTitle: '에셋',
     galleryEmpty: '아직 생성된 비디오가 없습니다',
     galleryDelete: '삭제',
-    galleryDeleteConfirm: '이 비디오를 삭제하시겠습니까?',
+    galleryDeleteConfirm: '이 파일을 삭제하시겠습니까?',
     gallerySize: '크기',
     galleryDate: '생성일',
     galleryRefresh: '새로고침',
@@ -518,7 +519,7 @@ const translations = {
     galleryTitle: '资源',
     galleryEmpty: '尚未生成任何视频',
     galleryDelete: '删除',
-    galleryDeleteConfirm: '确定删除此视频？',
+    galleryDeleteConfirm: '确定删除此文件？',
     gallerySize: '大小',
     galleryDate: '创建时间',
     galleryRefresh: '刷新',
@@ -877,8 +878,14 @@ function App() {
       if (saved[wfId].items) {
         const hasRunningWithTask = saved[wfId].items.some(i => i.status === 'running' && i.taskId);
         saved[wfId].isProcessing = hasRunningWithTask;
+        // Deduplicate items by id
+        const seenIds = new Set();
+        saved[wfId].items = saved[wfId].items.filter(i => {
+          if (seenIds.has(i.id)) return false;
+          seenIds.add(i.id);
+          return true;
+        });
         saved[wfId].items = saved[wfId].items
-          .filter(i => i.status !== 'completed')
           .map(i => {
             if (i.status === 'running' && i.taskId) return i;
             // Reset running without taskId back to pending; keep failed as-is
@@ -886,6 +893,70 @@ function App() {
             if (i.status === 'failed') return i;
             return i;
           });
+        // Remove stale failed items with no useful inputs (can't requeue)
+        saved[wfId].items = saved[wfId].items.filter(i => {
+          if (i.status === 'failed') {
+            const hasInputs = i.inputs && Object.keys(i.inputs).length > 0 &&
+              Object.values(i.inputs).some(v => v && v !== '');
+            if (!hasInputs) return false;
+          }
+          return true;
+        });
+        // Fix blob URLs in previews: derive server URL from filePaths
+        for (const item of saved[wfId].items) {
+          if (item.previews && item.filePaths) {
+            for (const [key, val] of Object.entries(item.previews)) {
+              const fixUrl = (u) => {
+                if (typeof u === 'string') {
+                  if (u.startsWith('blob:') || u === '') {
+                    const fp = item.filePaths[key];
+                    if (typeof fp === 'string' && fp) {
+                      const fname = fp.split('/').pop();
+                      return fp.includes('uploads') ? `/uploads/${fname}` : `/outputs/${fname}`;
+                    }
+                  }
+                  // Fix settings/avatars/ paths → /avatars/
+                  if (u.includes('settings/avatars/')) {
+                    return '/' + u.replace(/.*?settings\/avatars\//, 'avatars/');
+                  }
+                }
+                return u;
+              };
+              if (Array.isArray(val)) {
+                item.previews[key] = val.map((v, idx) => {
+                  const fp = Array.isArray(item.filePaths[key]) ? item.filePaths[key][idx] : null;
+                  if (typeof v === 'string' && v.includes('settings/avatars/')) {
+                    return '/' + v.replace(/.*?settings\/avatars\//, 'avatars/');
+                  }
+                  if (typeof v === 'string' && (v.startsWith('blob:') || v === '') && fp) {
+                    const fname = fp.split('/').pop();
+                    return fp.includes('uploads') ? `/uploads/${fname}` : `/outputs/${fname}`;
+                  }
+                  return v;
+                });
+              } else {
+                item.previews[key] = fixUrl(val);
+              }
+            }
+          }
+        }
+        // Generate missing previews from inputs paths
+        for (const item of saved[wfId].items) {
+          if (!item.inputs) continue;
+          if (!item.previews) item.previews = {};
+          if (!item.filePaths) item.filePaths = {};
+          const toUrl = (p) => {
+            if (p.startsWith('settings/avatars/')) return '/' + p.replace('settings/avatars/', 'avatars/');
+            return '/' + p.replace(/^\/?/, '');
+          };
+          for (const key of ['ref_image', 'ref_video', 'bg_image']) {
+            const p = item.inputs[key];
+            if (p && typeof p === 'string' && (!item.previews[key] || item.previews[key].includes('settings/avatars/'))) {
+              item.filePaths[key] = p;
+              item.previews[key] = toUrl(p);
+            }
+          }
+        }
         if (saved[wfId].items.length === 0) delete saved[wfId];
       } else {
         saved[wfId].isProcessing = false;
@@ -989,7 +1060,7 @@ function App() {
   const DEFAULT_YT_CHANNEL = 'https://www.youtube.com/channel/UCYcITGLPC3qv9txSM4GB70w';
   const [studioYtChannel, setStudioYtChannel] = useState(DEFAULT_YT_CHANNEL);
   const [studioYtChannelName, setStudioYtChannelName] = useState('');
-  const [studioYtUpload, setStudioYtUpload] = useState(false);
+  const [studioYtUpload, setStudioYtUpload] = useState(true);
   const [studioYtTitle, setStudioYtTitle] = useState('');
   const [studioYtDescription, setStudioYtDescription] = useState('');
   const [studioYtHashtags, setStudioYtHashtags] = useState('');
@@ -1269,23 +1340,19 @@ function App() {
     if (queueRestoredRef.current) return;
     queueRestoredRef.current = true;
 
-    // Check if any items have taskIds (were submitted to server)
-    const hasServerItems = Object.entries(wfQueue).some(([, q]) =>
-      q?.items?.some(i => i.taskId)
-    );
-    if (!hasServerItems) return;
-
     (async () => {
       try {
         const data = await getQueueStatus();
         const serverTasks = data.tasks || {};
 
+        // Sync existing local items with server status
         for (const [wfId, q] of Object.entries(wfQueue)) {
           if (!q?.items) continue;
           let hasActiveItems = false;
 
           for (const item of q.items) {
             if (!item.taskId) continue;
+            if (item.status === 'completed' || item.status === 'failed') continue;
             const st = serverTasks[item.taskId];
             if (!st) {
               updateQueueItem(wfId, item.id, { status: 'failed', error: 'Task lost (server restarted)', taskId: null });
@@ -1310,8 +1377,79 @@ function App() {
             startQueuePolling(wfId);
           }
         }
+
+        // Import server-only tasks not in local queue
+        const localTaskIds = new Set();
+        for (const q of Object.values(wfQueue)) {
+          for (const item of (q?.items || [])) {
+            if (item.taskId) localTaskIds.add(item.taskId);
+          }
+        }
+        const newItems = {};
+        for (const [taskId, st] of Object.entries(serverTasks)) {
+          if (localTaskIds.has(taskId)) continue;
+          // Only import active tasks (queued/processing), skip old failures/completions
+          if (st.status === 'failed' || st.status === 'completed') continue;
+          const wfId = st.workflow_id || 'change_character';
+          if (!newItems[wfId]) newItems[wfId] = [];
+          const progress = Math.round((st.progress || 0) * 100);
+          const status = st.status === 'completed' ? 'completed'
+            : st.status === 'failed' ? 'failed'
+            : st.status === 'queued' ? 'pending' : 'running';
+          const inputs = st.inputs || {};
+          const label = st.client_item_id
+            || inputs.fashion_prompt?.slice(0, 50)
+            || inputs.prompt?.slice(0, 50)
+            || `Server task ${taskId.slice(0, 8)}`;
+          // Build previews from inputs file paths
+          const previews = {};
+          const filePaths = {};
+          const toUrl = (p) => {
+            if (p.startsWith('settings/avatars/')) return '/' + p.replace('settings/avatars/', 'avatars/');
+            return '/' + p.replace(/^\/?/, '');
+          };
+          for (const key of ['ref_image', 'ref_video', 'bg_image']) {
+            const p = inputs[key];
+            if (p && typeof p === 'string') {
+              filePaths[key] = p;
+              previews[key] = toUrl(p);
+            }
+          }
+          newItems[wfId].push({
+            id: taskId,
+            taskId: status === 'completed' || status === 'failed' ? null : taskId,
+            status,
+            progress,
+            inputs,
+            label,
+            category: wfId === 'change_character' ? 'dance_shorts' : undefined,
+            previews,
+            filePaths,
+            outputVideo: st.output_path || null,
+            error: st.status === 'failed' ? (st.message || 'Failed') : null,
+            serverMessage: st.message || null,
+          });
+        }
+        if (Object.keys(newItems).length > 0) {
+          setWfQueue(prev => {
+            const next = { ...prev };
+            for (const [wfId, items] of Object.entries(newItems)) {
+              const existing = next[wfId] || { items: [], isProcessing: false };
+              next[wfId] = { ...existing, items: [...existing.items, ...items] };
+              if (items.some(i => i.status === 'pending' || i.status === 'running')) {
+                next[wfId].isProcessing = true;
+              }
+            }
+            return next;
+          });
+          for (const [wfId, items] of Object.entries(newItems)) {
+            if (items.some(i => i.status === 'pending' || i.status === 'running')) {
+              startQueuePolling(wfId);
+            }
+          }
+        }
       } catch (err) {
-        console.error('Failed to restore queue from server:', err);
+        console.error('Failed to sync queue from server:', err);
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2074,9 +2212,10 @@ function App() {
     if (!window.confirm(t('galleryDeleteConfirm'))) return;
     try {
       await deleteOutput(filename);
-      setGalleryImages(prev => prev.filter(o => o.filename !== filename));
-      setVideos(prev => prev.filter(v => v.filename !== filename));
     } catch (err) { console.error('Failed to delete:', err); }
+    // Always remove from UI (even if server returned 404 for already-deleted files)
+    setGalleryImages(prev => prev.filter(o => o.filename !== filename));
+    setVideos(prev => prev.filter(v => v.filename !== filename));
   };
 
   const handleGalleryUpload = async (e) => {
@@ -2303,11 +2442,12 @@ function App() {
     if (files.length === 0) return;
 
     if (files.length === 1) {
-      // Single file: existing behavior
+      // Single file: show blob preview immediately, replace with server URL after upload
       updateWfPreview(wfId, key, URL.createObjectURL(files[0]));
       try {
         const data = await uploadImage(files[0]);
         updateWfFilePath(wfId, key, data.path);
+        if (data.url) updateWfPreview(wfId, key, data.url);
       } catch (err) {
         updateWfState(wfId, { status: `Upload error: ${err.message}` });
       }
@@ -2345,6 +2485,7 @@ function App() {
     try {
       const data = await uploadBackground(file);
       updateWfFilePath(wfId, key, data.path);
+      if (data.url) updateWfPreview(wfId, key, data.url);
     } catch (err) {
       updateWfState(wfId, { status: `Upload error: ${err.message}` });
     }
@@ -2595,6 +2736,7 @@ function App() {
     try {
       const data = await uploadVideo(file);
       updateWfFilePath(wfId, key, data.path);
+      if (data.url) updateWfPreview(wfId, key, data.url);
     } catch (err) {
       updateWfState(wfId, { status: `Upload error: ${err.message}` });
     }
@@ -2630,6 +2772,7 @@ function App() {
     try {
       const data = await uploadAudio(file);
       updateWfFilePath(wfId, key, data.path);
+      if (data.url) updateWfPreview(wfId, key, data.url);
     } catch (err) {
       updateWfState(wfId, { status: `Upload error: ${err.message}` });
     }
@@ -3166,6 +3309,61 @@ function App() {
       if (!q) return prev;
       return { ...prev, [wfId]: { ...q, items: q.items.filter(i => i.id !== itemId) } };
     });
+  };
+
+  const handleRequeue = async (wfId, item) => {
+    try {
+      // Ensure previews exist by deriving from inputs/filePaths
+      const previews = { ...(item.previews || {}) };
+      const filePaths = { ...(item.filePaths || {}) };
+      const toUrl = (p) => {
+        if (p.startsWith('settings/avatars/')) return '/' + p.replace('settings/avatars/', 'avatars/');
+        return '/' + p.replace(/^\/?/, '');
+      };
+      if (item.inputs) {
+        for (const key of ['ref_image', 'ref_video', 'bg_image']) {
+          const p = item.inputs[key];
+          if (p && typeof p === 'string' && !previews[key]) {
+            filePaths[key] = p;
+            previews[key] = toUrl(p);
+          }
+        }
+      }
+      // Try server-side requeue first (uses saved params)
+      if (item.taskId) {
+        try {
+          const data = await requeueTask(item.taskId);
+          setWfQueue(prev => {
+            const q = prev[wfId];
+            if (!q) return prev;
+            const newItem = { ...item, id: data.new_task_id, taskId: data.new_task_id, status: 'pending', progress: 0, outputVideo: null, error: null, serverMessage: null, previews, filePaths };
+            return { ...prev, [wfId]: { ...q, items: [...q.items, newItem] } };
+          });
+          return;
+        } catch (e) {
+          console.warn('Server requeue failed, falling back to re-submit:', e);
+        }
+      }
+      // Fallback: re-submit using local item inputs directly to server
+      if (item.inputs) {
+        const newId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        const batchItem = { client_item_id: newId, inputs: item.inputs, yt_title: item.ytTitle || '', yt_description: item.ytDescription || '', yt_hashtags: item.ytHashtags || '', yt_upload: false };
+        try {
+          const data = await submitBatchQueue(wfId, [batchItem]);
+          const serverTask = data.tasks?.[0];
+          setWfQueue(prev => {
+            const q = prev[wfId];
+            if (!q) return prev;
+            const newItem = { ...item, id: newId, taskId: serverTask?.task_id || null, status: 'running', progress: 0, outputVideo: null, error: null, serverMessage: null, previews, filePaths };
+            return { ...prev, [wfId]: { ...q, items: [...q.items, newItem] } };
+          });
+        } catch (submitErr) {
+          console.error('Requeue submit failed:', submitErr);
+        }
+      }
+    } catch (err) {
+      console.error('Requeue failed:', err);
+    }
   };
 
   const handleWfQueueClear = (wfId) => {
@@ -4454,26 +4652,30 @@ function App() {
                               )}
                               <div className="queue-list">
                                 {items.map(item => (
-                                  <div key={item.id} className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}`}>
+                                  <div key={item.id} className={`queue-item queue-item--${item.status}${item.previews && Object.values(item.previews).some(v => v) ? ' queue-item--rich' : ''}`}>
                                     <div className="queue-item-top">
-                                      {/* Thumbnails */}
-                                      {(item.previews?.ref_image || item.previews?.ref_video || item.previews?.bg_image) && (
+                                      {/* Thumbnails — render all available previews */}
+                                      {item.previews && Object.entries(item.previews).filter(([, v]) => v && (Array.isArray(v) ? v.length > 0 : true)).length > 0 && (
                                         <div className="queue-item-thumbs">
-                                          {item.previews?.ref_image && (
-                                            <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar"
-                                              onClick={() => setQueueMediaPopup({ url: item.previews.ref_image, type: 'image', label: 'Avatar' })}
-                                              style={{ cursor: 'pointer' }} />
-                                          )}
-                                          {item.previews?.ref_video && (
-                                            <video src={item.previews.ref_video} className="queue-thumb queue-thumb--video" muted preload="metadata"
-                                              onClick={() => setQueueMediaPopup({ url: item.previews.ref_video, type: 'video', label: 'Reference Video' })}
-                                              style={{ cursor: 'pointer' }} />
-                                          )}
-                                          {item.previews?.bg_image && (
-                                            <img src={item.previews.bg_image} alt="bg" className="queue-thumb queue-thumb--bg"
-                                              onClick={() => setQueueMediaPopup({ url: item.previews.bg_image, type: 'image', label: 'Background' })}
-                                              style={{ cursor: 'pointer' }} />
-                                          )}
+                                          {Object.entries(item.previews).filter(([, v]) => v && (Array.isArray(v) ? v.length > 0 : true)).flatMap(([key, val]) => {
+                                            const urls = Array.isArray(val) ? val : [val];
+                                            return urls.filter(u => u).map((url, i) => {
+                                              const thumbKey = urls.length > 1 ? `${key}_${i}` : key;
+                                              const isVideo = typeof url === 'string' && /\.(mp4|webm|mov)$/i.test(url);
+                                              const borderClass = key.includes('video') || key === 'ref_video' ? 'queue-thumb--video'
+                                                : key.includes('bg') ? 'queue-thumb--bg' : 'queue-thumb--avatar';
+                                              if (isVideo) return (
+                                                <video key={thumbKey} src={url} className={`queue-thumb ${borderClass}`} muted preload="metadata"
+                                                  onClick={() => setQueueMediaPopup({ url, type: 'video', label: key })}
+                                                  style={{ cursor: 'pointer' }} />
+                                              );
+                                              return (
+                                                <img key={thumbKey} src={url} alt={key} className={`queue-thumb ${borderClass}`}
+                                                  onClick={() => setQueueMediaPopup({ url, type: 'image', label: key })}
+                                                  style={{ cursor: 'pointer' }} />
+                                              );
+                                            });
+                                          })}
                                         </div>
                                       )}
                                       <div className="queue-item-info">
@@ -4515,10 +4717,16 @@ function App() {
                                           </span>
                                         )}
                                         {item.status === 'completed' && item.outputVideo && (
-                                          <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
+                                          <>
+                                            <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
+                                            <button className="queue-item-requeue" onClick={() => handleRequeue(wf.id, item)} title="Re-queue">↻</button>
+                                          </>
                                         )}
-                                        {item.status === 'failed' && item.error && (
-                                          <span className="queue-item-error" title={item.error}>Error</span>
+                                        {item.status === 'failed' && (
+                                          <>
+                                            {item.error && <span className="queue-item-error" title={item.error}>Error</span>}
+                                            <button className="queue-item-requeue" onClick={() => handleRequeue(wf.id, item)} title="Re-queue">↻</button>
+                                          </>
                                         )}
                                       </div>
                                     </div>
@@ -4586,10 +4794,10 @@ function App() {
                         ))}
                       </div>
                       {dsCharImagePreview && (
-                        <div className="ds-char-viewer" onDoubleClick={() => {
+                        <div className="ds-char-viewer" onClick={() => {
                           const img = dsAvatarImages.find(i => i.path === dsCharImagePath);
                           if (img) { setStagePopup(null); setAvatarPopup({ url: img.url, filename: img.filename, group: dsAvatarSelectedGroup, img, source: 'danceshorts' }); }
-                        }} title="Double-click to enlarge">
+                        }} title="Click to enlarge">
                           <img src={dsCharImagePreview} alt="Character" />
                         </div>
                       )}
@@ -4920,10 +5128,16 @@ function App() {
                                     </span>
                                   )}
                                   {item.status === 'completed' && item.outputVideo && (
-                                    <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
+                                    <>
+                                      <a href={item.outputVideo} download className="queue-item-dl" title={t('download')}>DL</a>
+                                      <button className="queue-item-requeue" onClick={() => handleRequeue('change_character', item)} title="Re-queue">↻</button>
+                                    </>
                                   )}
-                                  {item.status === 'failed' && item.error && (
-                                    <span className="queue-item-error" title={item.error}>Error</span>
+                                  {item.status === 'failed' && (
+                                    <>
+                                      {item.error && <span className="queue-item-error" title={item.error}>Error</span>}
+                                      <button className="queue-item-requeue" onClick={() => handleRequeue('change_character', item)} title="Re-queue">↻</button>
+                                    </>
                                   )}
                                 </div>
                               </div>

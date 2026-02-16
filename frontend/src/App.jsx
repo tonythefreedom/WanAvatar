@@ -5232,12 +5232,9 @@ function App() {
                               <div 
                                 key={item.id} 
                                 className={`queue-item queue-item--${item.status}${(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) ? ' queue-item--rich' : ''}${dragOverQueueIndex === index ? ' queue-item--drag-over' : ''}${draggedQueueIndex === index ? ' queue-item--dragging' : ''}`}
-                                draggable={true}
-                                onDragStart={(e) => handleDragStart(e, index)}
                                 onDragOver={(e) => handleDragOver(e, index)}
                                 onDragLeave={handleDragLeave}
                                 onDrop={(e) => handleDrop(e, index)}
-                                onDragEnd={handleDragEnd}
                               >
                                 <div className="queue-item-top">
                                   {(item.previews?.ref_image || item.previews?.ref_video || item.inputs?.ref_video || item.previews?.bg_image) && (
@@ -5275,6 +5272,15 @@ function App() {
                                   )}
                                 <div className="queue-item-info">
                                   <div className="queue-item-title-row">
+                                    <span 
+                                      className="queue-item-drag-handle"
+                                      draggable={true}
+                                      onDragStart={(e) => handleDragStart(e, index)}
+                                      onDragEnd={handleDragEnd}
+                                      title="드래그하여 순서 변경"
+                                    >
+                                      ⋮⋮
+                                    </span>
                                     <span className="queue-item-status">
                                       {item.status === 'completed' ? '\u2705' : item.status === 'running' ? '\u23f3' : item.status === 'failed' ? '\u274c' : '\u23f8'}
                                     </span>

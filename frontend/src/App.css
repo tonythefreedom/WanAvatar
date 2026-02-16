@@ -2172,7 +2172,7 @@ video.picker-thumb {
   background: var(--surface);
   border: 1px solid var(--border);
   font-size: 0.85rem;
-  cursor: move;
+  cursor: default;
   transition: all 0.2s ease;
 }
 
@@ -2254,6 +2254,22 @@ video.picker-thumb {
 
 .queue-item--failed {
   border-color: #e74c3c;
+}
+
+.queue-item-drag-handle {
+  flex-shrink: 0;
+  font-size: 1rem;
+  color: var(--text-light);
+  cursor: move;
+  padding: 0 4px;
+  user-select: none;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.queue-item-drag-handle:hover {
+  opacity: 1;
+  color: var(--primary);
 }
 
 .queue-item-status {

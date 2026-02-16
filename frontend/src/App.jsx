@@ -5362,45 +5362,48 @@ function App() {
                     <div className="gallery-empty"><p>{t('noUploads')}</p></div>
                   ) : (
                     <div className="gallery-grid">
-                      {galleryAssets.filter(asset => assetTypeFilter === 'all' || asset.type === assetTypeFilter).map((asset, idx) => (
-                        <div key={asset.filename} className="gallery-item" style={{ position: 'relative' }}>
-                          <div style={{ position: 'absolute', top: 8, left: 8, zIndex: 10 }}>
-                            <input 
-                              type="checkbox" 
-                              checked={selectedAssets.includes(asset.filename)}
-                              onChange={(e) => {
-                                e.stopPropagation();
-                                toggleAssetSelection(asset.filename);
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ 
-                                width: 20, 
-                                height: 20, 
-                                cursor: 'pointer',
-                                accentColor: 'var(--primary)'
-                              }}
-                            />
-                          </div>
-                          <div style={{ cursor: 'pointer', flex: 1, display: 'flex', flexDirection: 'column' }} onClick={() => setGalleryPopup({ index: idx, img: asset, allAssets: galleryAssets })}>
-                            {asset.type === 'image' ? (
-                              <img src={asset.url} alt={asset.filename} style={{ width: '100%', height: 'auto', display: 'block' }} />
-                            ) : asset.type === 'video' ? (
-                              <video src={asset.url} preload="metadata" style={{ width: '100%', height: 'auto', display: 'block', pointerEvents: 'none' }} />
-                            ) : (
-                              <div style={{ width: '100%', minHeight: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)' }}>
-                                <div style={{ textAlign: 'center', padding: '1rem' }}>
-                                  <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem', wordBreak: 'break-word' }}>{asset.filename}</p>
-                                  <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>{asset.type}</p>
+                      {(() => {
+                        const filteredAssets = galleryAssets.filter(asset => assetTypeFilter === 'all' || asset.type === assetTypeFilter);
+                        return filteredAssets.map((asset, idx) => (
+                          <div key={asset.filename} className="gallery-item" style={{ position: 'relative' }}>
+                            <div style={{ position: 'absolute', top: 8, left: 8, zIndex: 10 }}>
+                              <input 
+                                type="checkbox" 
+                                checked={selectedAssets.includes(asset.filename)}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  toggleAssetSelection(asset.filename);
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ 
+                                  width: 20, 
+                                  height: 20, 
+                                  cursor: 'pointer',
+                                  accentColor: 'var(--primary)'
+                                }}
+                              />
+                            </div>
+                            <div style={{ cursor: 'pointer', flex: 1, display: 'flex', flexDirection: 'column' }} onClick={() => setGalleryPopup({ index: idx, img: asset, allAssets: filteredAssets })}>
+                              {asset.type === 'image' ? (
+                                <img src={asset.url} alt={asset.filename} style={{ width: '100%', height: 'auto', display: 'block' }} />
+                              ) : asset.type === 'video' ? (
+                                <video src={asset.url} preload="metadata" style={{ width: '100%', height: 'auto', display: 'block', pointerEvents: 'none' }} />
+                              ) : (
+                                <div style={{ width: '100%', minHeight: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)' }}>
+                                  <div style={{ textAlign: 'center', padding: '1rem' }}>
+                                    <p style={{ fontSize: '0.875rem', marginBottom: '0.5rem', wordBreak: 'break-word' }}>{asset.filename}</p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-light)' }}>{asset.type}</p>
+                                  </div>
                                 </div>
+                              )}
+                              <div className="gallery-item-info">
+                                <span className="gallery-item-name" title={asset.filename}>{asset.filename}</span>
+                                <span className="gallery-item-meta">{(asset.size / 1024 / 1024).toFixed(1)} MB</span>
                               </div>
-                            )}
-                            <div className="gallery-item-info">
-                              <span className="gallery-item-name" title={asset.filename}>{asset.filename}</span>
-                              <span className="gallery-item-meta">{(asset.size / 1024 / 1024).toFixed(1)} MB</span>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        ));
+                      })()}
                     </div>
                   )
                 )}

@@ -3639,24 +3639,12 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 "class_type": "LoadImage",
                 "inputs": {"image": bg_image_to_use, "upload": "image"},
             }
-            workflow["301"] = {
-                "class_type": "ImageResizeKJv2",
-                "inputs": {
-                    "width": ["123", 0],
-                    "height": ["124", 0],
-                    "upscale_method": "lanczos",
-                    "keep_proportion": "pad",
-                    "pad_color": "0, 0, 0",
-                    "crop_position": "center",
-                    "divisible_by": 16,
-                    "device": "cpu",
-                    "image": ["300", 0],
-                },
-            }
+            # Skip resize node (301) - background is already outpainted to correct size
+            # Directly use loaded image for RepeatImageBatch
             workflow["302"] = {
                 "class_type": "RepeatImageBatch",
                 "inputs": {
-                    "image": ["301", 0],
+                    "image": ["300", 0],  # Changed from ["301", 0] to ["300", 0]
                     "amount": ["96", 1],
                 },
             }
@@ -3664,7 +3652,7 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             # Node 15 still applies the character mask, producing bg with character area blacked out
             if "15" in workflow:
                 workflow["15"]["inputs"]["image"] = ["302", 0]
-                logging.info(f"Custom background image applied (static): {bg_image_to_use}")
+                logging.info(f"Custom background image applied (outpainted, no resize): {bg_image_to_use}")
 
         # Auto-analyze background lighting with Gemini if no manual bg_prompt
         if bg_image and not bg_prompt:

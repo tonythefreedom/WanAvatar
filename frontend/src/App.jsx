@@ -4845,8 +4845,8 @@ function App() {
                               {items.length > 0 && (
                                 <div className="queue-actions">
                                   <button className="btn" onClick={() => handleWfQueueStart(wf.id)}
-                                    disabled={isProcessing || pendingCount === 0}>
-                                    {isProcessing ? t('wfQueueRunning') : t('wfStartQueue')}
+                                    disabled={pendingCount === 0}>
+                                    {isProcessing ? (pendingCount > 0 ? t('wfStartQueue') + ' (Add)' : t('wfQueueRunning')) : t('wfStartQueue')}
                                   </button>
                                   {failedCount > 0 && (
                                     <button className="btn warning" onClick={() => handleRetryFailed(wf.id)}>
@@ -5343,8 +5343,8 @@ function App() {
                         {items.length > 0 && (
                           <div className="queue-actions">
                             <button className="btn" onClick={() => handleWfQueueStart('change_character')}
-                              disabled={isProcessing || pendingCount === 0}>
-                              {isProcessing ? t('wfQueueRunning') : t('wfStartQueue')}
+                              disabled={pendingCount === 0}>
+                              {isProcessing ? (pendingCount > 0 ? t('wfStartQueue') + ' (Add)' : t('wfQueueRunning')) : t('wfStartQueue')}
                             </button>
                             {failedCount > 0 && (
                               <button className="btn warning" onClick={() => handleRetryFailed('change_character')}>

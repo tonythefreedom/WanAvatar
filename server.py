@@ -89,9 +89,9 @@ REALESRGAN_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 COMFYUI_DIR = Path("/home/ubuntu/ComfyUI")
 COMFYUI_INSTANCES = [
     {"url": "http://127.0.0.1:8188", "ws_url": "ws://127.0.0.1:8188/ws",
-     "port": "8188", "cuda_device": "0", "log": "/tmp/comfyui.log"},
+     "port": "8188", "cuda_device": "0", "log": "/home/ubuntu/WanAvatar/logs/comfyui_gpu0.log"},
     {"url": "http://127.0.0.1:8189", "ws_url": "ws://127.0.0.1:8189/ws",
-     "port": "8189", "cuda_device": "1", "log": "/tmp/comfyui_gpu1.log"},
+     "port": "8189", "cuda_device": "1", "log": "/home/ubuntu/WanAvatar/logs/comfyui_gpu1.log"},
 ]
 COMFYUI_URL = COMFYUI_INSTANCES[0]["url"]  # backward compat for non-queue code paths
 COMFYUI_WS_URL = COMFYUI_INSTANCES[0]["ws_url"]
@@ -3562,6 +3562,11 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
         # Camera flow:   VHS_LoadVideo(300) → Resize(301) → DrawMaskOnImage(15) → bg_images(218)
         # This ensures the character area is properly masked (blacked out) in the custom background
         bg_motion_video = user_inputs.get("_bg_motion_video")
+        
+        # Get target dimensions from workflow
+        target_w = workflow.get("123", {}).get("inputs", {}).get("value", 720)
+        target_h = workflow.get("124", {}).get("inputs", {}).get("value", 1280)
+        
         if bg_image and bg_motion_video:
             # Camera motion detected: load warped background VIDEO (per-frame varying)
             workflow["300"] = {
@@ -3569,15 +3574,27 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 "inputs": {
                     "video": bg_motion_video,
                     "force_rate": 0,
-                    "force_size": "Disabled",
-                    "custom_width": 512,
-                    "custom_height": 512,
+                    "custom_width": 0,  # Don't resize - keep original resolution
+                    "custom_height": 0,  # Don't resize - keep original resolution
                     "frame_load_cap": 0,
                     "skip_first_frames": 0,
                     "select_every_nth": 1,
                 },
             }
-            # Skip resize node (301) - background video is already outpainted to correct size
+            # Add resize node to ensure exact target dimensions (720x1280)
+            # This prevents stretching from VHS_LoadVideo's internal resizing
+            workflow["301"] = {
+                "class_type": "ImageResizeKJv2",
+                "inputs": {
+                    "width": target_w,
+                    "height": target_h,
+                    "interpolation": "lanczos",
+                    "method": "fill / crop",  # Center crop to exact size
+                    "condition": "always",
+                    "multiple_of": 0,
+                    "image": ["300", 0],
+                },
+            }
             # Trim bg video to match dance video frame count (prevent batch size mismatch)
             # Node 96 output 1 = dance video frame count from VHS_VideoInfoLoaded
             workflow["303"] = {
@@ -3585,53 +3602,39 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 "inputs": {
                     "start_index": 0,
                     "num_frames": ["96", 1],  # dance video frame count
-                    "images": ["300", 0],     # directly from LoadImage (no resize)
+                    "images": ["301", 0],     # from resized frames
                 },
             }
             if "15" in workflow:
                 workflow["15"]["inputs"]["image"] = ["303", 0]
-                logging.info(f"Camera motion background applied (outpainted, no resize, trimmed to dance frames): {bg_motion_video}")
+                logging.info(f"Camera motion background applied (loaded at original size, resized to {target_w}x{target_h}, trimmed to dance frames): {bg_motion_video}")
         elif bg_image:
             # No camera motion: use static image repeated
-            # Apply outpainting preprocessing for better quality
+            # For static backgrounds, use original image without outpainting to avoid stretching
             bg_image_to_use = bg_image
-            
-            # Get target dimensions from workflow
-            target_w = workflow.get("123", {}).get("inputs", {}).get("value", 720)
-            target_h = workflow.get("124", {}).get("inputs", {}).get("value", 1280)
-            
-            # Try to apply outpainting preprocessing
-            try:
-                from camera_motion import outpaint_background
-                bg_image_path = str(BACKGROUNDS_DIR / bg_image) if not os.path.isabs(bg_image) else bg_image
-                if not os.path.exists(bg_image_path):
-                    bg_image_path = os.path.join("/home/ubuntu/ComfyUI/input", bg_image)
-                
-                if os.path.exists(bg_image_path):
-                    # Outpaint with 1.3x scale factor for camera motion margin
-                    outpainted_path = outpaint_background(bg_image_path, target_w, target_h, scale_factor=1.3)
-                    
-                    # If outpainting succeeded and produced a different file, upload it to ComfyUI
-                    if outpainted_path and outpainted_path != bg_image_path:
-                        import shutil
-                        outpainted_filename = f"outpainted_{os.path.basename(bg_image)}"
-                        comfyui_input_path = os.path.join("/home/ubuntu/ComfyUI/input", outpainted_filename)
-                        shutil.copy(outpainted_path, comfyui_input_path)
-                        bg_image_to_use = outpainted_filename
-                        logging.info(f"Custom background outpainted: {bg_image} → {outpainted_filename}")
-            except Exception as e:
-                logging.warning(f"Background outpainting failed: {e}, using original")
             
             workflow["300"] = {
                 "class_type": "LoadImage",
                 "inputs": {"image": bg_image_to_use, "upload": "image"},
             }
-            # Skip resize node (301) - background is already outpainted to correct size
-            # Directly use loaded image for RepeatImageBatch
+            # Add resize node to ensure exact target dimensions
+            workflow["301"] = {
+                "class_type": "ImageResizeKJv2",
+                "inputs": {
+                    "width": target_w,
+                    "height": target_h,
+                    "interpolation": "lanczos",
+                    "method": "fill / crop",
+                    "condition": "always",
+                    "multiple_of": 0,
+                    "image": ["300", 0],
+                },
+            }
+            # Repeat resized image for all frames
             workflow["302"] = {
                 "class_type": "RepeatImageBatch",
                 "inputs": {
-                    "image": ["300", 0],  # Changed from ["301", 0] to ["300", 0]
+                    "image": ["301", 0],  # Use resized image
                     "amount": ["96", 1],
                 },
             }
@@ -3639,7 +3642,7 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             # Node 15 still applies the character mask, producing bg with character area blacked out
             if "15" in workflow:
                 workflow["15"]["inputs"]["image"] = ["302", 0]
-                logging.info(f"Custom background image applied (outpainted, no resize): {bg_image_to_use}")
+                logging.info(f"Custom background image applied (resized to {target_w}x{target_h}): {bg_image_to_use}")
 
         # Auto-analyze background lighting with Gemini if no manual bg_prompt
         if bg_image and not bg_prompt:

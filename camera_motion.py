@@ -207,7 +207,7 @@ def _smooth_homographies(homographies: list, window: int = 5) -> list:
 
 
 def outpaint_background(bg_image_path: str, target_width: int, target_height: int,
-                        scale_factor: float = 1.3, cache_dir: str = "/tmp/bg_outpaint_cache") -> str:
+                        scale_factor: float = 1.6, cache_dir: str = "/tmp/bg_outpaint_cache") -> str:
     """
     Outpaint a background image to provide room for camera motion without quality loss.
     
@@ -335,6 +335,36 @@ def outpaint_background(bg_image_path: str, target_width: int, target_height: in
             return outpainted_path
     except Exception as e:
         logging.warning(f"Outpaint: Padding method failed: {e}")
+    
+    # Method 3: Final fallback - simple edge extension (better than returning original)
+    try:
+        logging.info(f"Outpaint: Using edge extension fallback")
+        canvas = np.zeros((final_h, final_w, 3), dtype=np.uint8)
+        
+        # Place original image in center
+        y_offset = (final_h - orig_h) // 2
+        x_offset = (final_w - orig_w) // 2
+        canvas[y_offset:y_offset+orig_h, x_offset:x_offset+orig_w] = bg_img
+        
+        # Fill margins by extending edges
+        # Top margin
+        if y_offset > 0:
+            canvas[:y_offset, x_offset:x_offset+orig_w] = bg_img[0:1, :]
+        # Bottom margin
+        if y_offset + orig_h < final_h:
+            canvas[y_offset+orig_h:, x_offset:x_offset+orig_w] = bg_img[-1:, :]
+        # Left margin
+        if x_offset > 0:
+            canvas[:, :x_offset] = canvas[:, x_offset:x_offset+1]
+        # Right margin
+        if x_offset + orig_w < final_w:
+            canvas[:, x_offset+orig_w:] = canvas[:, x_offset+orig_w-1:x_offset+orig_w]
+        
+        cv2.imwrite(cache_path, canvas)
+        logging.info(f"Outpaint: Edge extension successful → {cache_path}")
+        return cache_path
+    except Exception as e:
+        logging.warning(f"Outpaint: Edge extension failed: {e}")
     
     # If all methods fail, return original
     logging.warning(f"Outpaint: All methods failed, using original image")
@@ -628,7 +658,7 @@ def warp_background_video(*args, **kwargs):
     pass
 def warp_background_video(bg_image_path: str, video_path: str,
                           output_path: str, force_rate: int = 16,
-                          scale_factor: float = 1.3,
+                          scale_factor: float = 1.6,
                           target_width: int = None,
                           target_height: int = None) -> str:
     """
@@ -710,11 +740,32 @@ def warp_background_video(bg_image_path: str, video_path: str,
 
     # Step 2: Prepare background image with outpainting for better quality
     target_w, target_h = vid_w, vid_h
-    needed_w = int(target_w * scale_factor)
-    needed_h = int(target_h * scale_factor)
+    
+    # Dynamically adjust scale_factor to ensure camera motion fits within margins
+    # Required margin = max_motion + safety buffer (20%)
+    required_margin_x = max_tx * 1.2
+    required_margin_y = max_ty * 1.2
+    
+    # Calculate minimum scale_factor needed
+    # margin_x = (needed_w - target_w) / 2 >= required_margin_x
+    # needed_w = target_w + 2 * required_margin_x
+    # scale_factor = needed_w / target_w
+    min_scale_x = 1.0 + (2 * required_margin_x / target_w)
+    min_scale_y = 1.0 + (2 * required_margin_y / target_h)
+    min_scale = max(min_scale_x, min_scale_y)
+    
+    # Use the larger of default scale_factor or dynamically calculated minimum
+    final_scale_factor = max(scale_factor, min_scale)
+    
+    if final_scale_factor > scale_factor:
+        logging.info(f"CameraMotion: Adjusting scale_factor {scale_factor:.2f} → {final_scale_factor:.2f} to fit camera motion")
+    
+    needed_w = int(target_w * final_scale_factor)
+    needed_h = int(target_h * final_scale_factor)
     
     # Use outpainting to expand background (preserves center quality)
-    outpainted_bg_path = outpaint_background(bg_image_path, target_w, target_h, scale_factor)
+    # Pass the final scale_factor so outpainting produces the exact size we need
+    outpainted_bg_path = outpaint_background(bg_image_path, target_w, target_h, final_scale_factor)
     
     # Load the outpainted/processed background
     bg_img = cv2.imread(outpainted_bg_path)
@@ -724,39 +775,42 @@ def warp_background_video(bg_image_path: str, video_path: str,
     
     bg_h, bg_w = bg_img.shape[:2]
     
-    # Resize to needed dimensions while preserving aspect ratio
-    # Use center crop if needed to match exact dimensions
-    bg_aspect = bg_w / bg_h
-    needed_aspect = needed_w / needed_h
-    
-    if abs(bg_aspect - needed_aspect) < 0.01:  # Aspect ratios match (within 1%)
-        # Direct resize is safe
-        if bg_w != needed_w or bg_h != needed_h:
+    # Check if outpainted image already has the exact dimensions we need
+    if bg_w == needed_w and bg_h == needed_h:
+        bg_scaled = bg_img
+        logging.info(f"CameraMotion: Using outpainted bg at exact size {bg_w}x{bg_h}")
+    else:
+        # Outpainted image size doesn't match - need to resize/crop
+        # This should rarely happen if outpaint_background works correctly
+        logging.warning(f"CameraMotion: Outpainted bg {bg_w}x{bg_h} != needed {needed_w}x{needed_h}, adjusting...")
+        
+        bg_aspect = bg_w / bg_h
+        needed_aspect = needed_w / needed_h
+        
+        if abs(bg_aspect - needed_aspect) < 0.01:  # Aspect ratios match (within 1%)
+            # Direct resize
             bg_scaled = cv2.resize(bg_img, (needed_w, needed_h), interpolation=cv2.INTER_LANCZOS4)
             logging.info(f"CameraMotion: Resized outpainted bg {bg_w}x{bg_h} → {needed_w}x{needed_h}")
         else:
-            bg_scaled = bg_img
-            logging.info(f"CameraMotion: Using outpainted bg at {bg_w}x{bg_h}")
-    else:
-        # Aspect ratios differ - resize to fit and center crop
-        if bg_aspect > needed_aspect:
-            # Background is wider - fit height, crop width
-            scale = needed_h / bg_h
-            temp_w = int(bg_w * scale)
-            temp_h = needed_h
-        else:
-            # Background is taller - fit width, crop height
-            scale = needed_w / bg_w
-            temp_w = needed_w
-            temp_h = int(bg_h * scale)
-        
-        temp_bg = cv2.resize(bg_img, (temp_w, temp_h), interpolation=cv2.INTER_LANCZOS4)
-        
-        # Center crop to exact dimensions
-        crop_x = (temp_w - needed_w) // 2
-        crop_y = (temp_h - needed_h) // 2
-        bg_scaled = temp_bg[crop_y:crop_y+needed_h, crop_x:crop_x+needed_w]
-        logging.info(f"CameraMotion: Resized {bg_w}x{bg_h} → {temp_w}x{temp_h}, center crop → {needed_w}x{needed_h}")
+            # Aspect ratios differ - resize to fit and center crop
+            if bg_aspect > needed_aspect:
+                # Background is wider - fit height, crop width
+                scale = needed_h / bg_h
+                temp_w = int(bg_w * scale)
+                temp_h = needed_h
+            else:
+                # Background is taller - fit width, crop height
+                scale = needed_w / bg_w
+                temp_w = needed_w
+                temp_h = int(bg_h * scale)
+            
+            temp_bg = cv2.resize(bg_img, (temp_w, temp_h), interpolation=cv2.INTER_LANCZOS4)
+            
+            # Center crop to exact dimensions
+            crop_x = (temp_w - needed_w) // 2
+            crop_y = (temp_h - needed_h) // 2
+            bg_scaled = temp_bg[crop_y:crop_y+needed_h, crop_x:crop_x+needed_w]
+            logging.info(f"CameraMotion: Resized {bg_w}x{bg_h} → {temp_w}x{temp_h}, center crop → {needed_w}x{needed_h}")
 
     # Center offset (the initial view is the center crop of the scaled image)
     scaled_h, scaled_w = bg_scaled.shape[:2]

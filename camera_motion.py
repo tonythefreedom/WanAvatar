@@ -766,7 +766,7 @@ def warp_background_video(bg_image_path: str, video_path: str,
     # Required margin = max_motion + safety buffer (20%)
     required_margin_x = max_tx * 1.2
     required_margin_y = max_ty * 1.2
-    
+
     # Calculate minimum scale_factor needed
     # margin_x = (needed_w - target_w) / 2 >= required_margin_x
     # needed_w = target_w + 2 * required_margin_x
@@ -856,13 +856,25 @@ def warp_background_video(bg_image_path: str, video_path: str,
     for i in range(expected_frames):
         H = homographies[i]
 
-        # Apply: first offset to scaled image center, then apply camera motion
-        # H maps frame-0 coords → frame-i coords (how features moved in image).
-        # warpPerspective internally uses M^{-1} to find source pixels, so by
-        # passing H directly the inversion inside OpenCV correctly reverses the
-        # feature displacement, shifting the viewport in the camera's direction
-        # (right when camera pans right, zoom-in when camera zooms in, etc.).
-        warp_H = T_center @ H
+        # Extract only PAN (translation) from H, discard zoom/scale.
+        # The AI model handles character zoom independently via pose estimation,
+        # so applying zoom to the background creates a mismatch regardless of
+        # direction.  Only pan (viewport translation) needs to match.
+        #
+        # Method: map frame center through H to get pure pan displacement.
+        # A zoom centered at the frame center leaves the center point fixed,
+        # so the displacement equals the pure pan component.
+        cx, cy = target_w / 2.0, target_h / 2.0
+        mapped = H @ np.array([cx, cy, 1.0])
+        mapped /= mapped[2]
+        pan_dx = mapped[0] - cx
+        pan_dy = mapped[1] - cy
+
+        warp_H = np.array([
+            [1, 0, -offset_x + pan_dx],
+            [0, 1, -offset_y + pan_dy],
+            [0, 0, 1]
+        ], dtype=np.float64)
 
         warped = cv2.warpPerspective(
             bg_scaled, warp_H, (target_w, target_h),

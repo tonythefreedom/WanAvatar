@@ -3613,10 +3613,9 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             
             # Increase mask expansion to prevent background from covering character extremities
             if "13" in workflow:
-                # Default is 35, increase to 30 to ensure full coverage
                 current_expand = workflow["13"]["inputs"].get("expand", 35)
-                workflow["13"]["inputs"]["expand"] = 30
-                logging.info(f"Increased mask expansion from {current_expand} to 30 to prevent background overlap")
+                workflow["13"]["inputs"]["expand"] = 40
+                logging.info(f"Set mask expansion from {current_expand} to 40 to prevent background overlap")
                 
         elif bg_image:
             # No camera motion: use static image repeated
@@ -3658,10 +3657,9 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
         # Increase mask expansion if custom background is used (motion or static)
         # This prevents the background from covering character extremities due to mask shrinkage
         if bg_image and "13" in workflow:
-            # Default is 35, increase to 30 to minimize black artifacts while preventing overlap
             current_expand = workflow["13"]["inputs"].get("expand", 35)
-            workflow["13"]["inputs"]["expand"] = 30
-            logging.info(f"Set mask expansion from {current_expand} to 30")
+            workflow["13"]["inputs"]["expand"] = 40
+            logging.info(f"Set mask expansion from {current_expand} to 40")
             
             # BlockifyMask (node 14) is kept active to smooth mask boundaries and remove small noise artifacts
             # Previously bypassed, but restored to fix "black square" artifacts around hands

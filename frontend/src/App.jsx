@@ -1041,6 +1041,8 @@ function App() {
   const [studioRefVideoPath, setStudioRefVideoPath] = useState('');
   const [studioRefVideoPreview, setStudioRefVideoPreview] = useState(null);
   const [studioRefVideoMode, setStudioRefVideoMode] = useState('youtube');
+  const [studioUploadedVideos, setStudioUploadedVideos] = useState([]);
+  const [studioUploadedVideosLoading, setStudioUploadedVideosLoading] = useState(false);
   const [studioYoutubeUrl, setStudioYoutubeUrl] = useState('');
   const [studioYoutubeDownloading, setStudioYoutubeDownloading] = useState(false);
   const [studioScenePrompt, setStudioScenePrompt] = useState('The character is dancing in the room');
@@ -2032,6 +2034,17 @@ function App() {
       URL.revokeObjectURL(tempPreview);
     }
   };
+
+  // Fetch uploaded videos from server
+  const fetchUploadedVideos = useCallback(async () => {
+    setStudioUploadedVideosLoading(true);
+    try {
+      const data = await listAllUploads();
+      const vids = (data.files || []).filter(f => f.type === 'video');
+      setStudioUploadedVideos(vids);
+    } catch (err) { console.error('Failed to fetch uploaded videos:', err); }
+    finally { setStudioUploadedVideosLoading(false); }
+  }, []);
 
   // Dance Shorts - Video Timeline handlers
   const handleDsVideoMeta = (e) => {
@@ -3388,7 +3401,13 @@ function App() {
       if (!isAlreadyProcessing) {
         startQueuePolling(wfId);
       }
+
+      // Add visual feedback
+      window.alert(`Success: ${batchItems.length} items have been submitted to the queue.`);
+
     } catch (err) {
+      console.error(err);
+      window.alert(`Failed to submit queue: ${err.message}`);
       for (const item of pendingItems) {
         updateQueueItem(wfId, item.id, { status: 'failed', error: `Submit failed: ${err.message}` });
       }
@@ -4958,17 +4977,26 @@ function App() {
                       <textarea value={studioScenePrompt} onChange={e => setStudioScenePrompt(e.target.value)} rows={2} />
                     </div>
 
-                    {/* Ref Video Source */}
+
+                  </div>
+                </div>
+
+                {/* Right Column - Ref Video, YouTube Settings & Output */}
+                <div className="column">
+                  {/* Ref Video Source */}
+                  <div className="card" style={{ marginBottom: 16 }}>
+                    <h3>{t('studioRefVideo') || 'Reference Video'}</h3>
                     <div className="sub-tabs" style={{ marginBottom: 12 }}>
                       <button className={studioRefVideoMode === 'youtube' ? 'active' : ''}
                         onClick={() => setStudioRefVideoMode('youtube')}>{t('wfVideoYoutube')}</button>
                       <button className={studioRefVideoMode === 'upload' ? 'active' : ''}
                         onClick={() => setStudioRefVideoMode('upload')}>{t('wfVideoUpload')}</button>
+                      <button className={studioRefVideoMode === 'uploaded' ? 'active' : ''}
+                        onClick={() => { setStudioRefVideoMode('uploaded'); fetchUploadedVideos(); }}>Uploaded</button>
                     </div>
 
                     {studioRefVideoMode === 'upload' && (
                       <div className="form-group">
-                        <label>{t('studioRefVideo')}</label>
                         <div className="upload-area">
                           <input type="file" accept="video/*" onChange={studioHandleRefVideoUpload} />
                           <p>{t('dropVideo')}</p>
@@ -4988,10 +5016,48 @@ function App() {
                       </div>
                     )}
 
+                    {studioRefVideoMode === 'uploaded' && (
+                      <div className="form-group">
+                        {studioUploadedVideosLoading ? (
+                          <p style={{ textAlign: 'center', color: '#888' }}>Loading...</p>
+                        ) : studioUploadedVideos.length === 0 ? (
+                          <p style={{ textAlign: 'center', color: '#888' }}>No uploaded videos found</p>
+                        ) : (
+                          <div className="uploaded-videos-grid" style={{
+                            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                            gap: 8, maxHeight: 400, overflowY: 'auto', padding: 4,
+                          }}>
+                            {studioUploadedVideos.map(v => (
+                              <div key={v.filename}
+                                className={`uploaded-video-item${studioRefVideoPath === v.path ? ' selected' : ''}`}
+                                style={{
+                                  border: studioRefVideoPath === v.path ? '2px solid #7c5cff' : '2px solid transparent',
+                                  borderRadius: 8, cursor: 'pointer', padding: 4, background: '#1a1a2e',
+                                  textAlign: 'center', transition: 'border-color 0.2s',
+                                }}
+                                onClick={() => {
+                                  setStudioRefVideoPath(v.path);
+                                  setStudioRefVideoPreview(v.url);
+                                }}>
+                                <video src={v.url} muted preload="metadata"
+                                  style={{ width: '100%', borderRadius: 6, aspectRatio: '9/16', objectFit: 'cover' }}
+                                  onMouseEnter={e => { try { e.target.currentTime = 0; e.target.play(); } catch {} }}
+                                  onMouseLeave={e => { try { e.target.pause(); } catch {} }} />
+                                <div style={{ fontSize: 10, color: '#aaa', marginTop: 4, overflow: 'hidden',
+                                  textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {(v.size / 1024 / 1024).toFixed(1)}MB
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {studioRefVideoPreview && (
                       <div className="video-editor-card" style={{ marginTop: 8 }}>
                         <video ref={dsVideoRef} controls src={studioRefVideoPreview}
-                          style={{ width: '50%', borderRadius: 8, display: 'block', margin: '0 auto' }}
+                          style={{ width: '60%', borderRadius: 8, display: 'block', margin: '0 auto' }}
                           onLoadedMetadata={handleDsVideoMeta}
                           onTimeUpdate={handleDsVideoTimeUpdate} />
                         {dsVideoDuration > 0 && (
@@ -5057,12 +5123,8 @@ function App() {
                         )}
                       </div>
                     )}
-
                   </div>
-                </div>
 
-                {/* Right Column - YouTube Settings & Output */}
-                <div className="column">
                   {/* YouTube Shorts Settings */}
                   <div className="card yt-meta-card">
                     <h3>{t('studioYtSettings')}</h3>

@@ -2992,7 +2992,7 @@ def ensure_comfyui_running(gpu_id: int = 0):
     comfyui_log = open(inst["log"], "w")
     env = os.environ.copy()
     cuda_device = inst.get("cuda_device", "0")
-    cmd = [sys.executable, str(COMFYUI_DIR / "main.py"),
+    cmd = [sys.executable, "-u", str(COMFYUI_DIR / "main.py"),
            "--listen", "0.0.0.0", "--port", inst["port"],
            "--disable-auto-launch", "--preview-method", "none",
            "--cuda-device", cuda_device]
@@ -3583,15 +3583,17 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             }
             # Add resize node to ensure exact target dimensions (720x1280)
             # This prevents stretching from VHS_LoadVideo's internal resizing
+            # Fixed inputs for ImageResizeKJv2 (was missing required inputs)
             workflow["301"] = {
                 "class_type": "ImageResizeKJv2",
                 "inputs": {
                     "width": target_w,
                     "height": target_h,
-                    "interpolation": "lanczos",
-                    "method": "fill / crop",  # Center crop to exact size
-                    "condition": "always",
-                    "multiple_of": 0,
+                    "upscale_method": "lanczos",
+                    "keep_proportion": "crop", # Use 'crop' to fill and cut center
+                    "divisible_by": 0,
+                    "crop_position": "center",
+                    "pad_color": "0, 0, 0",
                     "image": ["300", 0],
                 },
             }
@@ -3608,6 +3610,14 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             if "15" in workflow:
                 workflow["15"]["inputs"]["image"] = ["303", 0]
                 logging.info(f"Camera motion background applied (loaded at original size, resized to {target_w}x{target_h}, trimmed to dance frames): {bg_motion_video}")
+            
+            # Increase mask expansion to prevent background from covering character extremities
+            if "13" in workflow:
+                # Default is 35, increase to 30 to ensure full coverage
+                current_expand = workflow["13"]["inputs"].get("expand", 35)
+                workflow["13"]["inputs"]["expand"] = 30
+                logging.info(f"Increased mask expansion from {current_expand} to 30 to prevent background overlap")
+                
         elif bg_image:
             # No camera motion: use static image repeated
             # For static backgrounds, use original image without outpainting to avoid stretching
@@ -3623,10 +3633,11 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 "inputs": {
                     "width": target_w,
                     "height": target_h,
-                    "interpolation": "lanczos",
-                    "method": "fill / crop",
-                    "condition": "always",
-                    "multiple_of": 0,
+                    "upscale_method": "lanczos",
+                    "keep_proportion": "crop", # Fill and crop center
+                    "divisible_by": 0,
+                    "crop_position": "center",
+                    "pad_color": "0, 0, 0",
                     "image": ["300", 0],
                 },
             }
@@ -3643,6 +3654,18 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             if "15" in workflow:
                 workflow["15"]["inputs"]["image"] = ["302", 0]
                 logging.info(f"Custom background image applied (resized to {target_w}x{target_h}): {bg_image_to_use}")
+
+        # Increase mask expansion if custom background is used (motion or static)
+        # This prevents the background from covering character extremities due to mask shrinkage
+        if bg_image and "13" in workflow:
+            # Default is 35, increase to 30 to minimize black artifacts while preventing overlap
+            current_expand = workflow["13"]["inputs"].get("expand", 35)
+            workflow["13"]["inputs"]["expand"] = 30
+            logging.info(f"Set mask expansion from {current_expand} to 30")
+            
+            # BlockifyMask (node 14) is kept active to smooth mask boundaries and remove small noise artifacts
+            # Previously bypassed, but restored to fix "black square" artifacts around hands
+
 
         # Auto-analyze background lighting with Gemini if no manual bg_prompt
         if bg_image and not bg_prompt:
@@ -4413,9 +4436,44 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
         raise HTTPException(503, f"Workflow API JSON not found: {wf_config['api_json']}")
 
     results = []
+    skipped = 0
     with server_queue_lock:
+        # Build set of active client_item_ids (queued or processing) for dedup
+        active_client_ids = set()
+        for entry in server_queue.values():
+            cid = entry.get("client_item_id", "")
+            if cid:
+                active_client_ids.add(cid)
+        for tid, st in generation_status.items():
+            if st.get("status") in ("queued", "processing"):
+                cid = st.get("client_item_id", "")
+                if cid:
+                    active_client_ids.add(cid)
+
         for item_data in request.items:
             item = QueueBatchItem(**item_data) if isinstance(item_data, dict) else item_data
+
+            # Skip duplicate: same client_item_id already queued or processing
+            if item.client_item_id and item.client_item_id in active_client_ids:
+                skipped += 1
+                # Return existing task_id so frontend can track it
+                existing_tid = None
+                for tid, entry in server_queue.items():
+                    if entry.get("client_item_id") == item.client_item_id:
+                        existing_tid = tid
+                        break
+                if not existing_tid:
+                    for tid, st in generation_status.items():
+                        if st.get("client_item_id") == item.client_item_id and st.get("status") in ("queued", "processing"):
+                            existing_tid = tid
+                            break
+                results.append({
+                    "task_id": existing_tid or "",
+                    "client_item_id": item.client_item_id,
+                    "duplicate": True,
+                })
+                continue
+
             task_id = str(uuid.uuid4())
 
             params = {
@@ -4456,6 +4514,7 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
                 "output_path": None,
                 "workflow_id": request.workflow_id,
                 "video_duration": video_duration,
+                "client_item_id": item.client_item_id,
             }
 
             server_queue[task_id] = {
@@ -4464,6 +4523,8 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
                 "client_item_id": item.client_item_id,
                 "submitted_at": datetime.datetime.now().isoformat(),
             }
+
+            active_client_ids.add(item.client_item_id)
 
             results.append({
                 "task_id": task_id,
@@ -4481,7 +4542,8 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
 
     for evt in queue_worker_events:
         evt.set()
-    logging.info(f"Batch queue: {len(results)} items submitted for {request.workflow_id}")
+    new_count = len(results) - skipped
+    logging.info(f"Batch queue: {new_count} new + {skipped} duplicates skipped for {request.workflow_id}")
     return {"tasks": results}
 
 
@@ -4500,9 +4562,43 @@ async def add_queue_item(request: QueueBatchRequest, user=Depends(get_current_us
         raise HTTPException(400, "No items provided")
 
     results = []
+    skipped = 0
     with server_queue_lock:
+        # Build set of active client_item_ids for dedup
+        active_client_ids = set()
+        for entry in server_queue.values():
+            cid = entry.get("client_item_id", "")
+            if cid:
+                active_client_ids.add(cid)
+        for tid, st in generation_status.items():
+            if st.get("status") in ("queued", "processing"):
+                cid = st.get("client_item_id", "")
+                if cid:
+                    active_client_ids.add(cid)
+
         for item_data in request.items:
             item = QueueBatchItem(**item_data) if isinstance(item_data, dict) else item_data
+
+            # Skip duplicate
+            if item.client_item_id and item.client_item_id in active_client_ids:
+                skipped += 1
+                existing_tid = None
+                for tid, entry in server_queue.items():
+                    if entry.get("client_item_id") == item.client_item_id:
+                        existing_tid = tid
+                        break
+                if not existing_tid:
+                    for tid, st in generation_status.items():
+                        if st.get("client_item_id") == item.client_item_id and st.get("status") in ("queued", "processing"):
+                            existing_tid = tid
+                            break
+                results.append({
+                    "task_id": existing_tid or "",
+                    "client_item_id": item.client_item_id,
+                    "duplicate": True,
+                })
+                continue
+
             task_id = str(uuid.uuid4())
 
             params = {
@@ -4543,6 +4639,7 @@ async def add_queue_item(request: QueueBatchRequest, user=Depends(get_current_us
                 "output_path": None,
                 "workflow_id": request.workflow_id,
                 "video_duration": video_duration,
+                "client_item_id": item.client_item_id,
             }
 
             server_queue[task_id] = {
@@ -4551,6 +4648,8 @@ async def add_queue_item(request: QueueBatchRequest, user=Depends(get_current_us
                 "client_item_id": item.client_item_id,
                 "submitted_at": datetime.datetime.now().isoformat(),
             }
+
+            active_client_ids.add(item.client_item_id)
 
             results.append({
                 "task_id": task_id,
@@ -4568,9 +4667,10 @@ async def add_queue_item(request: QueueBatchRequest, user=Depends(get_current_us
 
     for evt in queue_worker_events:
         evt.set()
-    
-    logging.info(f"Added {len(results)} item(s) to queue for {request.workflow_id}")
-    return {"tasks": results, "added": len(results)}
+
+    new_count = len(results) - skipped
+    logging.info(f"Add-item: {new_count} new + {skipped} duplicates skipped for {request.workflow_id}")
+    return {"tasks": results, "added": new_count}
 
 
 @app.get("/api/queue/status")

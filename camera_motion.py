@@ -65,12 +65,26 @@ def _estimate_homographies(video_path: str, max_frames: int = 0,
     # Frame sampling to match force_rate (ComfyUI resamples to 16fps)
     step = max(1, round(orig_fps / force_rate))
 
-    # Create mask to exclude center person area (keep edges for camera motion)
-    bg_mask = np.ones((h, w), dtype=np.uint8) * 255
+    # Create masks for feature detection
+    
+    # 1. Floor-focused mask (Primary strategy: track ground plane & background)
+    # Good for full-body dance videos to prevent sliding feet
+    floor_mask = np.ones((h, w), dtype=np.uint8) * 255
+    x1_f = int(w * 0.30)
+    x2_f = int(w * 0.70)
+    y1_f = int(h * 0.15)
+    y2_f = int(h * 0.85) # Exclude down to 85%, leaving bottom 15% for floor
+    floor_mask[y1_f:y2_f, x1_f:x2_f] = 0
+    
+    # 2. Fallback mask (Secondary strategy: track general background)
+    # Good for upper-body videos where floor is not visible or has no features
+    fallback_mask = np.ones((h, w), dtype=np.uint8) * 255
     cx, cy = w // 2, h // 2
     margin_x = int(w * 0.20)
     margin_y = int(h * 0.15)
-    bg_mask[cy - margin_y:cy + margin_y, cx - margin_x:cx + margin_x] = 0
+    fallback_mask[cy - margin_y:cy + margin_y, cx - margin_x:cx + margin_x] = 0
+    
+    logging.info("CameraMotion: Initialized floor mask and fallback mask")
 
     orb = cv2.ORB_create(nfeatures=2000)
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
@@ -78,6 +92,10 @@ def _estimate_homographies(video_path: str, max_frames: int = 0,
     homographies = [np.eye(3, dtype=np.float64)]  # Frame 0 = identity
     cumulative_H = np.eye(3, dtype=np.float64)
     rejected = 0
+    
+    # Track mask strategy usage
+    used_floor_mask = 0
+    used_fallback_mask = 0
 
     ret, prev_frame = cap.read()
     if not ret:
@@ -99,9 +117,19 @@ def _estimate_homographies(video_path: str, max_frames: int = 0,
 
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Detect ORB features in background regions only
-        kp1, des1 = orb.detectAndCompute(prev_gray, bg_mask)
-        kp2, des2 = orb.detectAndCompute(curr_gray, bg_mask)
+        # Strategy 1: Try floor mask first
+        kp1, des1 = orb.detectAndCompute(prev_gray, floor_mask)
+        kp2, des2 = orb.detectAndCompute(curr_gray, floor_mask)
+        
+        # Check if we have enough features on the floor/background
+        min_features = 30
+        if des1 is None or des2 is None or len(kp1) < min_features or len(kp2) < min_features:
+            # Strategy 2: Fallback to general background mask
+            kp1, des1 = orb.detectAndCompute(prev_gray, fallback_mask)
+            kp2, des2 = orb.detectAndCompute(curr_gray, fallback_mask)
+            used_fallback_mask += 1
+        else:
+            used_floor_mask += 1
 
         if des1 is None or des2 is None or len(kp1) < 10 or len(kp2) < 10:
             homographies.append(cumulative_H.copy())
@@ -173,7 +201,8 @@ def _estimate_homographies(video_path: str, max_frames: int = 0,
     cap.release()
     logging.info(f"CameraMotion: Extracted {len(homographies)} transforms "
                  f"from {frame_idx + 1} frames (step={step}, "
-                 f"rejected={rejected}, max_drift={max_translation_px:.0f}px)")
+                 f"rejected={rejected}, max_drift={max_translation_px:.0f}px). "
+                 f"Mask usage: Floor={used_floor_mask}, Fallback={used_fallback_mask}")
     return homographies
 
 
@@ -648,14 +677,6 @@ def _outpaint_with_padding_v2(bg_original: np.ndarray, final_w: int, final_h: in
         return ""
 
 
-# Placeholder for other functions that might be in the original file
-def extract_camera_motion(*args, **kwargs):
-    """Placeholder - implement actual camera motion extraction"""
-    pass
-
-def warp_background_video(*args, **kwargs):
-    """Placeholder - implement actual background warping"""
-    pass
 def warp_background_video(bg_image_path: str, video_path: str,
                           output_path: str, force_rate: int = 16,
                           scale_factor: float = 1.6,
@@ -836,15 +857,12 @@ def warp_background_video(bg_image_path: str, video_path: str,
         H = homographies[i]
 
         # Apply: first offset to scaled image center, then apply camera motion
-        # We apply INVERSE of the camera motion to the background,
-        # so the background moves opposite to the camera (creating the illusion
-        # that the camera is panning over the background)
-        try:
-            H_inv = np.linalg.inv(H)
-        except np.linalg.LinAlgError:
-            H_inv = np.eye(3)
-
-        warp_H = T_center @ H_inv
+        # H maps frame-0 coords → frame-i coords (how features moved in image).
+        # warpPerspective internally uses M^{-1} to find source pixels, so by
+        # passing H directly the inversion inside OpenCV correctly reverses the
+        # feature displacement, shifting the viewport in the camera's direction
+        # (right when camera pans right, zoom-in when camera zooms in, etc.).
+        warp_H = T_center @ H
 
         warped = cv2.warpPerspective(
             bg_scaled, warp_H, (target_w, target_h),

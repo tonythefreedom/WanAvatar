@@ -235,6 +235,171 @@ def _smooth_homographies(homographies: list, window: int = 5) -> list:
     return smoothed
 
 
+# ---------------------------------------------------------------------------
+# Dancer position tracking (MediaPipe Pose)
+# ---------------------------------------------------------------------------
+
+_POSE_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "models", "pose_landmarker_lite.task")
+
+# MediaPipe Pose landmark indices
+_LEFT_ANKLE = 27
+_RIGHT_ANKLE = 28
+_LEFT_HIP = 23
+_RIGHT_HIP = 24
+_VISIBILITY_THRESHOLD = 0.5
+
+
+def _get_dancer_center_x(result) -> float | None:
+    """Extract dancer's center X (normalized 0-1) from PoseLandmarkerResult.
+
+    Primary: midpoint of left/right ankles.
+    Fallback: midpoint of left/right hips.
+    Returns None if no pose detected or landmarks below visibility threshold.
+    """
+    if not result.pose_landmarks or len(result.pose_landmarks) == 0:
+        return None
+
+    lm = result.pose_landmarks[0]
+
+    la, ra = lm[_LEFT_ANKLE], lm[_RIGHT_ANKLE]
+    if la.visibility >= _VISIBILITY_THRESHOLD and ra.visibility >= _VISIBILITY_THRESHOLD:
+        return (la.x + ra.x) / 2.0
+
+    lh, rh = lm[_LEFT_HIP], lm[_RIGHT_HIP]
+    if lh.visibility >= _VISIBILITY_THRESHOLD and rh.visibility >= _VISIBILITY_THRESHOLD:
+        return (lh.x + rh.x) / 2.0
+
+    for landmark in [la, ra, lh, rh]:
+        if landmark.visibility >= _VISIBILITY_THRESHOLD:
+            return landmark.x
+
+    return None
+
+
+def _interpolate_gaps(positions: list) -> list:
+    """Fill None values via linear interpolation; edge Nones use nearest valid."""
+    n = len(positions)
+    if n == 0:
+        return []
+    result = list(positions)
+    valid = [i for i, p in enumerate(result) if p is not None]
+    if not valid:
+        return [0.5] * n
+
+    for i in range(valid[0]):
+        result[i] = result[valid[0]]
+    for i in range(valid[-1] + 1, n):
+        result[i] = result[valid[-1]]
+
+    for idx in range(len(valid) - 1):
+        a, b = valid[idx], valid[idx + 1]
+        if b - a > 1:
+            for k in range(a + 1, b):
+                t = (k - a) / (b - a)
+                result[k] = result[a] * (1 - t) + result[b] * t
+    return result
+
+
+def _smooth_dancer_positions(positions: list, window: int = 7) -> list:
+    """Moving average smoothing for dancer positions."""
+    if len(positions) < 2:
+        return positions
+    half = window // 2
+    smoothed = []
+    for i in range(len(positions)):
+        start = max(0, i - half)
+        end = min(len(positions), i + half + 1)
+        smoothed.append(float(np.mean(positions[start:end])))
+    return smoothed
+
+
+def _extract_dancer_positions(video_path: str, force_rate: int = 16,
+                              max_frames: int = 0,
+                              smooth_window: int = 7) -> list:
+    """Extract dancer's horizontal center position (normalized 0-1) per sampled frame.
+
+    Uses MediaPipe Pose Landmarker to detect ankle positions and compute
+    the midpoint X coordinate.  Falls back to hip midpoint when ankles are
+    not visible.
+
+    Returns:
+        List of normalized X positions (0.0=left, 1.0=right), one per
+        sampled frame.  Empty list on failure.
+    """
+    if not os.path.exists(_POSE_MODEL_PATH):
+        logging.warning(f"DancerTrack: Pose model not found: {_POSE_MODEL_PATH}")
+        return []
+
+    try:
+        import mediapipe as mp
+        from mediapipe.tasks.python import vision
+        from mediapipe.tasks.python import BaseOptions
+    except ImportError:
+        logging.warning("DancerTrack: mediapipe not installed")
+        return []
+
+    cap = cv2.VideoCapture(video_path)
+    orig_fps = cap.get(cv2.CAP_PROP_FPS)
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if orig_fps <= 0 or total <= 0:
+        cap.release()
+        return []
+
+    step = max(1, round(orig_fps / force_rate))
+
+    options = vision.PoseLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=_POSE_MODEL_PATH),
+        running_mode=vision.RunningMode.VIDEO,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
+        min_tracking_confidence=0.3,
+    )
+    landmarker = vision.PoseLandmarker.create_from_options(options)
+
+    raw: list[float | None] = []
+    frame_idx = 0
+
+    ret, frame = cap.read()
+    if not ret:
+        cap.release()
+        landmarker.close()
+        return []
+
+    # Frame 0
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    ts = int(frame_idx * 1000 / orig_fps)
+    raw.append(_get_dancer_center_x(landmarker.detect_for_video(mp_img, timestamp_ms=ts)))
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_idx += 1
+        if frame_idx % step != 0:
+            continue
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        ts = int(frame_idx * 1000 / orig_fps)
+        raw.append(_get_dancer_center_x(landmarker.detect_for_video(mp_img, timestamp_ms=ts)))
+
+        if max_frames > 0 and len(raw) >= max_frames:
+            break
+
+    cap.release()
+    landmarker.close()
+
+    detected = sum(1 for p in raw if p is not None)
+    positions = _interpolate_gaps(raw)
+    positions = _smooth_dancer_positions(positions, window=smooth_window)
+
+    logging.info(f"DancerTrack: {len(positions)} frames, {detected}/{len(raw)} detected, step={step}")
+    return positions
+
+
 def outpaint_background(bg_image_path: str, target_width: int, target_height: int,
                         scale_factor: float = 1.6, cache_dir: str = "/tmp/bg_outpaint_cache") -> str:
     """
@@ -759,13 +924,32 @@ def warp_background_video(bg_image_path: str, video_path: str,
     # Smooth to reduce jitter
     homographies = _smooth_homographies(homographies, window=7)
 
+    # Step 1b: Extract dancer horizontal positions for platform alignment
+    dancer_positions = _extract_dancer_positions(
+        video_path, force_rate=force_rate,
+        max_frames=expected_frames, smooth_window=7)
+    use_dancer_tracking = len(dancer_positions) >= 2
+    if use_dancer_tracking:
+        while len(dancer_positions) < expected_frames:
+            dancer_positions.append(dancer_positions[-1])
+        ref_dancer_x = dancer_positions[0]
+        dancer_range_px = (max(dancer_positions) - min(dancer_positions)) * vid_w
+        logging.info(f"DancerTrack: Enabled. ref_x={ref_dancer_x:.3f}, "
+                     f"range={dancer_range_px:.0f}px")
+    else:
+        dancer_range_px = 0
+        logging.info("DancerTrack: Disabled (no pose data). Using camera motion pan.")
+
     # Step 2: Prepare background image with outpainting for better quality
     target_w, target_h = vid_w, vid_h
-    
+
     # Dynamically adjust scale_factor to ensure camera motion fits within margins
     # Required margin = max_motion + safety buffer (20%)
     required_margin_x = max_tx * 1.2
     required_margin_y = max_ty * 1.2
+    # Also account for dancer horizontal range if tracking is active
+    if use_dancer_tracking:
+        required_margin_x = max(required_margin_x, dancer_range_px / 2 * 1.2)
 
     # Calculate minimum scale_factor needed
     # margin_x = (needed_w - target_w) / 2 >= required_margin_x
@@ -856,19 +1040,17 @@ def warp_background_video(bg_image_path: str, video_path: str,
     for i in range(expected_frames):
         H = homographies[i]
 
-        # Extract only PAN (translation) from H, discard zoom/scale.
-        # The AI model handles character zoom independently via pose estimation,
-        # so applying zoom to the background creates a mismatch regardless of
-        # direction.  Only pan (viewport translation) needs to match.
-        #
-        # Method: map frame center through H to get pure pan displacement.
-        # A zoom centered at the frame center leaves the center point fixed,
-        # so the displacement equals the pure pan component.
+        # Vertical pan: always from camera motion
         cx, cy = target_w / 2.0, target_h / 2.0
         mapped = H @ np.array([cx, cy, 1.0])
         mapped /= mapped[2]
-        pan_dx = mapped[0] - cx
         pan_dy = mapped[1] - cy
+
+        # Horizontal pan: dancer tracking (platform follows feet) or camera motion fallback
+        if use_dancer_tracking:
+            pan_dx = (dancer_positions[i] - ref_dancer_x) * target_w
+        else:
+            pan_dx = mapped[0] - cx
 
         warp_H = np.array([
             [1, 0, -offset_x + pan_dx],

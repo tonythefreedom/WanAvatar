@@ -1040,11 +1040,12 @@ def warp_background_video(bg_image_path: str, video_path: str,
     for i in range(expected_frames):
         H = homographies[i]
 
-        # Vertical pan: always from camera motion
+        # Vertical pan: disabled — dance videos have no meaningful Y-axis camera motion.
+        # Any detected Y movement is noise from dancer motion being misread as camera pan.
         cx, cy = target_w / 2.0, target_h / 2.0
         mapped = H @ np.array([cx, cy, 1.0])
         mapped /= mapped[2]
-        pan_dy = mapped[1] - cy
+        pan_dy = 0.0
 
         # Horizontal pan: dancer tracking (platform follows feet) or camera motion fallback
         if use_dancer_tracking:

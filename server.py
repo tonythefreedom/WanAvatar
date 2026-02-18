@@ -127,6 +127,9 @@ WORKFLOW_REGISTRY = {
             {"key": "ref_image", "type": "image", "node_id": "91", "field": "inputs.image",
              "upload_to_comfyui": True, "required": True, "avatar_gallery": True,
              "label": {"en": "Reference Image (Character)", "ko": "참조 이미지 (캐릭터)", "zh": "参考图片（角色）"}},
+            {"key": "ref_image_back", "type": "image", "node_id": "__custom_ref_back__",
+             "upload_to_comfyui": True, "required": False,
+             "label": {"en": "Back View (Optional)", "ko": "뒷모습 (선택)", "zh": "背面参考（可选）"}},
             {"key": "ref_video", "type": "video", "node_id": "114", "field": "inputs.video",
              "upload_to_comfyui": True, "required": True, "allow_youtube": True,
              "label": {"en": "Reference Video (Motion)", "ko": "참조 비디오 (모션)", "zh": "参考视频（动作）"}},
@@ -744,6 +747,17 @@ async def on_startup():
     await init_db()
     await migrate_existing_files()
     await sync_background_files()
+    # Migrate existing avatars: add view="front" to metadata if missing
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        await db.execute("""
+            UPDATE user_files
+            SET metadata = json_set(metadata, '$.view', 'front')
+            WHERE file_type = 'avatar'
+              AND metadata IS NOT NULL
+              AND json_extract(metadata, '$.view') IS NULL
+        """)
+        await db.commit()
+    logging.info("Avatar view migration complete")
 
 
 # --- JWT helpers ---
@@ -2094,11 +2108,16 @@ async def list_avatar_images(group: str, user=Depends(get_current_user)):
     for r in rows:
         fp = Path(r["file_path"])
         if fp.exists():
-            images.append({
+            metadata = _json.loads(r.get("metadata", "{}") or "{}")
+            entry = {
                 "filename": r["filename"],
                 "url": f"/avatars/{group}/{r['filename']}",
                 "path": r["file_path"],
-            })
+                "view": metadata.get("view", "front"),
+            }
+            if metadata.get("pair_with"):
+                entry["pair_with"] = metadata["pair_with"]
+            images.append(entry)
     return {"images": images, "group": group}
 
 
@@ -2186,6 +2205,10 @@ async def register_avatar(request: Request, user=Depends(get_current_user)):
     data = await request.json()
     source_path = data.get("source_path", "").strip()
     group = data.get("group", "").strip()
+    view = data.get("view", "front").strip()
+    if view not in ("front", "back"):
+        view = "front"
+    pair_with = data.get("pair_with", "").strip()  # front filename this back is paired with
     if not source_path or not group:
         raise HTTPException(400, "source_path and group are required")
 
@@ -2229,7 +2252,7 @@ async def register_avatar(request: Request, user=Depends(get_current_user)):
     avatar_dir = AVATARS_DIR / group
     avatar_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    avatar_fn = f"avatar_{ts}.png"
+    avatar_fn = f"avatar_{ts}_{view}.png"
     avatar_fp = avatar_dir / avatar_fn
     if img is not None:
         _cv2.imwrite(str(avatar_fp), img)
@@ -2237,8 +2260,11 @@ async def register_avatar(request: Request, user=Depends(get_current_user)):
         shutil.copy2(str(src), str(avatar_fp))
 
     # Register in DB
+    meta = {"group": group, "view": view}
+    if view == "back" and pair_with:
+        meta["pair_with"] = pair_with
     await record_user_file(user["id"], "avatar", avatar_fn, str(avatar_fp),
-                           src.name, _json.dumps({"group": group}))
+                           src.name, _json.dumps(meta))
 
     logging.info(f"Registered avatar: {group}/{avatar_fn} from {source_path} (user={user['id']})")
     return {
@@ -3012,6 +3038,77 @@ def ensure_comfyui_running(gpu_id: int = 0):
     raise Exception(f"ComfyUI (port {inst['port']}) failed to start within 3 minutes")
 
 
+def _detect_upper_body_only(video_path: str) -> tuple:
+    """Detect if a reference video shows only upper body (no legs visible).
+
+    Uses MediaPipe Pose Landmarker to check ankle visibility on the first frame.
+    Returns (is_upper_body, lowest_y) where lowest_y is the normalized y of the
+    lowest visible landmark (0.0=top, 1.0=bottom).
+    """
+    import cv2
+    import mediapipe as mp
+
+    _POSE_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "pose_landmarker_lite.task")
+    if not os.path.exists(_POSE_MODEL):
+        logging.warning("_detect_upper_body_only: pose model not found → assume upper body")
+        return (True, 0.55)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logging.warning(f"_detect_upper_body_only: cannot open video {video_path} → assume upper body")
+        return (True, 0.55)
+
+    ret, frame = cap.read()
+    cap.release()
+    if not ret or frame is None:
+        return (True, 0.55)
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+    options = mp.tasks.vision.PoseLandmarkerOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=_POSE_MODEL),
+        running_mode=mp.tasks.vision.RunningMode.IMAGE,
+        num_poses=1,
+    )
+
+    try:
+        with mp.tasks.vision.PoseLandmarker.create_from_options(options) as landmarker:
+            result = landmarker.detect(mp_image)
+    except Exception as e:
+        logging.warning(f"_detect_upper_body_only: pose detection failed: {e} → assume upper body")
+        return (True, 0.55)
+
+    if not result.pose_landmarks or len(result.pose_landmarks) == 0:
+        logging.info("_detect_upper_body_only: no pose detected → assume upper body")
+        return (True, 0.55)
+
+    landmarks = result.pose_landmarks[0]
+
+    # Check ankle visibility (landmarks 27=left_ankle, 28=right_ankle)
+    LEFT_ANKLE, RIGHT_ANKLE = 27, 28
+    VISIBILITY_THRESHOLD = 0.3
+
+    left_vis = landmarks[LEFT_ANKLE].visibility if LEFT_ANKLE < len(landmarks) else 0
+    right_vis = landmarks[RIGHT_ANKLE].visibility if RIGHT_ANKLE < len(landmarks) else 0
+
+    if left_vis >= VISIBILITY_THRESHOLD or right_vis >= VISIBILITY_THRESHOLD:
+        logging.info(f"_detect_upper_body_only: ankles visible (L={left_vis:.2f}, R={right_vis:.2f}) → full body")
+        return (False, 1.0)
+
+    # Upper body only — find the lowest visible landmark
+    lowest_y = 0.0
+    for lm in landmarks:
+        if lm.visibility >= VISIBILITY_THRESHOLD and lm.y > lowest_y:
+            lowest_y = lm.y
+
+    # Add small margin below the lowest visible point
+    lowest_y = min(lowest_y + 0.05, 1.0)
+
+    logging.info(f"_detect_upper_body_only: upper body only detected (ankles L={left_vis:.2f}, R={right_vis:.2f}), lowest_y={lowest_y:.2f}")
+    return (True, lowest_y)
+
+
 def crop_face_head(image_path: str, padding_ratio: float = 2.5) -> str:
     """Smart crop for BFS face swap: portrait-style head+shoulders framing.
 
@@ -3664,6 +3761,49 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             # BlockifyMask (node 14) is kept active to smooth mask boundaries and remove small noise artifacts
             # Previously bypassed, but restored to fix "black square" artifacts around hands
 
+        # Detect upper-body-only reference videos and extend character mask to
+        # frame bottom so WanVideo generates full body instead of cutting off.
+        # IMPORTANT: Only rewire node 60 (character_mask for WanVideo generation).
+        # Do NOT rewire node 15 (DrawMaskOnImage for background compositing),
+        # otherwise the background gets blacked out in the extended area.
+        ref_video_path = user_inputs.get("ref_video", "")
+        if ref_video_path and not os.path.isabs(ref_video_path):
+            for search_dir in [Path(__file__).parent / "uploads", Path(COMFYUI_DIR) / "input"]:
+                candidate = search_dir / ref_video_path
+                if candidate.exists():
+                    ref_video_path = str(candidate)
+                    break
+            else:
+                ref_video_path = str(Path(ref_video_path).resolve())
+        if ref_video_path and os.path.exists(ref_video_path):
+            is_upper_body, lowest_y = _detect_upper_body_only(ref_video_path)
+            if is_upper_body and "14" in workflow:
+                extension_height = target_h - int(lowest_y * target_h)
+                if extension_height > 0:
+                    workflow["310"] = {
+                        "class_type": "SolidMask",
+                        "inputs": {
+                            "value": 1.0,
+                            "width": target_w,
+                            "height": extension_height,
+                        },
+                    }
+                    workflow["311"] = {
+                        "class_type": "MaskComposite",
+                        "inputs": {
+                            "destination": ["14", 0],
+                            "source": ["310", 0],
+                            "x": 0,
+                            "y": target_h - extension_height,
+                            "operation": "add",
+                        },
+                    }
+                    # Only rewire character_mask (node 60), NOT DrawMaskOnImage (node 15)
+                    if "60" in workflow:
+                        workflow["60"]["inputs"]["MASK"] = ["311", 0]
+                    logging.info(f"Upper-body detected: character mask extended by {extension_height}px (lowest_y={lowest_y:.2f})")
+            else:
+                logging.info(f"Full body confirmed: no mask extension needed")
 
         # Auto-analyze background lighting with Gemini if no manual bg_prompt
         if bg_image and not bg_prompt:
@@ -3680,6 +3820,64 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
             current = workflow["209"]["inputs"].get("positive_prompt", "")
             workflow["209"]["inputs"]["positive_prompt"] = f"{bg_prompt}. {current}"
             logging.info(f"Background prompt prepended: {bg_prompt}")
+
+        # Enhance hand/finger quality in prompts
+        if "209" in workflow:
+            # Append hand detail descriptors to positive prompt (sentence-style for Wan 2.2)
+            hand_positive = (
+                "The character has well-defined hands with five distinct fingers on each hand, "
+                "realistic finger joints and natural hand movements, detailed fingernails and skin texture"
+            )
+            current_pos = workflow["209"]["inputs"].get("positive_prompt", "")
+            workflow["209"]["inputs"]["positive_prompt"] = f"{current_pos}, {hand_positive}"
+
+            # Enhance negative prompt with hand deformation prevention
+            hand_negative = (
+                "extra fingers, missing fingers, too many fingers, fused fingers, mutated hands, "
+                "deformed fingers, malformed hands, broken fingers, webbed fingers, claws, "
+                "poorly drawn hands, bad hand anatomy, blurry fingers, disfigured hands, "
+                "six fingers, four fingers, extra limbs, "
+                "deformed arms, twisted arms, extra arms, malformed limbs, broken limbs, "
+                "unnatural arm position, distorted body proportions, asymmetric body, "
+                "deformed torso, broken anatomy, bad anatomy, wrong anatomy"
+            )
+            current_neg = workflow["209"]["inputs"].get("negative_prompt", "")
+            if current_neg:
+                workflow["209"]["inputs"]["negative_prompt"] = f"{current_neg}, {hand_negative}"
+            else:
+                workflow["209"]["inputs"]["negative_prompt"] = hand_negative
+            logging.info("Hand quality prompts injected into positive and negative prompts")
+
+    # --- Back-view reference image: ImageBatch injection ---
+    if workflow_id == "change_character":
+        ref_back = user_inputs.get("ref_image_back", "")
+        if isinstance(ref_back, str):
+            ref_back = ref_back.strip()
+        if ref_back:
+            workflow["320"] = {
+                "class_type": "LoadImage",
+                "inputs": {"image": ref_back, "upload": "image"},
+            }
+            workflow["321"] = {
+                "class_type": "LayerUtility: ImageScaleByAspectRatio V2",
+                "inputs": {
+                    "aspect_ratio": "original", "proportional_width": 1,
+                    "proportional_height": 1, "fit": "letterbox", "method": "lanczos",
+                    "round_to_multiple": "16", "scale_to_side": "longest",
+                    "scale_to_length": 1536, "background_color": "#000000",
+                    "image": ["320", 0],
+                },
+            }
+            workflow["322"] = {
+                "class_type": "ImageBatch",
+                "inputs": {
+                    "image1": ["144", 0],
+                    "image2": ["321", 0],
+                },
+            }
+            if "218" in workflow:
+                workflow["218"]["inputs"]["ref_images"] = ["322", 0]
+            logging.info(f"Back-view reference injected via ImageBatch: {ref_back}")
 
     # --- Fashion Change: seed randomization + optional clothing ref ---
     if workflow_id == "fashion_change":
@@ -4472,7 +4670,8 @@ async def submit_batch_queue(request: QueueBatchRequest, user=Depends(get_curren
                 })
                 continue
 
-            task_id = str(uuid.uuid4())
+            # Use client_item_id as task_id so frontend/backend IDs match
+            task_id = item.client_item_id if item.client_item_id else str(uuid.uuid4())
 
             params = {
                 "workflow_id": request.workflow_id,
@@ -4597,7 +4796,8 @@ async def add_queue_item(request: QueueBatchRequest, user=Depends(get_current_us
                 })
                 continue
 
-            task_id = str(uuid.uuid4())
+            # Use client_item_id as task_id so frontend/backend IDs match
+            task_id = item.client_item_id if item.client_item_id else str(uuid.uuid4())
 
             params = {
                 "workflow_id": request.workflow_id,
@@ -4723,6 +4923,46 @@ async def get_queue_status(user=Depends(get_current_user)):
             }
 
     return {"tasks": result}
+
+
+class QueueReorderRequest(BaseModel):
+    task_ids: list  # ordered list of task_id strings
+
+
+@app.post("/api/queue/reorder")
+async def reorder_queue(request: QueueReorderRequest, user=Depends(get_current_user)):
+    """Reorder queued tasks. Processing tasks stay at front, queued tasks are reordered."""
+    with server_queue_lock:
+        # Separate processing tasks (keep at front) from queued tasks (reorderable)
+        processing = []
+        queued = {}
+        for tid, entry in server_queue.items():
+            status = generation_status.get(tid, {}).get("status")
+            if status == "processing":
+                processing.append((tid, entry))
+            else:
+                queued[tid] = entry
+
+        # Build new order: processing first, then queued in requested order
+        new_queue = collections.OrderedDict()
+        for tid, entry in processing:
+            new_queue[tid] = entry
+
+        reordered = 0
+        for tid in request.task_ids:
+            if tid in queued:
+                new_queue[tid] = queued.pop(tid)
+                reordered += 1
+
+        # Append any remaining queued tasks not in request (safety)
+        for tid, entry in queued.items():
+            new_queue[tid] = entry
+
+        server_queue.clear()
+        server_queue.update(new_queue)
+
+    logging.info(f"Queue reorder: {reordered} tasks reordered by user {user['id']}")
+    return {"reordered": reordered}
 
 
 @app.post("/api/queue/retry-failed")

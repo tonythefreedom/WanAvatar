@@ -945,7 +945,7 @@
   "234": {
     "class_type": "WanVideoSampler",
     "inputs": {
-      "steps": 14,
+      "steps": 20,
       "cfg": 1.0000000000000002,
       "shift": 8.000000000000002,
       "seed": 39397516397036,
@@ -1024,7 +1024,7 @@
       "force_offload": true,
       "frame_window_size": 77,
       "colormatch": "disabled",
-      "pose_strength": 1,
+      "pose_strength": 0.85,
       "face_strength": 1,
       "tiled_vae": true,
       "vae": [
@@ -1070,7 +1070,7 @@
   "260": {
     "class_type": "WanVideoTeaCache",
     "inputs": {
-      "rel_l1_thresh": 0.15,
+      "rel_l1_thresh": 0.08,
       "start_step": 1,
       "end_step": -1,
       "cache_device": "offload_device",

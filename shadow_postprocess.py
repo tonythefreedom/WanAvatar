@@ -2,6 +2,7 @@
 Post-processing: Add projected floor shadow beneath the dancer.
 Uses MediaPipe Selfie Segmentation for fast per-frame person masking,
 then projects a perspective-warped shadow onto the floor.
+Shadow direction and color adapt to the background lighting.
 """
 import os
 import cv2
@@ -32,20 +33,82 @@ def _create_segmentor():
     return segmentor
 
 
+def _analyze_light_source(frame: np.ndarray, mask: np.ndarray) -> tuple:
+    """Analyze background lighting to determine shadow direction and tint color.
+
+    Examines the non-person areas of the frame to find the brightest region
+    (light source) and the dominant floor color.
+
+    Args:
+        frame: BGR frame (H, W, 3), uint8
+        mask: Person mask (H, W), float 0-1
+
+    Returns:
+        (light_offset_x, light_offset_y, shadow_color_bgr)
+        - light_offset_x: horizontal shadow offset ratio (-1.0 to 1.0)
+          negative = shadow goes left, positive = shadow goes right
+        - light_offset_y: vertical offset (usually small, near 0)
+        - shadow_color_bgr: (B, G, R) tuple for shadow tinting (0-255)
+    """
+    h, w = frame.shape[:2]
+    # Create background-only frame (exclude person)
+    bg_mask = (1.0 - mask)
+    bg_mask_u8 = (bg_mask * 255).astype(np.uint8)
+
+    # Convert to grayscale for brightness analysis
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gray_bg = gray * bg_mask  # Only background pixels
+
+    # Divide frame into a 3x3 grid and find brightest region
+    grid_brightness = np.zeros((3, 3), dtype=np.float32)
+    cell_h, cell_w = h // 3, w // 3
+    for gy in range(3):
+        for gx in range(3):
+            y1, y2 = gy * cell_h, (gy + 1) * cell_h
+            x1, x2 = gx * cell_w, (gx + 1) * cell_w
+            cell = gray_bg[y1:y2, x1:x2]
+            cell_mask = bg_mask[y1:y2, x1:x2]
+            valid = cell_mask > 0.5
+            if valid.any():
+                grid_brightness[gy, gx] = np.mean(cell[valid])
+
+    # Find brightest grid cell = light source position
+    bright_idx = np.unravel_index(np.argmax(grid_brightness), grid_brightness.shape)
+    light_gy, light_gx = bright_idx
+
+    # Shadow goes opposite to light source
+    # Light at left (gx=0) → shadow goes right (positive offset)
+    # Light at top (gy=0) → shadow goes down (positive offset, but we keep small)
+    light_offset_x = (1 - light_gx) * 0.15  # ±0.15 max horizontal offset
+    light_offset_y = 0.0  # Keep vertical minimal
+
+    # Sample floor color (bottom 25% of frame, excluding person)
+    floor_region = frame[int(h * 0.75):, :]
+    floor_mask_region = bg_mask[int(h * 0.75):, :]
+    valid_floor = floor_mask_region > 0.5
+    if valid_floor.any():
+        floor_color = np.mean(frame[int(h * 0.75):][valid_floor], axis=0)
+        # Darken the floor color for shadow tinting (30% brightness)
+        shadow_color = (floor_color * 0.3).astype(np.uint8)
+    else:
+        shadow_color = np.array([20, 20, 20], dtype=np.uint8)  # Default dark
+
+    return light_offset_x, light_offset_y, shadow_color
+
+
 def _create_floor_shadow(mask: np.ndarray, frame_h: int, frame_w: int,
-                         shadow_opacity: float = 0.45,
+                         shadow_opacity: float = 0.55,
                          blur_size: int = 51,
-                         squash_factor: float = 0.15,
-                         y_offset_ratio: float = 0.02) -> np.ndarray:
+                         squash_factor: float = 0.22,
+                         y_offset_ratio: float = 0.02,
+                         light_offset_x: float = 0.0,
+                         shadow_color_bgr: tuple = None) -> tuple:
     """
     Create a floor shadow from a person segmentation mask.
 
-    The shadow is created by:
-    1. Finding the person's bottom edge (feet position)
-    2. Squashing the mask vertically (flatten onto floor plane)
-    3. Positioning it at the feet level
-    4. Applying Gaussian blur for soft shadow edges
-    5. Masking out the person area (shadow only on floor)
+    Two-layer approach:
+    1. Contact shadow: sharp, dark, close to feet (ground contact realism)
+    2. Ambient shadow: diffused, wider, lighter (overall shadow presence)
 
     Args:
         mask: Binary person mask (H, W), values 0-1 float
@@ -54,15 +117,19 @@ def _create_floor_shadow(mask: np.ndarray, frame_h: int, frame_w: int,
         blur_size: Gaussian blur kernel size (must be odd)
         squash_factor: How much to squash vertically (0.1=very flat, 0.5=tall)
         y_offset_ratio: Small downward shift as ratio of frame height
+        light_offset_x: Horizontal offset for shadow direction (-1 to 1)
+        shadow_color_bgr: (B, G, R) shadow tint color, or None for black
 
     Returns:
-        Shadow alpha map (H, W), float 0-1, where 1 = full shadow
+        (shadow_alpha, shadow_color_map)
+        - shadow_alpha: (H, W) float 0-1, where 1 = full shadow
+        - shadow_color_map: (H, W, 3) uint8 BGR shadow color, or None
     """
     # Find person bounding box
     rows = np.any(mask > 0.5, axis=1)
     cols = np.any(mask > 0.5, axis=0)
     if not rows.any() or not cols.any():
-        return np.zeros((frame_h, frame_w), dtype=np.float32)
+        return np.zeros((frame_h, frame_w), dtype=np.float32), None
 
     y_min, y_max = np.where(rows)[0][[0, -1]]
     x_min, x_max = np.where(cols)[0][[0, -1]]
@@ -73,58 +140,99 @@ def _create_floor_shadow(mask: np.ndarray, frame_h: int, frame_w: int,
     feet_y = y_max  # Bottom of person = feet
 
     if person_h < 10 or person_w < 10:
-        return np.zeros((frame_h, frame_w), dtype=np.float32)
+        return np.zeros((frame_h, frame_w), dtype=np.float32), None
 
-    # Create squashed shadow by resizing the mask
-    shadow_h = max(5, int(person_h * squash_factor))
-    shadow_w = int(person_w * 1.1)  # Slightly wider
+    # Apply light direction offset to shadow center
+    shadow_cx = person_cx + int(person_w * light_offset_x)
 
-    # Extract person region mask and resize to shadow dimensions
+    # Extract person region mask
     person_region = mask[y_min:y_max, x_min:x_max]
-    shadow_squashed = cv2.resize(person_region, (shadow_w, shadow_h),
-                                  interpolation=cv2.INTER_AREA)
 
-    # Position shadow at feet level
-    shadow_canvas = np.zeros((frame_h, frame_w), dtype=np.float32)
-    shadow_x_start = person_cx - shadow_w // 2
-    shadow_y_start = feet_y + int(frame_h * y_offset_ratio)
+    # --- Layer 1: Contact shadow (sharp, close to feet) ---
+    contact_h = max(3, int(person_h * 0.08))
+    contact_w = int(person_w * 1.15)
+    contact_squashed = cv2.resize(person_region, (contact_w, contact_h),
+                                   interpolation=cv2.INTER_AREA)
 
-    # Clip to frame boundaries
-    src_x_start = max(0, -shadow_x_start)
-    src_y_start = max(0, -shadow_y_start)
-    dst_x_start = max(0, shadow_x_start)
-    dst_y_start = max(0, shadow_y_start)
-    dst_x_end = min(frame_w, shadow_x_start + shadow_w)
-    dst_y_end = min(frame_h, shadow_y_start + shadow_h)
-    src_x_end = src_x_start + (dst_x_end - dst_x_start)
-    src_y_end = src_y_start + (dst_y_end - dst_y_start)
+    contact_canvas = np.zeros((frame_h, frame_w), dtype=np.float32)
+    cx_start = shadow_cx - contact_w // 2
+    cy_start = feet_y + int(frame_h * 0.005)  # Very close to feet
 
-    if dst_x_end > dst_x_start and dst_y_end > dst_y_start:
-        shadow_canvas[dst_y_start:dst_y_end, dst_x_start:dst_x_end] = \
-            shadow_squashed[src_y_start:src_y_end, src_x_start:src_x_end]
+    # Clip and place contact shadow
+    src_x1 = max(0, -cx_start)
+    src_y1 = max(0, -cy_start)
+    dst_x1 = max(0, cx_start)
+    dst_y1 = max(0, cy_start)
+    dst_x2 = min(frame_w, cx_start + contact_w)
+    dst_y2 = min(frame_h, cy_start + contact_h)
+    sx2 = src_x1 + (dst_x2 - dst_x1)
+    sy2 = src_y1 + (dst_y2 - dst_y1)
 
-    # Apply Gaussian blur for soft shadow
+    if dst_x2 > dst_x1 and dst_y2 > dst_y1 and sx2 <= contact_w and sy2 <= contact_h:
+        contact_canvas[dst_y1:dst_y2, dst_x1:dst_x2] = \
+            contact_squashed[src_y1:sy2, src_x1:sx2]
+
+    # Mild blur for contact shadow (sharp but not pixel-hard)
+    contact_blur = max(11, blur_size // 3)
+    if contact_blur % 2 == 0:
+        contact_blur += 1
+    contact_canvas = cv2.GaussianBlur(contact_canvas, (contact_blur, contact_blur), 0)
+
+    # --- Layer 2: Ambient shadow (diffused, wider) ---
+    ambient_h = max(5, int(person_h * squash_factor))
+    ambient_w = int(person_w * 1.4)
+    ambient_squashed = cv2.resize(person_region, (ambient_w, ambient_h),
+                                   interpolation=cv2.INTER_AREA)
+
+    ambient_canvas = np.zeros((frame_h, frame_w), dtype=np.float32)
+    ax_start = shadow_cx - ambient_w // 2
+    ay_start = feet_y + int(frame_h * y_offset_ratio)
+
+    src_x1 = max(0, -ax_start)
+    src_y1 = max(0, -ay_start)
+    dst_x1 = max(0, ax_start)
+    dst_y1 = max(0, ay_start)
+    dst_x2 = min(frame_w, ax_start + ambient_w)
+    dst_y2 = min(frame_h, ay_start + ambient_h)
+    sx2 = src_x1 + (dst_x2 - dst_x1)
+    sy2 = src_y1 + (dst_y2 - dst_y1)
+
+    if dst_x2 > dst_x1 and dst_y2 > dst_y1 and sx2 <= ambient_w and sy2 <= ambient_h:
+        ambient_canvas[dst_y1:dst_y2, dst_x1:dst_x2] = \
+            ambient_squashed[src_y1:sy2, src_x1:sx2]
+
+    # Diffuse blur for ambient shadow
     if blur_size % 2 == 0:
         blur_size += 1
-    shadow_canvas = cv2.GaussianBlur(shadow_canvas, (blur_size, blur_size), 0)
+    ambient_canvas = cv2.GaussianBlur(ambient_canvas, (blur_size, blur_size), 0)
 
-    # Remove shadow from person area (shadow only on floor, not on person)
-    shadow_canvas = shadow_canvas * (1.0 - mask)
+    # --- Combine layers ---
+    # Contact shadow: 70% of total opacity (strong ground contact)
+    # Ambient shadow: 50% of total opacity (soft spread)
+    combined = np.clip(
+        contact_canvas * shadow_opacity * 0.7 + ambient_canvas * shadow_opacity * 0.5,
+        0.0, shadow_opacity
+    )
 
-    # Apply opacity
-    shadow_canvas = shadow_canvas * shadow_opacity
+    # Remove shadow from person area (shadow only on floor)
+    combined = combined * (1.0 - mask)
 
-    return shadow_canvas
+    # Build color map if shadow color is provided
+    color_map = None
+    if shadow_color_bgr is not None:
+        color_map = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+        for c in range(3):
+            color_map[:, :, c] = shadow_color_bgr[c]
+
+    return combined, color_map
 
 
-def add_shadow_to_video(input_path: str, shadow_opacity: float = 0.45) -> str:
+def add_shadow_to_video(input_path: str, shadow_opacity: float = 0.55) -> str:
     """
     Add projected floor shadow to a dance video.
 
-    Processes each frame:
-    1. MediaPipe segmentation → person mask
-    2. Project shadow onto floor beneath person
-    3. Composite shadow + original frame
+    Analyzes background lighting on the first frame to determine shadow
+    direction and color, then applies consistent shadow across all frames.
 
     Args:
         input_path: Path to input video.
@@ -156,6 +264,11 @@ def add_shadow_to_video(input_path: str, shadow_opacity: float = 0.45) -> str:
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
 
+    # Lighting analysis state (computed on first valid frame)
+    light_offset_x = 0.0
+    shadow_color = None
+    lighting_analyzed = False
+
     frame_idx = 0
     while True:
         ret, frame = cap.read()
@@ -174,20 +287,36 @@ def add_shadow_to_video(input_path: str, shadow_opacity: float = 0.45) -> str:
             if mask.ndim == 3:
                 mask = mask[:, :, 0]  # squeeze to (H, W)
 
+            # Analyze lighting on first frame with valid segmentation
+            if not lighting_analyzed:
+                light_offset_x, _, shadow_color = _analyze_light_source(frame, mask)
+                lighting_analyzed = True
+                logging.info(f"Shadow: Light analysis → offset_x={light_offset_x:.2f}, "
+                             f"color=BGR({shadow_color[0]},{shadow_color[1]},{shadow_color[2]})")
+
             # Create floor shadow
-            shadow_alpha = _create_floor_shadow(
+            shadow_alpha, color_map = _create_floor_shadow(
                 mask, h, w,
                 shadow_opacity=shadow_opacity,
-                blur_size=max(31, min(101, w // 15)),  # Scale blur with resolution
-                squash_factor=0.15,
+                blur_size=max(51, min(151, w // 8)),
+                squash_factor=0.22,
                 y_offset_ratio=0.01,
+                light_offset_x=light_offset_x,
+                shadow_color_bgr=shadow_color,
             )
 
-            # Composite: darken frame where shadow exists
-            # shadow_alpha is 0-1, where 1 = full shadow (darkest)
+            # Composite: blend shadow color with frame
             frame_float = frame.astype(np.float32)
             shadow_3ch = shadow_alpha[:, :, np.newaxis]
-            frame_float = frame_float * (1.0 - shadow_3ch)
+
+            if color_map is not None:
+                # Tinted shadow: blend between frame and shadow color
+                color_float = color_map.astype(np.float32)
+                frame_float = frame_float * (1.0 - shadow_3ch) + color_float * shadow_3ch
+            else:
+                # Fallback: simple darkening
+                frame_float = frame_float * (1.0 - shadow_3ch)
+
             frame = frame_float.clip(0, 255).astype(np.uint8)
 
         writer.write(frame)

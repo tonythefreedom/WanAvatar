@@ -195,6 +195,11 @@ export const retryFailedTasks = async () => {
   return response.data;
 };
 
+export const reorderQueue = async (taskIds) => {
+  const response = await api.post('/queue/reorder', { task_ids: taskIds });
+  return response.data;
+};
+
 export const requeueTask = async (taskId) => {
   const response = await api.post(`/queue/requeue/${taskId}`);
   return response.data;
@@ -291,8 +296,10 @@ export const getFashionStyles = async () => {
   return response.data;
 };
 
-export const registerAvatar = async (sourcePath, group) => {
-  const response = await api.post('/register-avatar', { source_path: sourcePath, group });
+export const registerAvatar = async (sourcePath, group, view = 'front', pairWith = '') => {
+  const body = { source_path: sourcePath, group, view };
+  if (view === 'back' && pairWith) body.pair_with = pairWith;
+  const response = await api.post('/register-avatar', body);
   return response.data;
 };
 

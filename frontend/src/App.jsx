@@ -37,6 +37,7 @@ import {
   getQueueStatus,
   retryFailedTasks,
   requeueTask,
+  reorderQueue,
   authLogin,
   authGoogle,
   authMe,
@@ -179,6 +180,7 @@ const translations = {
     wfQueue: 'Queue',
     wfStartQueue: 'Start Queue',
     wfClearQueue: 'Clear Completed',
+    wfUpdateQueue: 'Update Queue',
     wfQueueEmpty: 'Queue is empty',
     wfQueueRunning: 'Processing queue...',
     wfQueuePending: 'Pending',
@@ -408,6 +410,7 @@ const translations = {
     wfQueue: '큐',
     wfStartQueue: '큐 시작',
     wfClearQueue: '완료 항목 정리',
+    wfUpdateQueue: '큐 순서 적용',
     wfQueueEmpty: '큐가 비어있습니다',
     wfQueueRunning: '큐 처리 중...',
     wfQueuePending: '대기 중',
@@ -637,6 +640,7 @@ const translations = {
     wfQueue: '队列',
     wfStartQueue: '开始队列',
     wfClearQueue: '清除已完成',
+    wfUpdateQueue: '更新队列顺序',
     wfQueueEmpty: '队列为空',
     wfQueueRunning: '队列处理中...',
     wfQueuePending: '等待中',
@@ -1059,6 +1063,8 @@ function App() {
   // Dance Shorts - Character Image (direct upload or avatar gallery)
   const [dsCharImagePath, setDsCharImagePath] = useState('');
   const [dsCharImagePreview, setDsCharImagePreview] = useState(null);
+  const [dsCharBackImagePath, setDsCharBackImagePath] = useState('');
+  const [dsCharBackImagePreview, setDsCharBackImagePreview] = useState(null);
   const [dsAvatarGroups, setDsAvatarGroups] = useState([]);
   const [dsAvatarSelectedGroup, setDsAvatarSelectedGroup] = useState('');
   const [dsAvatarImages, setDsAvatarImages] = useState([]);
@@ -1637,6 +1643,7 @@ function App() {
       label: `Dance ${dsItems.length + 1}`,
       inputs: {
         ref_image: dsCharImagePath,
+        ref_image_back: dsCharBackImagePath,
         ref_video: studioRefVideoPath,
         prompt: studioScenePrompt,
         aspect_ratio: studioFluxAspectRatio,
@@ -1692,6 +1699,7 @@ function App() {
       label: `Dance ${dsItems.length + 1}`,
       inputs: {
         ref_image: dsCharImagePath,
+        ref_image_back: dsCharBackImagePath,
         ref_video: studioRefVideoPath,
         prompt: studioScenePrompt,
         aspect_ratio: studioFluxAspectRatio,
@@ -1813,6 +1821,10 @@ function App() {
     setDsCharImagePreview(img.url);
     setStudioAvatarName(dsAvatarSelectedGroup);
     setStudioYtChannelName(`Dancing ${dsAvatarSelectedGroup}`);
+    // Auto-pair back view: find back image paired with this specific front
+    const backImg = dsAvatarImages.find(i => i.view === 'back' && i.pair_with === img.filename);
+    setDsCharBackImagePath(backImg?.path || '');
+    setDsCharBackImagePreview(backImg?.url || null);
   };
 
   const handleDsAvatarThumbDelete = async (img) => {
@@ -1823,6 +1835,10 @@ function App() {
       if (dsCharImagePath === img.path) {
         setDsCharImagePath('');
         setDsCharImagePreview(null);
+      }
+      if (dsCharBackImagePath === img.path) {
+        setDsCharBackImagePath('');
+        setDsCharBackImagePreview(null);
       }
     } catch (err) { alert(`Delete failed: ${err.message}`); }
   };
@@ -1887,8 +1903,10 @@ function App() {
   // Avatar popup: navigate to prev/next image
   const avatarPopupNavigate = useCallback((direction) => {
     if (!avatarPopup) return;
-    const images = avatarPopup.source === 'danceshorts' ? dsAvatarImages
+    const allImages = avatarPopup.source === 'danceshorts' ? dsAvatarImages
       : (workflowStates[avatarPopup.wfId]?.avatarImages?.[avatarPopup.group] || []);
+    // Only navigate through front images (back images are shown alongside)
+    const images = allImages.filter(i => i.view !== 'back');
     if (images.length <= 1) return;
     const idx = images.findIndex(i => i.filename === avatarPopup.filename);
     if (idx === -1) return;
@@ -1899,6 +1917,10 @@ function App() {
     if (avatarPopup.source === 'danceshorts') {
       setDsCharImagePath(next.path);
       setDsCharImagePreview(next.url);
+      // Auto-pair back view: find back paired with this specific front
+      const backImg = allImages.find(i => i.view === 'back' && i.pair_with === next.filename);
+      setDsCharBackImagePath(backImg?.path || '');
+      setDsCharBackImagePreview(backImg?.url || null);
     }
   }, [avatarPopup, dsAvatarImages, workflowStates]);
 
@@ -2351,9 +2373,25 @@ function App() {
       const defaultGroup = existing.includes('yuna') ? 'yuna' : (existing[0] || 'yuna');
       const group = window.prompt(`Avatar group name:${hint}`, defaultGroup);
       if (!group) return;
+      const view = window.confirm('Is this a BACK VIEW image?\n\nOK = Back view\nCancel = Front view (default)') ? 'back' : 'front';
+
+      let pairWith = '';
+      if (view === 'back') {
+        // Let user pick which front image to pair with
+        const groupData = await listAvatarImages(group.trim());
+        const frontImages = (groupData.images || []).filter(i => i.view !== 'back');
+        if (frontImages.length > 0) {
+          const names = frontImages.map((f, idx) => `${idx + 1}. ${f.filename}`).join('\n');
+          const pick = window.prompt(`Pair with which front image?\n\n${names}\n\nEnter number (or leave empty to skip):`, '1');
+          if (pick) {
+            const idx = parseInt(pick, 10) - 1;
+            if (idx >= 0 && idx < frontImages.length) pairWith = frontImages[idx].filename;
+          }
+        }
+      }
 
       // Direct registration (copy image to avatar directory)
-      await registerAvatar(img.path, group.trim());
+      await registerAvatar(img.path, group.trim(), view, pairWith);
 
       // Refresh avatar groups in all workflows + Dance Shorts
       const refreshed = await listAvatarGroups();
@@ -3525,6 +3563,27 @@ function App() {
     });
   };
 
+  const handleWfQueueUpdate = async (wfId) => {
+    const queue = wfQueueRef.current[wfId];
+    if (!queue?.items?.length) return;
+    // Collect task IDs of items that have been submitted to the server (have taskId)
+    // in the current frontend order
+    const taskIds = queue.items
+      .filter(i => i.taskId && (i.status === 'pending' || i.status === 'running'))
+      .map(i => i.taskId);
+    if (taskIds.length === 0) {
+      window.alert('No submitted tasks to reorder.');
+      return;
+    }
+    try {
+      const data = await reorderQueue(taskIds);
+      window.alert(`Queue order updated (${data.reordered} tasks reordered)`);
+    } catch (err) {
+      console.error(err);
+      window.alert(`Failed to update queue order: ${err.message}`);
+    }
+  };
+
   // ─── Dynamic form renderer ───
   const renderWorkflowInput = (wfId, inputDef) => {
     const wfState = workflowStates[wfId];
@@ -3566,7 +3625,7 @@ function App() {
               </div>
               {avatarImgs.length > 0 && (
                 <div className="avatar-thumbs">
-                  {avatarImgs.map((img, i) => (
+                  {avatarImgs.filter(img => img.view !== 'back').map((img, i) => (
                     <div key={i} className={`avatar-thumb-item${wfState.filePaths[inputDef.key] === img.path ? ' selected' : ''}`}
                       onClick={() => {
                         updateWfFilePath(wfId, inputDef.key, img.path);
@@ -4867,6 +4926,9 @@ function App() {
                                     disabled={pendingCount === 0}>
                                     {isProcessing ? (pendingCount > 0 ? t('wfStartQueue') + ' (Add)' : t('wfQueueRunning')) : t('wfStartQueue')}
                                   </button>
+                                  <button className="btn" onClick={() => handleWfQueueUpdate(wf.id)}>
+                                    {t('wfUpdateQueue')}
+                                  </button>
                                   {failedCount > 0 && (
                                     <button className="btn warning" onClick={() => handleRetryFailed(wf.id)}>
                                       Retry Failed ({failedCount})
@@ -4905,28 +4967,33 @@ function App() {
                         <div className="sub-tabs" style={{ marginBottom: 8 }}>
                           {dsAvatarGroups.map(g => (
                             <button key={g} className={dsAvatarSelectedGroup === g ? 'active' : ''}
-                              onClick={() => { setDsAvatarSelectedGroup(g); setStudioAvatarName(g); setStudioYtChannelName(`Dancing ${g}`); }}>{g}</button>
+                              onClick={() => { setDsAvatarSelectedGroup(g); setStudioAvatarName(g); setStudioYtChannelName(`Dancing ${g}`); setDsCharImagePath(''); setDsCharImagePreview(null); setDsCharBackImagePath(''); setDsCharBackImagePreview(null); }}>{g}</button>
                           ))}
                         </div>
                       )}
                       <div className="stage-gallery avatar-thumb-gallery">
-                        {dsAvatarImages.map(img => (
+                        {dsAvatarImages.filter(img => img.view !== 'back').map(img => {
+                          const hasBack = dsAvatarImages.some(i => i.view === 'back' && i.pair_with === img.filename);
+                          return (
                           <div key={img.filename}
                             className={`stage-item avatar-thumb-item${dsCharImagePath === img.path ? ' selected' : ''}`}
                             onClick={() => handleDsAvatarSelect(img)}>
                             <img src={img.url} alt={img.filename} />
+                            {hasBack && <span style={{ position: 'absolute', top: 2, right: 2, background: '#4CAF50', color: '#fff', fontSize: 9, padding: '1px 4px', borderRadius: 3 }}>F+B</span>}
                             <button className="stage-delete-btn"
                               onClick={e => { e.stopPropagation(); handleDsAvatarThumbDelete(img); }}
                               title={t('galleryDelete')}>×</button>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                       {dsCharImagePreview && (
-                        <div className="ds-char-viewer" onClick={() => {
+                        <div className="ds-char-viewer" style={{ display: 'flex', gap: 4 }} onClick={() => {
                           const img = dsAvatarImages.find(i => i.path === dsCharImagePath);
                           if (img) { setStagePopup(null); setAvatarPopup({ url: img.url, filename: img.filename, group: dsAvatarSelectedGroup, img, source: 'danceshorts' }); }
                         }} title="Click to enlarge">
-                          <img src={dsCharImagePreview} alt="Character" />
+                          <img src={dsCharImagePreview} alt="Front" style={{ flex: 1, maxWidth: dsCharBackImagePreview ? '50%' : '100%' }} />
+                          {dsCharBackImagePreview && <img src={dsCharBackImagePreview} alt="Back" style={{ flex: 1, maxWidth: '50%', opacity: 0.85 }} />}
                         </div>
                       )}
                     </div>
@@ -5408,6 +5475,9 @@ function App() {
                               disabled={pendingCount === 0}>
                               {isProcessing ? (pendingCount > 0 ? t('wfStartQueue') + ' (Add)' : t('wfQueueRunning')) : t('wfStartQueue')}
                             </button>
+                            <button className="btn" onClick={() => handleWfQueueUpdate('change_character')}>
+                              {t('wfUpdateQueue')}
+                            </button>
                             {failedCount > 0 && (
                               <button className="btn warning" onClick={() => handleRetryFailed('change_character')}>
                                 Retry Failed ({failedCount})
@@ -5799,7 +5869,9 @@ function App() {
       {avatarPopup && (() => {
         const popupImages = avatarPopup.source === 'danceshorts' ? dsAvatarImages
           : (workflowStates[avatarPopup.wfId]?.avatarImages?.[avatarPopup.group] || []);
-        const showNav = popupImages.length > 1;
+        const frontImages = popupImages.filter(i => i.view !== 'back');
+        const backImage = popupImages.find(i => i.view === 'back' && i.pair_with === avatarPopup.filename);
+        const showNav = frontImages.length > 1;
         const availableGroups = avatarPopup.source === 'danceshorts' ? dsAvatarGroups : [];
         return (
         <div className="avatar-popup-overlay" onClick={() => setAvatarPopup(null)}>
@@ -5809,8 +5881,17 @@ function App() {
               <span className="avatar-popup-name">{avatarPopup.filename?.replace(/\.[^.]+$/, '') || ''}</span>
               <button className="avatar-popup-close" onClick={() => setAvatarPopup(null)}>&times;</button>
             </div>
-            <div className="avatar-popup-body">
-              <img src={avatarPopup.url} alt={avatarPopup.filename || ''} />
+            <div className="avatar-popup-body" style={backImage ? { display: 'flex', gap: 8, alignItems: 'center' } : {}}>
+              <div style={backImage ? { flex: 1, textAlign: 'center', minWidth: 0 } : {}}>
+                <img src={avatarPopup.url} alt={avatarPopup.filename || ''} style={backImage ? { maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' } : {}} />
+                {backImage && <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>Front</div>}
+              </div>
+              {backImage && (
+                <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
+                  <img src={backImage.url} alt="Back view" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }} />
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>Back</div>
+                </div>
+              )}
             </div>
             {avatarPopup.img && (
               <div className="avatar-popup-footer">
@@ -5862,6 +5943,42 @@ function App() {
                     </select>
                   </div>
                 )}
+                {/* Back view register/delete buttons */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                  {!backImage ? (
+                    <label className="btn primary small" style={{ flex: 1, textAlign: 'center', cursor: 'pointer', margin: 0 }}>
+                      + Back View
+                      <input type="file" accept="image/*" style={{ display: 'none' }} onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          const uploaded = await uploadImage(file);
+                          await registerAvatar(uploaded.path, avatarPopup.group, 'back', avatarPopup.filename);
+                          await loadDsAvatarImages(avatarPopup.group);
+                          alert('Back view registered!');
+                        } catch (err) {
+                          alert(`Failed: ${err.message}`);
+                        }
+                        e.target.value = '';
+                      }} />
+                    </label>
+                  ) : (
+                    <button className="btn warning small" style={{ flex: 1 }} onClick={async () => {
+                      if (!window.confirm('Delete back view image?')) return;
+                      try {
+                        await deleteAvatarImage(avatarPopup.group, backImage.filename);
+                        await loadDsAvatarImages(avatarPopup.group);
+                        setDsCharBackImagePath('');
+                        setDsCharBackImagePreview(null);
+                        alert('Back view deleted');
+                      } catch (err) {
+                        alert(`Failed: ${err.message}`);
+                      }
+                    }}>
+                      Delete Back View
+                    </button>
+                  )}
+                </div>
                 <button className="btn cancel-btn" onClick={async () => {
                   if (!window.confirm(`Delete "${avatarPopup.filename}" from ${avatarPopup.group}?`)) return;
                   if (avatarPopup.source === 'danceshorts') {

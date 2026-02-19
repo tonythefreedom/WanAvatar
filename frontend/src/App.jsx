@@ -248,9 +248,14 @@ const translations = {
     studioAvatarName: 'Avatar Name',
     studioStageSelect: 'Select Stage',
     studioStageUpload: 'Upload Stage',
+    studioBgMode: 'Background',
+    studioBgModeImage: 'Image',
+    studioBgModePrompt: 'AI Generate',
     studioBgEffect: 'Background Effect',
     studioBgAuto: 'Auto (Gemini AI analyzes background)',
     studioBgManual: 'Custom prompt',
+    studioBgPromptLabel: 'Background Description',
+    studioBgPromptPlaceholder: 'e.g. luxury hotel lobby with marble floor, neon-lit cyberpunk alley...',
     studioStageDeleteConfirm: 'Delete this stage?',
     studioYtChannel: 'YouTube Channel URL',
     studioYtChannelName: 'Channel Name',
@@ -478,9 +483,14 @@ const translations = {
     studioAvatarName: '아바타 이름',
     studioStageSelect: '스테이지 선택',
     studioStageUpload: '스테이지 업로드',
+    studioBgMode: '배경',
+    studioBgModeImage: '이미지',
+    studioBgModePrompt: 'AI 생성',
     studioBgEffect: '배경 효과',
     studioBgAuto: '자동 (Gemini AI가 배경을 분석)',
     studioBgManual: '직접 입력',
+    studioBgPromptLabel: '배경 묘사',
+    studioBgPromptPlaceholder: '예: 대리석 바닥의 럭셔리 호텔 로비, 네온 사이버펑크 골목...',
     studioStageDeleteConfirm: '이 스테이지를 삭제하시겠습니까?',
     studioYtChannel: 'YouTube 채널 URL',
     studioYtChannelName: '채널명',
@@ -708,9 +718,14 @@ const translations = {
     studioAvatarName: '角色名称',
     studioStageSelect: '选择舞台',
     studioStageUpload: '上传舞台',
+    studioBgMode: '背景',
+    studioBgModeImage: '图片',
+    studioBgModePrompt: 'AI生成',
     studioBgEffect: '背景效果',
     studioBgAuto: '自动 (Gemini AI分析背景)',
     studioBgManual: '自定义提示',
+    studioBgPromptLabel: '背景描述',
+    studioBgPromptPlaceholder: '例如：大理石地板的豪华酒店大厅、霓虹赛博朋克小巷...',
     studioStageDeleteConfirm: '确定删除此舞台？',
     studioYtChannel: 'YouTube频道链接',
     studioYtChannelName: '频道名称',
@@ -1049,7 +1064,7 @@ function App() {
   const [studioUploadedVideosLoading, setStudioUploadedVideosLoading] = useState(false);
   const [studioYoutubeUrl, setStudioYoutubeUrl] = useState('');
   const [studioYoutubeDownloading, setStudioYoutubeDownloading] = useState(false);
-  const [studioScenePrompt, setStudioScenePrompt] = useState('The character is dancing in the room');
+  const [studioScenePrompt, setStudioScenePrompt] = useState('');
 
   // Dance Shorts - Video Timeline / Trim
   const [dsVideoDuration, setDsVideoDuration] = useState(0);
@@ -1073,8 +1088,9 @@ function App() {
   const [studioAvatarName, setStudioAvatarName] = useState('');
   const [studioStages, setStudioStages] = useState([]);
   const [studioSelectedStage, setStudioSelectedStage] = useState(null);
-  const [studioBgPrompt, setStudioBgPrompt] = useState('');
+  const [studioBgPrompt, setStudioBgPrompt] = useState('Club dance floor, green laser beams shooting from top to bottom and moving. Several women and men are dancing out of focus in the background.');
   const [studioBgManual, setStudioBgManual] = useState(false); // false = Gemini auto, true = user types
+  const [studioBgMode, setStudioBgMode] = useState('image'); // 'image' = custom bg image, 'prompt' = AI-generated bg
   const [stagePopup, setStagePopup] = useState(null); // { url, filename }
 
   // Dance Shorts - YouTube Settings
@@ -1647,15 +1663,17 @@ function App() {
         ref_video: studioRefVideoPath,
         prompt: studioScenePrompt,
         aspect_ratio: studioFluxAspectRatio,
-        bg_image: studioSelectedStage?.path || '',
+        bg_image: studioBgMode === 'image' ? (studioSelectedStage?.path || '') : '',
         bg_prompt: studioBgPrompt,
       },
       filePaths: {},
       previews: {
         ref_image: dsCharImagePreview,
+        ref_image_back: dsCharBackImagePreview,
         ref_video: studioRefVideoPreview,
-        bg_image: studioSelectedStage?.url || null,
+        bg_image: studioBgMode === 'image' ? (studioSelectedStage?.url || null) : null,
       },
+      bgMode: studioBgMode,
       gallerySelected: {},
       ytUpload: studioYtUpload || false,
       ytTitle,
@@ -1703,15 +1721,17 @@ function App() {
         ref_video: studioRefVideoPath,
         prompt: studioScenePrompt,
         aspect_ratio: studioFluxAspectRatio,
-        bg_image: studioSelectedStage?.path || '',
+        bg_image: studioBgMode === 'image' ? (studioSelectedStage?.path || '') : '',
         bg_prompt: studioBgPrompt,
       },
       filePaths: {},
       previews: {
         ref_image: dsCharImagePreview,
+        ref_image_back: dsCharBackImagePreview,
         ref_video: studioRefVideoPreview,
-        bg_image: studioSelectedStage?.url || null,
+        bg_image: studioBgMode === 'image' ? (studioSelectedStage?.url || null) : null,
       },
+      bgMode: studioBgMode,
       gallerySelected: {},
       ytUpload: studioYtUpload || false,
       ytTitle,
@@ -2373,25 +2393,9 @@ function App() {
       const defaultGroup = existing.includes('yuna') ? 'yuna' : (existing[0] || 'yuna');
       const group = window.prompt(`Avatar group name:${hint}`, defaultGroup);
       if (!group) return;
-      const view = window.confirm('Is this a BACK VIEW image?\n\nOK = Back view\nCancel = Front view (default)') ? 'back' : 'front';
 
-      let pairWith = '';
-      if (view === 'back') {
-        // Let user pick which front image to pair with
-        const groupData = await listAvatarImages(group.trim());
-        const frontImages = (groupData.images || []).filter(i => i.view !== 'back');
-        if (frontImages.length > 0) {
-          const names = frontImages.map((f, idx) => `${idx + 1}. ${f.filename}`).join('\n');
-          const pick = window.prompt(`Pair with which front image?\n\n${names}\n\nEnter number (or leave empty to skip):`, '1');
-          if (pick) {
-            const idx = parseInt(pick, 10) - 1;
-            if (idx >= 0 && idx < frontImages.length) pairWith = frontImages[idx].filename;
-          }
-        }
-      }
-
-      // Direct registration (copy image to avatar directory)
-      await registerAvatar(img.path, group.trim(), view, pairWith);
+      // Direct registration (always front — back views are added via popup)
+      await registerAvatar(img.path, group.trim(), 'front');
 
       // Refresh avatar groups in all workflows + Dance Shorts
       const refreshed = await listAvatarGroups();
@@ -5006,43 +5010,57 @@ function App() {
                         placeholder="e.g. Lina, Yuna..." />
                     </div>
 
-                    {/* Stage Selection */}
+                    {/* Background Mode Toggle */}
                     <div className="form-group">
-                      <label>{t('studioStageSelect')}</label>
-                      <div className="stage-gallery">
-                        {studioStages.map(stage => (
-                          <div key={stage.filename}
-                            className={`stage-item${studioSelectedStage?.filename === stage.filename ? ' selected' : ''}`}
-                            onClick={() => setStudioSelectedStage(stage)}
-                            onDoubleClick={() => { setAvatarPopup(null); setStagePopup({ url: stage.url, filename: stage.filename }); }}>
-                            <img src={stage.url} alt={stage.filename} />
-                            <button className="stage-delete-btn"
-                              onClick={e => { e.stopPropagation(); handleStudioStageDelete(stage.filename); }}
-                              title={t('galleryDelete')}>×</button>
-                          </div>
-                        ))}
+                      <label>{t('studioBgMode')}</label>
+                      <div className="sub-tabs" style={{ marginBottom: 8 }}>
+                        <button className={studioBgMode === 'image' ? 'active' : ''} onClick={() => setStudioBgMode('image')}>{t('studioBgModeImage')}</button>
+                        <button className={studioBgMode === 'prompt' ? 'active' : ''} onClick={() => setStudioBgMode('prompt')}>{t('studioBgModePrompt')}</button>
                       </div>
                     </div>
 
-                    {/* Background Effect */}
-                    <div className="form-group">
-                      <label>{t('studioBgEffect')}</label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#aaa', marginBottom: 6, cursor: 'pointer' }}>
-                        <input type="checkbox" checked={studioBgManual}
-                          onChange={e => { setStudioBgManual(e.target.checked); if (!e.target.checked) setStudioBgPrompt(''); }} />
-                        {studioBgManual ? t('studioBgManual') : t('studioBgAuto')}
-                      </label>
-                      {studioBgManual && (
-                        <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={2}
-                          placeholder="e.g. neon lights, foggy atmosphere, colorful stage lighting..." />
-                      )}
-                    </div>
+                    {studioBgMode === 'image' ? (
+                      <>
+                        {/* Stage Selection */}
+                        <div className="form-group">
+                          <label>{t('studioStageSelect')}</label>
+                          <div className="stage-gallery">
+                            {studioStages.map(stage => (
+                              <div key={stage.filename}
+                                className={`stage-item${studioSelectedStage?.filename === stage.filename ? ' selected' : ''}`}
+                                onClick={() => setStudioSelectedStage(stage)}
+                                onDoubleClick={() => { setAvatarPopup(null); setStagePopup({ url: stage.url, filename: stage.filename }); }}>
+                                <img src={stage.url} alt={stage.filename} />
+                                <button className="stage-delete-btn"
+                                  onClick={e => { e.stopPropagation(); handleStudioStageDelete(stage.filename); }}
+                                  title={t('galleryDelete')}>×</button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
 
-                    {/* Scene Description */}
-                    <div className="form-group">
-                      <label>{t('studioSceneDesc')}</label>
-                      <textarea value={studioScenePrompt} onChange={e => setStudioScenePrompt(e.target.value)} rows={2} />
-                    </div>
+                        {/* Background Effect */}
+                        <div className="form-group">
+                          <label>{t('studioBgEffect')}</label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#aaa', marginBottom: 6, cursor: 'pointer' }}>
+                            <input type="checkbox" checked={studioBgManual}
+                              onChange={e => { setStudioBgManual(e.target.checked); if (!e.target.checked) setStudioBgPrompt(''); }} />
+                            {studioBgManual ? t('studioBgManual') : t('studioBgAuto')}
+                          </label>
+                          {studioBgManual && (
+                            <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={2}
+                              placeholder="e.g. neon lights, foggy atmosphere, colorful stage lighting..." />
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      /* AI Generate mode: background description prompt */
+                      <div className="form-group">
+                        <label>{t('studioBgPromptLabel')}</label>
+                        <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={3}
+                          placeholder={t('studioBgPromptPlaceholder')} />
+                      </div>
+                    )}
 
 
                   </div>
@@ -5372,6 +5390,11 @@ function App() {
                                         <img src={item.previews.ref_image} alt="avatar" className="queue-thumb queue-thumb--avatar"
                                           onClick={() => setQueueMediaPopup({ url: item.previews.ref_image, type: 'image', label: 'Avatar' })}
                                           style={{ cursor: 'pointer' }} />
+                                      )}
+                                      {item.previews?.ref_image_back && (
+                                        <img src={item.previews.ref_image_back} alt="back" className="queue-thumb queue-thumb--avatar"
+                                          onClick={() => setQueueMediaPopup({ url: item.previews.ref_image_back, type: 'image', label: 'Back View' })}
+                                          style={{ cursor: 'pointer', opacity: 0.85 }} />
                                       )}
                                       {(() => {
                                         // Use server URL if preview is blob (invalid after refresh) or missing

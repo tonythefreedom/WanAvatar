@@ -3751,6 +3751,29 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 workflow["15"]["inputs"]["image"] = ["302", 0]
                 logging.info(f"Custom background image applied (resized to {target_w}x{target_h}): {bg_image_to_use}")
 
+        # AI-generated background mode: no bg_image but bg_prompt exists
+        # Replace reference video background with black frames so AnimateEmbeds
+        # generates the background purely from the text prompt
+        if not bg_image and bg_prompt and "15" in workflow:
+            workflow["300"] = {
+                "class_type": "EmptyImage",
+                "inputs": {
+                    "width": target_w,
+                    "height": target_h,
+                    "batch_size": 1,
+                    "color": 0,  # black
+                },
+            }
+            workflow["302"] = {
+                "class_type": "RepeatImageBatch",
+                "inputs": {
+                    "image": ["300", 0],
+                    "amount": ["96", 1],
+                },
+            }
+            workflow["15"]["inputs"]["image"] = ["302", 0]
+            logging.info(f"AI-generated background mode: black frames injected, prompt: {bg_prompt}")
+
         # Increase mask expansion if custom background is used (motion or static)
         # This prevents the background from covering character extremities due to mask shrinkage
         if bg_image and "13" in workflow:

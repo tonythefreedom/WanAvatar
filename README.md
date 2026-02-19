@@ -43,6 +43,9 @@ AI 비디오 프로덕션 스튜디오 — 텍스트, 이미지, 음성에서 �
 - **GPU 모델 스왑**: 4개 모델(S2V, I2V, FLUX, TTS)이 GPU VRAM 공유, 자동 CPU 오프로드
 - **속도 최적화**: UniPC 솔버 (25 steps) + infer_frames 80 + TeaCache (0.15 threshold)
 - **ComfyUI 워크플로우**: Change Character V1.1, FFLF Auto Loop V2, InfiniTalk
+- **AI 배경 생성**: 텍스트 프롬프트 기반 배경 자동 생성 (100개 프리셋, 12 카테고리, Random/Category/Manual 모드)
+- **다중 레퍼런스 아바타**: 앞면/뒷면 이미지 페어링으로 뒷모습 품질 향상
+- **MediaPipe Pose 추적**: 댄서 위치 기반 배경 동기화
 - **YouTube 다운로드**: 고해상도(1080p) YouTube 비디오 자동 다운로드 (bestvideo+bestaudio)
 - **Qwen3-TTS**: 텍스트 대본 → 음성 합성 (10개 언어, CustomVoice)
 - **Studio AI**: Solar-Banya-100b function calling으로 자동 비디오 생성
@@ -817,6 +820,93 @@ output_lora_14B/checkpoint-50/
 - `/api/health` 응답에서 `lora_enabled`, `lora_checkpoint` 필드로 확인 가능
 
 ## Changelog
+
+### 2026-02-19: AI 생성 배경 품질 개선 + 랜덤 배경 프롬프트 시스템 + 큐 재시도 UI
+
+**AI 생성 배경 모드 — 레퍼런스 배경 제거 (`server.py`):**
+
+- **문제**: AI 배경 생성 시 캐릭터 레퍼런스 이미지의 원본 배경이 생성 결과에 영향
+  - 원인 1: AnimateEmbeds(Node 218)의 `bg_images`/`mask` 입력이 원본 배경을 참조
+  - 원인 2: WanVideoClipVisionEncode(Node 221)가 배경 포함된 전체 이미지를 clip vision 인코딩
+- **해결**: MediaPipe Selfie Segmenter로 레퍼런스 이미지 배경을 회색(128,128,128)으로 교체
+  - `models/selfie_segmenter.tflite` 사용 (`mediapipe.tasks.python.vision.ImageSegmenter`)
+  - `change_character` 워크플로우 + AI 배경 모드(`bg_prompt` 있고 `bg_image` 없을 때)에서만 적용
+  - 배경 제거된 임시 파일(`_nobg.png`)을 ComfyUI에 업로드 후 자동 삭제
+  - AnimateEmbeds에서 `bg_images`/`mask` 입력도 동시 제거 → 프롬프트 기반 순수 배경 생성
+
+**랜덤 배경 프롬프트 시스템 (`server.py`, `App.jsx`, `api.js`):**
+
+- **100개 배경 프롬프트**: 12개 카테고리로 분류, `background/background_prompts.json`에 저장
+  - 카테고리: Club, Concert, Cyberpunk, Nature, Abstract, Fantasy, Urban, Studio, Retro, Seasonal, Space, Cultural
+  - 각 프롬프트에 동적/애니메이션 요소 포함 (비디오 생성에 최적화)
+- **3가지 모드**: Random (전체 무작위), Category (카테고리 내 무작위), Manual (직접 입력)
+- **서버 API**: `GET /api/bg-prompts` — JSON 파일에서 프롬프트/카테고리 목록 반환
+- **프론트엔드 UI**: AI 배경 모드 선택 시 Random/Category/Manual 탭 표시
+  - Category 모드: 카테고리 태그 버튼 (프롬프트 수 표시), 선택 시 해당 카테고리 내 무작위
+  - Random 모드: 전체 100개에서 큐 아이템별 무작위 선택
+  - Manual 모드: 기존 텍스트 입력 (변경 없음)
+
+**큐 재시도 UI (`App.jsx`, `server.py`):**
+
+- **↻ 재큐 버튼**: cancelled 또는 "Monitor lost connection" 상태 작업에 표시
+  - Dance Shorts 큐 + 일반 워크플로우 큐 모두 지원
+  - 클릭 시 기존 입력 파라미터로 `submitBatchQueue()` 재호출
+- **`POST /api/queue/mark-failed/{task_id}`**: 서버에서 cancelled/processing 작업을 failed로 변경
+
+**새 API 엔드포인트:**
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/bg-prompts` | GET | 배경 프롬프트 목록 + 카테고리 |
+| `/api/queue/mark-failed/{task_id}` | POST | 작업 상태를 failed로 변경 (재시도용) |
+
+**새 파일:**
+
+| 파일 | 설명 |
+|------|------|
+| `background/background_prompts.json` | 100개 배경 프롬프트 (12 카테고리) |
+
+### 2026-02-17: 다중 레퍼런스 아바타 (앞면/뒷면) + 큐 순서 동기화
+
+**다중 레퍼런스 아바타 (`server.py`, `App.jsx`, `api.js`):**
+
+- **앞면/뒷면 이미지 지원**: 아바타 등록 시 앞면(front)/뒷면(back) 선택
+  - 메타데이터에 `view` 필드 추가: `{"group": "lina", "view": "front"}`
+  - 서버 시작 시 기존 아바타에 `view: "front"` 자동 마이그레이션
+- **뒷면 자동 페어링**: 앞면 아바타 선택 시 같은 그룹의 뒷면 이미지 자동 매칭
+- **워크플로우 주입**: `ref_image_back`이 있으면 `ImageBatch`(Node 322)로 앞뒤 이미지 배치 → AnimateEmbeds `ref_images`에 전달
+- **CLIP 인코딩**: 앞면만 사용 (Node 221 변경 없음)
+- **UI**: 갤러리에서 뒷면 이미지 "B" 뱃지 표시, 아바타 팝업에서 앞뒤 나란히 표시
+
+### 2026-02-16: 배경 모드 선택 (이미지/AI생성) + 큐 백뷰 썸네일
+
+**배경 모드 선택 (`App.jsx`, `server.py`):**
+
+- **이미지 배경 모드**: 기존 방식 — 배경 이미지 업로드/선택
+- **AI 생성 배경 모드**: 텍스트 프롬프트로 배경 자동 생성
+  - AnimateEmbeds에서 `bg_images`/`mask` 제거 → 프롬프트 기반 생성
+- **모드 전환 UI**: Image/AI Generate 토글 버튼
+
+**큐 백뷰 썸네일:**
+
+- 큐 아이템에 뒷면 아바타 썸네일 표시 (뒷면이 있는 경우)
+
+**갤러리 등록 간소화:**
+
+- Avatar Prepare 2단계 파이프라인 없이 갤러리 이미지를 직접 아바타로 등록 가능
+
+### 2026-02-15: MediaPipe Pose 기반 댄서 위치 추적 + 카메라 모션 배경 개선
+
+**MediaPipe Pose 추적 (`server.py`):**
+
+- 참조 비디오에서 댄서의 발 위치를 MediaPipe Pose로 프레임별 추적
+- 배경 원판(stage) 하단을 댄서 발 위치에 동기화
+- 댄서가 좌우로 이동하면 배경도 함께 이동하는 자연스러운 효과
+
+**카메라 모션 배경 수정:**
+
+- 줌 효과 제거, 팬(좌우/상하 이동)만 적용
+- 마스크 확장값 증가 (배경 합성 경계선 개선)
 
 ### 2026-02-14: Dance Shorts 독립 메뉴 + UI 개편 + 메뉴 구조 변경
 

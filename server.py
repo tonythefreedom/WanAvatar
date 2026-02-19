@@ -2062,6 +2062,17 @@ async def list_backgrounds(user=Depends(get_current_user)):
     return {"backgrounds": images, "total": len(images)}
 
 
+@app.get("/api/bg-prompts")
+async def list_bg_prompts(user=Depends(get_current_user)):
+    """Return background prompt list from background_prompts.json."""
+    prompts_path = Path("background/background_prompts.json")
+    if not prompts_path.exists():
+        return {"prompts": [], "categories": []}
+    data = _json.loads(prompts_path.read_text(encoding="utf-8"))
+    categories = sorted(set(p["category"] for p in data))
+    return {"prompts": data, "categories": categories}
+
+
 @app.delete("/api/backgrounds/{filename}")
 async def delete_background(filename: str, user=Depends(get_current_user)):
     """Delete a background/stage image."""
@@ -2560,6 +2571,26 @@ async def cancel_task(task_id: str, user=Depends(get_current_user)):
         "message": "Cancelled by user",
     })
     return {"ok": True, "message": "Task cancelled"}
+
+
+@app.post("/api/queue/mark-failed/{task_id}")
+async def mark_task_failed(task_id: str, user=Depends(get_current_user)):
+    """Mark a cancelled/stuck task as failed so it can be requeued."""
+    if task_id not in generation_status:
+        raise HTTPException(404, "Task not found")
+    status = generation_status[task_id]
+    if status["status"] not in ("cancelled", "processing"):
+        raise HTTPException(400, f"Task is {status['status']}, not cancelled/processing")
+    generation_status[task_id].update({
+        "status": "failed",
+        "message": "Marked as failed for retry",
+    })
+    # Save to failed_tasks so requeue can find it
+    with server_queue_lock:
+        entry = server_queue.pop(task_id, None)
+    if entry:
+        failed_tasks[task_id] = entry
+    return {"ok": True, "message": "Task marked as failed"}
 
 
 @app.post("/api/extract-audio")
@@ -3752,27 +3783,14 @@ def prepare_comfyui_workflow(workflow_id: str, user_inputs: dict) -> dict:
                 logging.info(f"Custom background image applied (resized to {target_w}x{target_h}): {bg_image_to_use}")
 
         # AI-generated background mode: no bg_image but bg_prompt exists
-        # Replace reference video background with black frames so AnimateEmbeds
-        # generates the background purely from the text prompt
-        if not bg_image and bg_prompt and "15" in workflow:
-            workflow["300"] = {
-                "class_type": "EmptyImage",
-                "inputs": {
-                    "width": target_w,
-                    "height": target_h,
-                    "batch_size": 1,
-                    "color": 0,  # black
-                },
-            }
-            workflow["302"] = {
-                "class_type": "RepeatImageBatch",
-                "inputs": {
-                    "image": ["300", 0],
-                    "amount": ["96", 1],
-                },
-            }
-            workflow["15"]["inputs"]["image"] = ["302", 0]
-            logging.info(f"AI-generated background mode: black frames injected, prompt: {bg_prompt}")
+        # Disconnect bg_images and mask from AnimateEmbeds.
+        # The ref_image background has already been replaced with gray
+        # (see nobg preprocessing above), so clip vision won't encode
+        # the original background. The model generates bg purely from prompt.
+        if not bg_image and bg_prompt and "218" in workflow:
+            workflow["218"]["inputs"].pop("bg_images", None)
+            workflow["218"]["inputs"].pop("mask", None)
+            logging.info(f"AI-generated background mode: bg_images/mask disconnected, ref_image bg removed, prompt: {bg_prompt}")
 
         # Increase mask expansion if custom background is used (motion or static)
         # This prevents the background from covering character extremities due to mask shrinkage
@@ -4248,16 +4266,60 @@ def workflow_generate_task(task_id: str, params: dict, gpu_id: int = 0):
             cropped_tmp = crop_face_head(user_inputs["avatar_face"])
             user_inputs["avatar_face"] = cropped_tmp
 
+        # AI bg mode: remove background from ref_image so clip vision
+        # doesn't encode the original background into the generation
+        nobg_tmp = None
+        if (workflow_id == "change_character"
+                and not user_inputs.get("bg_image")
+                and user_inputs.get("bg_prompt", "").strip()
+                and user_inputs.get("ref_image")):
+            try:
+                generation_status[task_id].update({"progress": 0.07, "message": "Removing ref image background..."})
+                import cv2 as _cv2
+                from mediapipe.tasks.python import vision as _mp_vision
+                from mediapipe.tasks.python.core.base_options import BaseOptions as _MpBase
+                _seg_opts = _mp_vision.ImageSegmenterOptions(
+                    base_options=_MpBase(model_asset_path="models/selfie_segmenter.tflite"),
+                    output_category_mask=True,
+                    running_mode=_mp_vision.RunningMode.IMAGE,
+                )
+                _segmenter = _mp_vision.ImageSegmenter.create_from_options(_seg_opts)
+                import mediapipe as _mp
+                _img = _cv2.imread(user_inputs["ref_image"])
+                _rgb = _cv2.cvtColor(_img, _cv2.COLOR_BGR2RGB)
+                _mp_img = _mp.Image(image_format=_mp.ImageFormat.SRGB, data=_rgb)
+                _res = _segmenter.segment(_mp_img)
+                _mask = _res.category_mask.numpy_view().squeeze()
+                _person = (_mask == 255)
+                import numpy as _np
+                _gray_bg = _np.full_like(_img, 128)
+                _nobg = _np.where(_person[:, :, None], _img, _gray_bg).astype(_np.uint8)
+                nobg_tmp = user_inputs["ref_image"].rsplit(".", 1)[0] + "_nobg.png"
+                _cv2.imwrite(nobg_tmp, _nobg)
+                user_inputs["ref_image"] = nobg_tmp
+                logging.info(f"AI bg mode: ref_image background removed -> {nobg_tmp}")
+                try:
+                    _segmenter.close()
+                except Exception:
+                    pass
+            except Exception as e:
+                logging.warning(f"Failed to remove ref_image background: {e}")
+
         for input_def in wf_config["inputs"]:
             key = input_def["key"]
             if input_def.get("upload_to_comfyui") and key in user_inputs and user_inputs[key]:
                 generation_status[task_id].update({"progress": 0.08, "message": f"Uploading {key}..."})
                 user_inputs[key] = upload_to_comfyui(user_inputs[key], comfyui_url=_comfyui_url)
 
-        # Clean up cropped temp file after upload
+        # Clean up temp files after upload
         if cropped_tmp and os.path.exists(cropped_tmp):
             try:
                 os.remove(cropped_tmp)
+            except OSError:
+                pass
+        if nobg_tmp and os.path.exists(nobg_tmp):
+            try:
+                os.remove(nobg_tmp)
             except OSError:
                 pass
 

@@ -49,6 +49,7 @@ import {
   uploadToYouTube,
   deleteBackground,
   changeAvatarCategory,
+  listBgPrompts,
 } from './api';
 import './App.css';
 
@@ -256,6 +257,10 @@ const translations = {
     studioBgManual: 'Custom prompt',
     studioBgPromptLabel: 'Background Description',
     studioBgPromptPlaceholder: 'e.g. luxury hotel lobby with marble floor, neon-lit cyberpunk alley...',
+    bgPromptRandom: 'Random',
+    bgPromptCategory: 'Category',
+    bgPromptManual: 'Manual',
+    bgPromptAllCategories: 'All',
     studioStageDeleteConfirm: 'Delete this stage?',
     studioYtChannel: 'YouTube Channel URL',
     studioYtChannelName: 'Channel Name',
@@ -491,6 +496,10 @@ const translations = {
     studioBgManual: '직접 입력',
     studioBgPromptLabel: '배경 묘사',
     studioBgPromptPlaceholder: '예: 대리석 바닥의 럭셔리 호텔 로비, 네온 사이버펑크 골목...',
+    bgPromptRandom: '랜덤',
+    bgPromptCategory: '카테고리',
+    bgPromptManual: '직접 입력',
+    bgPromptAllCategories: '전체',
     studioStageDeleteConfirm: '이 스테이지를 삭제하시겠습니까?',
     studioYtChannel: 'YouTube 채널 URL',
     studioYtChannelName: '채널명',
@@ -726,6 +735,10 @@ const translations = {
     studioBgManual: '自定义提示',
     studioBgPromptLabel: '背景描述',
     studioBgPromptPlaceholder: '例如：大理石地板的豪华酒店大厅、霓虹赛博朋克小巷...',
+    bgPromptRandom: '随机',
+    bgPromptCategory: '分类',
+    bgPromptManual: '手动输入',
+    bgPromptAllCategories: '全部',
     studioStageDeleteConfirm: '确定删除此舞台？',
     studioYtChannel: 'YouTube频道链接',
     studioYtChannelName: '频道名称',
@@ -1089,9 +1102,13 @@ function App() {
   const [studioStages, setStudioStages] = useState([]);
   const [studioSelectedStage, setStudioSelectedStage] = useState(null);
   const [studioBgPrompt, setStudioBgPrompt] = useState('Club dance floor, green laser beams shooting from top to bottom and moving. Several women and men are dancing out of focus in the background.');
-  const [studioBgManual, setStudioBgManual] = useState(false); // false = Gemini auto, true = user types
+  const [studioBgManual, setStudioBgManual] = useState(true); // false = Gemini auto, true = user types
   const [studioBgMode, setStudioBgMode] = useState('image'); // 'image' = custom bg image, 'prompt' = AI-generated bg
   const [stagePopup, setStagePopup] = useState(null); // { url, filename }
+  const [bgPromptsList, setBgPromptsList] = useState([]); // all prompts from server
+  const [bgPromptsCategories, setBgPromptsCategories] = useState([]); // category list
+  const [bgPromptMode, setBgPromptMode] = useState('random'); // 'random' | 'category' | 'manual'
+  const [bgPromptCategory, setBgPromptCategory] = useState(''); // selected category filter
 
   // Dance Shorts - YouTube Settings
   const DEFAULT_YT_CHANNEL = 'https://www.youtube.com/channel/UCYcITGLPC3qv9txSM4GB70w';
@@ -1664,7 +1681,7 @@ function App() {
         prompt: studioScenePrompt,
         aspect_ratio: studioFluxAspectRatio,
         bg_image: studioBgMode === 'image' ? (studioSelectedStage?.path || '') : '',
-        bg_prompt: studioBgPrompt,
+        bg_prompt: (studioBgMode === 'prompt' && bgPromptMode !== 'manual') ? getRandomBgPrompt(bgPromptMode === 'category' ? bgPromptCategory : '') : studioBgPrompt,
       },
       filePaths: {},
       previews: {
@@ -1722,7 +1739,7 @@ function App() {
         prompt: studioScenePrompt,
         aspect_ratio: studioFluxAspectRatio,
         bg_image: studioBgMode === 'image' ? (studioSelectedStage?.path || '') : '',
-        bg_prompt: studioBgPrompt,
+        bg_prompt: (studioBgMode === 'prompt' && bgPromptMode !== 'manual') ? getRandomBgPrompt(bgPromptMode === 'category' ? bgPromptCategory : '') : studioBgPrompt,
       },
       filePaths: {},
       previews: {
@@ -1761,6 +1778,21 @@ function App() {
     } catch (err) { console.error('Failed to load stages:', err); }
   }, []);
 
+  const loadBgPrompts = useCallback(async () => {
+    try {
+      const data = await listBgPrompts();
+      setBgPromptsList(data.prompts || []);
+      setBgPromptsCategories(data.categories || []);
+    } catch (err) { console.error('Failed to load bg prompts:', err); }
+  }, []);
+
+  const getRandomBgPrompt = useCallback((category = '') => {
+    let pool = bgPromptsList;
+    if (category) pool = pool.filter(p => p.category === category);
+    if (pool.length === 0) return studioBgPrompt;
+    return pool[Math.floor(Math.random() * pool.length)].prompt;
+  }, [bgPromptsList, studioBgPrompt]);
+
   const handleStudioStageDelete = async (filename) => {
     if (!window.confirm(t('studioStageDeleteConfirm'))) return;
     try {
@@ -1775,11 +1807,10 @@ function App() {
   // Dance Shorts - YouTube defaults & upload
   const getStudioYtDefaults = useCallback(() => {
     const name = studioAvatarName || 'Avatar';
-    const chName = studioYtChannelName || `Dancing ${name}`;
     return {
-      title: `${name} #shorts`,
-      description: `${chName} 많이 사랑해 주세요. 구독 좋아요 부탁드립니다.`,
-      hashtags: `#${chName} #dancecover`,
+      title: `Dancing ${name} #shorts`,
+      description: `Dancing ${name} 많이 사랑해 주세요. 구독 좋아요 부탁드립니다.`,
+      hashtags: `#Dancing${name} #DanceCover #DanceChallenge #${name}`,
     };
   }, [studioAvatarName, studioYtChannelName]);
 
@@ -2470,8 +2501,9 @@ function App() {
     if (activeMenu === 'danceshorts') {
       loadStudioStages();
       loadDsAvatarGroups();
+      loadBgPrompts();
     }
-  }, [activeMenu, loadStudioStages, loadDsAvatarGroups]);
+  }, [activeMenu, loadStudioStages, loadDsAvatarGroups, loadBgPrompts]);
 
   // Load avatar images when group changes
   useEffect(() => {
@@ -4919,6 +4951,9 @@ function App() {
                                             <button className="queue-item-requeue" onClick={() => handleRequeue(wf.id, item)} title="Re-queue">↻</button>
                                           </>
                                         )}
+                                        {(item.status === 'cancelled' || (item.status === 'running' && item.serverMessage?.includes('Monitor lost'))) && (
+                                          <button className="queue-item-requeue" onClick={() => handleRequeue(wf.id, item)} title="Re-queue">↻</button>
+                                        )}
                                       </div>
                                     </div>
                                   </div>
@@ -5021,44 +5056,65 @@ function App() {
 
                     {studioBgMode === 'image' ? (
                       <>
-                        {/* Stage Selection */}
-                        <div className="form-group">
-                          <label>{t('studioStageSelect')}</label>
-                          <div className="stage-gallery">
-                            {studioStages.map(stage => (
-                              <div key={stage.filename}
-                                className={`stage-item${studioSelectedStage?.filename === stage.filename ? ' selected' : ''}`}
-                                onClick={() => setStudioSelectedStage(stage)}
-                                onDoubleClick={() => { setAvatarPopup(null); setStagePopup({ url: stage.url, filename: stage.filename }); }}>
-                                <img src={stage.url} alt={stage.filename} />
-                                <button className="stage-delete-btn"
-                                  onClick={e => { e.stopPropagation(); handleStudioStageDelete(stage.filename); }}
-                                  title={t('galleryDelete')}>×</button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
                         {/* Background Effect */}
                         <div className="form-group">
                           <label>{t('studioBgEffect')}</label>
                           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#aaa', marginBottom: 6, cursor: 'pointer' }}>
                             <input type="checkbox" checked={studioBgManual}
-                              onChange={e => { setStudioBgManual(e.target.checked); if (!e.target.checked) setStudioBgPrompt(''); }} />
+                              onChange={e => { setStudioBgManual(e.target.checked); }} />
                             {studioBgManual ? t('studioBgManual') : t('studioBgAuto')}
                           </label>
-                          {studioBgManual && (
+                          {studioBgManual ? (
                             <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={2}
                               placeholder="e.g. neon lights, foggy atmosphere, colorful stage lighting..." />
+                          ) : (
+                            /* Stage Selection — shown when not using custom prompt */
+                            <div className="stage-gallery">
+                              {studioStages.map(stage => (
+                                <div key={stage.filename}
+                                  className={`stage-item${studioSelectedStage?.filename === stage.filename ? ' selected' : ''}`}
+                                  onClick={() => setStudioSelectedStage(stage)}
+                                  onDoubleClick={() => { setAvatarPopup(null); setStagePopup({ url: stage.url, filename: stage.filename }); }}>
+                                  <img src={stage.url} alt={stage.filename} />
+                                  <button className="stage-delete-btn"
+                                    onClick={e => { e.stopPropagation(); handleStudioStageDelete(stage.filename); }}
+                                    title={t('galleryDelete')}>×</button>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
                       </>
                     ) : (
-                      /* AI Generate mode: background description prompt */
+                      /* AI Generate mode: Random / Category / Manual */
                       <div className="form-group">
                         <label>{t('studioBgPromptLabel')}</label>
-                        <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={3}
-                          placeholder={t('studioBgPromptPlaceholder')} />
+                        <div className="sub-tabs" style={{ marginBottom: 8 }}>
+                          <button className={bgPromptMode === 'random' ? 'active' : ''} onClick={() => setBgPromptMode('random')}>{t('bgPromptRandom')}</button>
+                          <button className={bgPromptMode === 'category' ? 'active' : ''} onClick={() => setBgPromptMode('category')}>{t('bgPromptCategory')}</button>
+                          <button className={bgPromptMode === 'manual' ? 'active' : ''} onClick={() => setBgPromptMode('manual')}>{t('bgPromptManual')}</button>
+                        </div>
+                        {bgPromptMode === 'random' && (
+                          <div style={{ fontSize: 13, color: '#aaa', padding: '8px 0' }}>
+                            {t('bgPromptAllCategories')} — {bgPromptsList.length} prompts
+                          </div>
+                        )}
+                        {bgPromptMode === 'category' && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+                            {bgPromptsCategories.map(cat => (
+                              <button key={cat}
+                                className={`tag-btn${bgPromptCategory === cat ? ' active' : ''}`}
+                                onClick={() => setBgPromptCategory(cat)}
+                                style={{ fontSize: 12, padding: '3px 8px', borderRadius: 12, border: bgPromptCategory === cat ? '1px solid #7c5cfc' : '1px solid #444', background: bgPromptCategory === cat ? '#7c5cfc' : 'transparent', color: bgPromptCategory === cat ? '#fff' : '#ccc', cursor: 'pointer' }}>
+                                {cat} ({bgPromptsList.filter(p => p.category === cat).length})
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {bgPromptMode === 'manual' && (
+                          <textarea value={studioBgPrompt} onChange={e => setStudioBgPrompt(e.target.value)} rows={3}
+                            placeholder={t('studioBgPromptPlaceholder')} />
+                        )}
                       </div>
                     )}
 
@@ -5485,6 +5541,9 @@ function App() {
                                       {item.error && <span className="queue-item-error" title={item.error}>Error</span>}
                                       <button className="queue-item-requeue" onClick={() => handleRequeue('change_character', item)} title="Re-queue">↻</button>
                                     </>
+                                  )}
+                                  {(item.status === 'cancelled' || (item.status === 'running' && item.serverMessage?.includes('Monitor lost'))) && (
+                                    <button className="queue-item-requeue" onClick={() => handleRequeue('change_character', item)} title="Re-queue">↻</button>
                                   )}
                                 </div>
                               </div>

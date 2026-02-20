@@ -173,14 +173,29 @@ pip install realesrgan basicsr
 
 > **주의**: `flash-attn 2.8.3`은 PyTorch 2.6.0과 ABI 호환성 문제가 있어 `2.7.4.post1` 버전을 사용합니다.
 
-### 4. 시스템 패키지
+### 4. Qwen3-TTS (텍스트→음성 합성)
+
+```bash
+# Qwen3-TTS 패키지 설치
+pip install -U qwen-tts
+
+# SoX 시스템 패키지 (qwen-tts 오디오 처리에 필요)
+sudo apt-get install -y sox libsox-dev
+```
+
+- **모델**: `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` (첫 사용 시 HuggingFace에서 자동 다운로드)
+- **스피커**: Ryan, Claire, Laura, Aidan, Matt, Aria, Serena, Leo, Mei, Luna (10명)
+- **지원 언어**: Korean, English, Chinese, Japanese, German, French, Russian, Portuguese, Spanish, Italian (10개)
+- **용도**: InfiniTalk 워크플로우에서 대본 → 음성 → 나레이션 영상 생성
+
+### 5. 시스템 패키지
 
 ```bash
 # ffmpeg (비디오+오디오 병합에 필요)
 sudo apt-get install ffmpeg
 ```
 
-### 5. 모델 다운로드
+### 6. 모델 다운로드
 
 ```bash
 pip install huggingface-hub
@@ -195,7 +210,7 @@ huggingface-cli download Wan-AI/Wan2.2-I2V-14B-A --local-dir /mnt/models/Wan2.2-
 huggingface-cli download black-forest-labs/FLUX.2-klein-9B --local-dir /mnt/models/hub/FLUX.2-klein-9B
 ```
 
-### 6. Real-ESRGAN 가중치 다운로드
+### 7. Real-ESRGAN 가중치 다운로드
 
 ```bash
 mkdir -p weights
@@ -820,6 +835,27 @@ output_lora_14B/checkpoint-50/
 - `/api/health` 응답에서 `lora_enabled`, `lora_checkpoint` 필드로 확인 가능
 
 ## Changelog
+
+### 2026-02-20: Qwen3-TTS 설치 + InfiniTalk 준비
+
+**Qwen3-TTS 패키지 설치:**
+
+- `pip install -U qwen-tts` (v0.1.1) — `from qwen_tts import Qwen3TTSModel` import 확인
+- `sudo apt-get install -y sox libsox-dev` — SoX 오디오 처리 시스템 패키지
+- `transformers` 4.51.3 → 4.57.3 업그레이드 (qwen-tts 의존성)
+- `tokenizers` 0.21.4 → 0.22.2 업그레이드
+
+**설치된 패키지:**
+
+| 패키지 | 버전 | 용도 |
+|--------|------|------|
+| `qwen-tts` | 0.1.1 | Qwen3-TTS 모델 래퍼 |
+| `sox` (Python) | 1.5.0 | SoX Python 바인딩 |
+| `sox` (시스템) | 14.4.2 | 오디오 처리 CLI |
+| `transformers` | 4.57.3 | HuggingFace 모델 로딩 |
+| `tokenizers` | 0.22.2 | 토크나이저 |
+
+**모델**: `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` — 첫 사용 시 자동 다운로드 (server.py `get_tts_model()`)
 
 ### 2026-02-19: AI 생성 배경 품질 개선 + 랜덤 배경 프롬프트 시스템 + 큐 재시도 UI
 
